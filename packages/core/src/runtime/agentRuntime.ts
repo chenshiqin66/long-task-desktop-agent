@@ -1,0 +1,1009 @@
+import { newId, nowIso } from "../ids.js";
+import type {
+  AgentConfig,
+  ImageMime,
+  Message,
+  RuntimeEvent,
+  SessionMeta,
+  SubmittedImage,
+  ToolCall,
+  TraceEvent,
+} from "../types.js";
+import { MAX_IMAGES_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
+import { ContextStore } from "../store/contextStore.js";
+import { TraceStore } from "../store/traceStore.js";
+import { ToolHost } from "../tools/host.js";
+import { classifyToolCall } from "../tools/policy.js";
+import type { ToolResult } from "../tools/types.js";
+import { assembleContext } from "../context/assemble.js";
+import { projectAuditMessages, toolsFingerprint } from "../context/auditContext.js";
+import { countOutboundImages, outboundTextChars, prepareOutbound } from "../context/images.js";
+import { countUserTurns } from "../context/compress.js";
+import {
+  SYNTHETIC_INTERRUPTED_TOOL,
+  canAppendToolRepair,
+  findMissingToolResults,
+} from "../context/repairToolCalls.js";
+import {
+  generateSessionTitle,
+  isDefaultSessionTitle,
+} from "../session/autoTitle.js";
+import type { LlmProvider } from "../provider/types.js";
+import { AgentError } from "./errors.js";
+import { AutoAllowGate, type PermissionGate } from "./permission.js";
+import { ClosedAskGate, type AskGate } from "./askGate.js";
+import { ASK_USER_TOOL_NAME, parseAskUserArgs } from "../tools/askUserTool.js";
+
+/** Auto-name after this many user turns (completed). */
+const AUTO_TITLE_AFTER_USER_TURNS = 3;
+
+export type EventListener = (event: RuntimeEvent) => void;
+
+const IMAGE_RULES = `
+Images:
+- A user message may include images. Inspect them and use what you see. When image parts are present, do not say you cannot see images.
+- An older user message may end with "像素未再次发送". The pixels are gone. Do not invent visual details from that note. If the task still needs the picture, ask the user to attach it again.`;
+
+const ASK_USER_RULES = `
+Asking the user:
+- If you need a decision, preference, or missing fact before continuing, call ask_user. The same turn stays open. The answer arrives as that tool's result. Then continue the task.
+- Do not collect that answer by only printing a question. A reply with no tool calls ends the turn, and the next user message starts a new turn.
+- Ask one question per call. Use options only for a few short choices. The user can type a different answer.
+- Do not put other tool calls in the same response as ask_user. Those later calls are skipped.`;
+
+const WEB_SEARCH_RULES = `
+Web search citations (mandatory when web_search was used in this turn):
+- Treat each tool result block "[n] title" / "URL: ..." as source n.
+- Any factual claim taken from search MUST have an inline citation like [1] or [2][3] right after the claim.
+- End the reply with a "来源" section listing every cited n as a markdown link: [n] [title](url) — title is the link text; do not print the bare URL after an em dash.
+- Do not invent titles or URLs. Do not cite sources you did not use. If search returned nothing useful, say so and omit the 来源 section.
+- Workspace-only answers (no web_search) do not need a 来源 section.`;
+
+/** System prompt matches the shell that actually runs. On Windows that is powershell.exe, not WSL bash. */
+export function buildDefaultSystemPrompt(workspacePath: string): string {
+  if (process.platform === "win32") {
+    return `You are a coding agent on Windows. The workspace is this Windows directory:
+${workspacePath}
+
+Use tools when needed. Prefer concise, correct changes. When you tell the user a path, use a Windows path.
+
+Shell:
+- The shell tool is powershell. It starts powershell.exe in the workspace above.
+- Use Windows PowerShell 5.1 syntax and Windows paths. PowerShell 5.1 has no && or ||.
+- Do not launch bash.exe, wsl.exe, or Git Bash. Do not use /mnt, /usr, apt, fc-list, or python3 unless the user explicitly asked for WSL.
+- Windows programs are started by name or by their Windows path.
+
+File edits:
+- Create or overwrite files with write_file.
+- Make surgical edits with str_replace.
+- Never write file contents via powershell (no here-strings, Set-Content, Add-Content, Out-File, or redirection).
+- Use list_dir / read_file / keyword_search to inspect; powershell for builds, tests, git, and other commands.
+${ASK_USER_RULES}
+${IMAGE_RULES}
+${WEB_SEARCH_RULES}`;
+  }
+
+  return `You are a coding agent working inside a local repository workspace.
+The workspace path is ${workspacePath}.
+Use tools when needed. Prefer concise, correct changes.
+
+File edits:
+- Create or overwrite files with write_file.
+- Make surgical edits with str_replace.
+- Never write file contents via bash (no heredoc, cat/echo/printf redirects, tee).
+- Use list_dir / read_file / keyword_search to inspect; bash for builds, tests, git, and other commands.
+${ASK_USER_RULES}
+${IMAGE_RULES}
+${WEB_SEARCH_RULES}`;
+}
+
+const CANCELLED_TOOL_CONTENT = "Cancelled: tool was not executed.";
+const DENIED_TOOL_CONTENT = "Cancelled: user denied permission";
+const BLOCKED_TOOL_CONTENT = "Blocked dangerous command";
+const ASK_SKIPPED_CONTENT =
+  "Skipped: not run because ask_user was waiting for the user. Use their answer before calling tools again.";
+const ASK_UNAVAILABLE_CONTENT = "ask_user is not connected to a user.";
+const ASK_EMPTY_CONTENT = "Empty answer.";
+const ANSWER_MAX = 8_000;
+
+export class AgentRuntime {
+  private readonly store: SessionStore;
+  private readonly traces: TraceStore;
+  private readonly contexts: ContextStore;
+  private readonly tools: ToolHost;
+  private readonly provider: LlmProvider;
+  private readonly config: AgentConfig;
+  private readonly systemPrompt: string;
+  private readonly workspacePath: string;
+  private readonly permissions: PermissionGate;
+  private readonly asks: AskGate;
+  private listeners = new Set<EventListener>();
+  private abort: AbortController | null = null;
+  private running = false;
+
+  constructor(opts: {
+    workspacePath: string;
+    config: AgentConfig;
+    provider: LlmProvider;
+    systemPrompt?: string;
+    store?: SessionStore;
+    traces?: TraceStore;
+    contexts?: ContextStore;
+    tools?: ToolHost;
+    permissions?: PermissionGate;
+    asks?: AskGate;
+  }) {
+    this.workspacePath = opts.workspacePath;
+    this.config = opts.config;
+    this.provider = opts.provider;
+    this.systemPrompt = opts.systemPrompt ?? buildDefaultSystemPrompt(opts.workspacePath);
+    this.store = opts.store ?? new SessionStore(opts.workspacePath);
+    this.traces = opts.traces ?? new TraceStore(opts.workspacePath);
+    this.contexts = opts.contexts ?? new ContextStore(opts.workspacePath);
+    this.tools = opts.tools ?? new ToolHost();
+    this.permissions = opts.permissions ?? new AutoAllowGate();
+    this.asks = opts.asks ?? new ClosedAskGate();
+  }
+
+  onEvent(listener: EventListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(event: RuntimeEvent): void {
+    for (const l of this.listeners) l(event);
+  }
+
+  /** Persist a message; on failure emit error+done and return false. */
+  private async persistMessage(turn_id: string, msg: Message): Promise<boolean> {
+    try {
+      await this.store.appendMessage(msg);
+      return true;
+    } catch (err) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: String(err),
+        code: "storage_write_failed",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return false;
+    }
+  }
+
+  /** Persist a trace event; on failure emit error+done and return false. */
+  private async persistTrace(
+    turn_id: string,
+    event: Parameters<TraceStore["append"]>[0],
+  ): Promise<boolean> {
+    try {
+      await this.traces.append(event);
+      return true;
+    } catch (err) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: String(err),
+        code: "storage_write_failed",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return false;
+    }
+  }
+
+  /** Persist the outbound context; on failure emit error+done and return false. */
+  private async persistContext(
+    turn_id: string,
+    opts: Parameters<ContextStore["appendRequest"]>[0],
+  ): Promise<boolean> {
+    try {
+      await this.contexts.appendRequest(opts);
+      return true;
+    } catch (err) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: String(err),
+        code: "storage_write_failed",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return false;
+    }
+  }
+
+  createSession(title?: string): Promise<SessionMeta> {
+    return this.store.createSession(title);
+  }
+
+  listSessions(): Promise<SessionMeta[]> {
+    return this.store.listSessions();
+  }
+
+  loadMessages(sessionId: string): Promise<Message[]> {
+    return this.store.readMessages(sessionId);
+  }
+
+  /** Session artifacts the UI reads. `context` is the raw context.jsonl text. */
+  async loadSessionArtifacts(sessionId: string): Promise<{
+    meta: SessionMeta;
+    messages: Message[];
+    traces: TraceEvent[];
+    context: string;
+  }> {
+    const meta = await this.store.getMeta(sessionId);
+    const messages = await this.store.readMessages(sessionId);
+    const traces = await this.traces.read(sessionId);
+    const context = await this.contexts.readRaw(sessionId);
+    return { meta, messages, traces, context };
+  }
+
+  renameSession(
+    sessionId: string,
+    title: string,
+    opts?: { source?: "user" | "auto" },
+  ): Promise<SessionMeta> {
+    return this.store.renameSession(sessionId, title, opts);
+  }
+
+  /**
+   * After ≥3 user turns, once, if the title is still default — ask the model
+   * for a ≤12-char name. Best-effort; never fails the turn.
+   */
+  private async maybeAutoTitle(sessionId: string): Promise<void> {
+    try {
+      const meta = await this.store.getMeta(sessionId);
+      if (meta.title_source === "user" || meta.title_source === "auto") return;
+      if (!isDefaultSessionTitle(meta.title)) return;
+      const messages = await this.store.readMessages(sessionId);
+      if (countUserTurns(messages) < AUTO_TITLE_AFTER_USER_TURNS) return;
+      const title = await generateSessionTitle({
+        provider: this.provider,
+        model: this.config.model,
+        messages,
+        signal: this.abort?.signal,
+      });
+      const updated = await this.store.renameSession(sessionId, title, {
+        source: "auto",
+      });
+      this.emit({
+        type: "session_title",
+        session_id: sessionId,
+        title: updated.title || title,
+        source: "auto",
+      });
+    } catch {
+      // ignore — naming must not break the turn
+    }
+  }
+
+  private async emitDoneAndMaybeTitle(
+    sessionId: string,
+    turn_id: string,
+    reason: "completed" | "max_steps",
+  ): Promise<void> {
+    this.emit({ type: "done", turn_id, reason });
+    await this.maybeAutoTitle(sessionId);
+  }
+
+  deleteSession(sessionId: string): Promise<void> {
+    return this.store.deleteSession(sessionId);
+  }
+
+  cancel(): void {
+    this.abort?.abort();
+  }
+
+  readSessionImage(sessionId: string, relativePath: string): Promise<string> {
+    return this.store.readImageDataUrl(sessionId, relativePath);
+  }
+
+  async submit(sessionId: string, text: string, images?: SubmittedImage[]): Promise<void> {
+    if (this.running) throw new AgentError("A turn is already running", "busy");
+    const trimmed = text.trim();
+    const incoming = images ?? [];
+    if (!trimmed && incoming.length === 0) {
+      throw new AgentError("Empty message", "empty");
+    }
+    if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
+      throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
+    }
+    this.running = true;
+    this.abort = new AbortController();
+    const turn_id = newId("turn");
+    try {
+      // Close any orphaned tool_calls from a prior crash/storage failure before
+      // appending the new user message (append-only jsonl needs them at the end).
+      await this.repairStoredToolCalls(sessionId);
+
+      const storedImages = [];
+      for (const image of incoming) {
+        storedImages.push(
+          await this.store.saveImage(sessionId, image.mime as ImageMime, image.base64),
+        );
+      }
+
+      if (!(await this.persistTrace(turn_id, { session_id: sessionId, turn_id, type: "turn_start" }))) {
+        return;
+      }
+      const userMsgId = newId("msg");
+      const userTraceId = newId("trace");
+      const userMsg: Message = {
+        id: userMsgId,
+        session_id: sessionId,
+        turn_id,
+        role: "user",
+        content: trimmed,
+        ...(storedImages.length ? { images: storedImages } : {}),
+        trace_id: userTraceId,
+        created_at: nowIso(),
+      };
+      if (!(await this.persistMessage(turn_id, userMsg))) return;
+      if (
+        !(await this.persistTrace(turn_id, {
+          id: userTraceId,
+          session_id: sessionId,
+          turn_id,
+          type: "user_message",
+          message_id: userMsgId,
+          detail: { content_chars: trimmed.length, image_count: storedImages.length },
+        }))
+      ) {
+        return;
+      }
+
+      let steps = 0;
+
+      while (true) {
+        if (this.abort.signal.aborted) {
+          await this.handleCancel(sessionId, turn_id, "");
+          return;
+        }
+
+        this.emit({ type: "status", turn_id, phase: "assembling" });
+        const loopHistory = await this.store.readMessages(sessionId);
+        const ctx = assembleContext({
+          systemPrompt: this.systemPrompt,
+          toolDefinitions: this.tools.listDefinitions(),
+          history: loopHistory.slice(0, -1),
+          currentUser: loopHistory[loopHistory.length - 1]!,
+          contextCharLimit: this.config.contextCharLimit,
+        });
+
+        this.emit({ type: "status", turn_id, phase: "llm" });
+        // Lightweight request meta only — full assembled payload is a separate concern.
+        const requestId = newId("trace");
+        const prepared = await prepareOutbound(ctx.messages, async (relativePath) => {
+          try {
+            return await this.store.readImageForSend(sessionId, relativePath);
+          } catch {
+            return null;
+          }
+        });
+        const apiMessages = prepared.messages;
+        const fingerprint = toolsFingerprint(this.tools.listDefinitions());
+        if (
+          !(await this.persistContext(turn_id, {
+            sessionId,
+            id: requestId,
+            turnId: turn_id,
+            model: this.config.model,
+            toolsSha256: fingerprint.sha256,
+            tools: fingerprint.tools,
+            messages: projectAuditMessages(apiMessages, prepared.sentImages),
+          }))
+        ) {
+          return;
+        }
+        const approxChars = apiMessages.reduce((n, m) => n + outboundTextChars(m.content), 0);
+        const imageCount = countOutboundImages(apiMessages);
+        if (
+          !(await this.persistTrace(turn_id, {
+            id: requestId,
+            session_id: sessionId,
+            turn_id,
+            type: "llm_request",
+            detail: {
+              model: this.config.model,
+              message_count: apiMessages.length,
+              approx_chars: approxChars,
+              image_count: imageCount,
+              context_id: requestId,
+            },
+          }))
+        ) {
+          return;
+        }
+
+        let assistantText = "";
+        const toolCalls: ToolCall[] = [];
+        let usage:
+          | { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+          | undefined;
+        let llmError: string | undefined;
+
+        try {
+          for await (const chunk of this.provider.chatStream({
+            messages: apiMessages,
+            tools: this.tools.listDefinitions(),
+            model: this.config.model,
+            signal: this.abort.signal,
+          })) {
+            if (this.abort.signal.aborted) break;
+            if (chunk.type === "text" && chunk.text) {
+              assistantText += chunk.text;
+              this.emit({ type: "text", turn_id, delta: chunk.text });
+            } else if (chunk.type === "tool_call_delta" && chunk.tool_call) {
+              toolCalls.push(chunk.tool_call);
+              this.emit({ type: "tool_call", turn_id, tool_call: chunk.tool_call });
+            } else if (chunk.type === "usage") {
+              usage = chunk.usage;
+            } else if (chunk.type === "error") {
+              llmError = chunk.error ?? "llm error";
+            }
+          }
+        } catch (err) {
+          if (!this.abort.signal.aborted) llmError = String(err);
+        }
+
+        // Abort during stream: keep partial text, do NOT persist tool_calls or execute them.
+        if (this.abort.signal.aborted) {
+          await this.handleCancel(sessionId, turn_id, assistantText);
+          return;
+        }
+
+        if (llmError) {
+          if (
+            !(await this.persistTrace(turn_id, {
+              session_id: sessionId,
+              turn_id,
+              type: "llm_error",
+              request_id: requestId,
+              error: llmError,
+              token_usage: usage,
+            }))
+          ) {
+            return;
+          }
+          this.emit({ type: "error", turn_id, message: llmError, code: "llm_error" });
+          this.emit({ type: "done", turn_id, reason: "error" });
+          return;
+        }
+
+        const assistantMsgId = newId("msg");
+        const assistantTraceId = newId("trace");
+        const assistantMsg: Message = {
+          id: assistantMsgId,
+          session_id: sessionId,
+          turn_id,
+          role: "assistant",
+          content: assistantText,
+          tool_calls: toolCalls.length ? toolCalls : undefined,
+          trace_id: assistantTraceId,
+          created_at: nowIso(),
+        };
+        if (!(await this.persistMessage(turn_id, assistantMsg))) return;
+        if (
+          !(await this.persistTrace(turn_id, {
+            id: assistantTraceId,
+            session_id: sessionId,
+            turn_id,
+            type: "llm_response",
+            message_id: assistantMsgId,
+            request_id: requestId,
+            token_usage: usage,
+            detail: {
+              content: assistantText,
+              tool_calls: toolCalls.length ? toolCalls : undefined,
+            },
+          }))
+        ) {
+          // Assistant with tool_calls already on disk — close them so the next
+          // submit does not 400. persistTrace already emitted done(error).
+          if (toolCalls.length) {
+            await this.appendSyntheticToolResultsBestEffort(
+              sessionId,
+              turn_id,
+              toolCalls,
+              SYNTHETIC_INTERRUPTED_TOOL,
+            );
+          }
+          return;
+        }
+
+        if (toolCalls.length === 0) {
+          await this.emitDoneAndMaybeTitle(sessionId, turn_id, "completed");
+          return;
+        }
+
+        if (steps >= this.config.maxSteps) {
+          // Close open tool_calls with synthetic errors so history stays
+          // OpenAI-valid for a subsequent user turn ("continue").
+          const skipContent = `Skipped: reached max tool steps (${this.config.maxSteps}). Tool was not executed.`;
+          const closed = await this.closeToolCallsWithPersist(
+            sessionId,
+            turn_id,
+            toolCalls,
+            skipContent,
+            { skipped_max_steps: true },
+          );
+          if (!closed) return;
+
+          const notice = `Reached max tool steps (${this.config.maxSteps}). Stopped. Continue or change your instruction.`;
+          this.emit({ type: "text", turn_id, delta: notice });
+          const noticeMsgId = newId("msg");
+          const noticeTraceId = newId("trace");
+          if (
+            !(await this.persistMessage(turn_id, {
+              id: noticeMsgId,
+              session_id: sessionId,
+              turn_id,
+              role: "assistant",
+              content: notice,
+              trace_id: noticeTraceId,
+              created_at: nowIso(),
+            }))
+          ) {
+            return;
+          }
+          if (
+            !(await this.persistTrace(turn_id, {
+              id: noticeTraceId,
+              session_id: sessionId,
+              turn_id,
+              type: "max_steps",
+              message_id: noticeMsgId,
+              detail: { maxSteps: this.config.maxSteps, content: notice },
+            }))
+          ) {
+            return;
+          }
+          await this.emitDoneAndMaybeTitle(sessionId, turn_id, "max_steps");
+          return;
+        }
+
+        steps += 1;
+        for (let i = 0; i < toolCalls.length; i++) {
+          const tc = toolCalls[i]!;
+          if (this.abort.signal.aborted) {
+            // Close remaining (including current) without executing.
+            await this.handleCancel(sessionId, turn_id, "", toolCalls.slice(i));
+            return;
+          }
+
+          const result = await this.runAuthorizedTool(sessionId, turn_id, tc);
+          if (result === "storage_failed") {
+            // Close any still-open ids from this batch (current may or may not be written).
+            await this.repairStoredToolCalls(sessionId);
+            return;
+          }
+          if (result === "cancelled") {
+            await this.handleCancel(sessionId, turn_id, "", toolCalls.slice(i + 1));
+            return;
+          }
+          if (result === "asked") {
+            const closed = await this.closeToolCallsWithPersist(
+              sessionId,
+              turn_id,
+              toolCalls.slice(i + 1),
+              ASK_SKIPPED_CONTENT,
+              { skipped_after_ask: true },
+            );
+            if (!closed) return;
+            break;
+          }
+
+          // Abort during/after this tool: do not run the rest.
+          if (this.abort.signal.aborted) {
+            await this.handleCancel(sessionId, turn_id, "", toolCalls.slice(i + 1));
+            return;
+          }
+        }
+      }
+    } finally {
+      this.running = false;
+      this.abort = null;
+    }
+  }
+
+  /**
+   * Classify → optionally ask permission → execute or synthesize error tool result.
+   * @returns "ok" | "cancelled" (abort while waiting) | "storage_failed"
+   */
+  private async runAuthorizedTool(
+    sessionId: string,
+    turn_id: string,
+    tc: ToolCall,
+  ): Promise<"ok" | "cancelled" | "storage_failed" | "asked"> {
+    if (tc.function.name === ASK_USER_TOOL_NAME) {
+      return this.runAskUser(sessionId, turn_id, tc);
+    }
+    const verdict = classifyToolCall(tc.function.name, tc.function.arguments);
+
+    if (verdict.risk === "blocked") {
+      return this.persistToolOutcome(sessionId, turn_id, tc, {
+        content: BLOCKED_TOOL_CONTENT,
+        is_error: true,
+      }, { blocked: true });
+    }
+
+    if (verdict.risk === "write") {
+      const request_id = newId("perm");
+      this.emit({ type: "status", turn_id, phase: "awaiting_permission" });
+      this.emit({
+        type: "permission_request",
+        turn_id,
+        request_id,
+        tool_call_id: tc.id,
+        tool: tc.function.name,
+        risk: "write",
+        summary: verdict.summary,
+        command: verdict.command,
+      });
+      const decision = await this.permissions.request({
+        request_id,
+        turn_id,
+        tool_call_id: tc.id,
+        tool: tc.function.name,
+        risk: "write",
+        summary: verdict.summary,
+        command: verdict.command,
+        signal: this.abort?.signal,
+      });
+      if (this.abort?.signal.aborted || decision === "deny") {
+        // If user denied (not abort), still close this tool_call with deny text then
+        // let caller continue or cancel remaining — abort path uses cancelled.
+        if (this.abort?.signal.aborted) {
+          const stored = await this.persistToolOutcome(sessionId, turn_id, tc, {
+            content: CANCELLED_TOOL_CONTENT,
+            is_error: true,
+          }, { cancelled: true });
+          return stored === "storage_failed" ? "storage_failed" : "cancelled";
+        }
+        return this.persistToolOutcome(sessionId, turn_id, tc, {
+          content: DENIED_TOOL_CONTENT,
+          is_error: true,
+        }, { denied: true });
+      }
+    }
+
+    this.emit({ type: "status", turn_id, phase: "tool" });
+    const result = await this.tools.execute(tc.function.name, tc.function.arguments, {
+      workspacePath: this.workspacePath,
+      signal: this.abort!.signal,
+      bashTimeoutMs: this.config.bashTimeoutMs,
+      maxToolOutputChars: this.config.maxToolOutputChars,
+      maxReadChars: this.config.maxReadChars,
+      maxSearchResults: this.config.maxSearchResults,
+      apiKey: this.config.apiKey,
+      llmBaseUrl: this.config.baseUrl,
+    });
+    return this.persistToolOutcome(sessionId, turn_id, tc, result, {
+      tool: tc.function.name,
+      is_error: result.is_error,
+    });
+  }
+
+  /**
+   * Suspend this turn until the user answers. Later tool calls in the same
+   * batch are skipped by the caller so they are not executed before the answer.
+   */
+  private async runAskUser(
+    sessionId: string,
+    turn_id: string,
+    tc: ToolCall,
+  ): Promise<"ok" | "cancelled" | "storage_failed" | "asked"> {
+    const parsed = parseAskUserArgs(tc.function.arguments);
+    if (!parsed.ok) {
+      const stored = await this.persistToolOutcome(
+        sessionId,
+        turn_id,
+        tc,
+        { content: parsed.error, is_error: true },
+        { tool: "ask_user" },
+      );
+      return stored === "storage_failed" ? "storage_failed" : "ok";
+    }
+
+    const request_id = newId("ask");
+    this.emit({ type: "status", turn_id, phase: "awaiting_user" });
+    this.emit({
+      type: "ask_user",
+      turn_id,
+      request_id,
+      tool_call_id: tc.id,
+      question: parsed.call.question,
+      options: parsed.call.options,
+    });
+    const decision = await this.asks.request({
+      request_id,
+      turn_id,
+      tool_call_id: tc.id,
+      question: parsed.call.question,
+      options: parsed.call.options,
+      signal: this.abort?.signal,
+    });
+
+    if (this.abort?.signal.aborted || decision.type === "cancel") {
+      const stored = await this.persistToolOutcome(
+        sessionId,
+        turn_id,
+        tc,
+        { content: CANCELLED_TOOL_CONTENT, is_error: true },
+        { cancelled: true },
+      );
+      return stored === "storage_failed" ? "storage_failed" : "cancelled";
+    }
+
+    if (decision.type === "unavailable") {
+      const stored = await this.persistToolOutcome(
+        sessionId,
+        turn_id,
+        tc,
+        { content: ASK_UNAVAILABLE_CONTENT, is_error: true },
+        { tool: "ask_user" },
+      );
+      return stored === "storage_failed" ? "storage_failed" : "asked";
+    }
+
+    const text = decision.text.trim().slice(0, ANSWER_MAX);
+    if (!text) {
+      const stored = await this.persistToolOutcome(
+        sessionId,
+        turn_id,
+        tc,
+        { content: ASK_EMPTY_CONTENT, is_error: true },
+        { tool: "ask_user" },
+      );
+      return stored === "storage_failed" ? "storage_failed" : "asked";
+    }
+
+    const stored = await this.persistToolOutcome(
+      sessionId,
+      turn_id,
+      tc,
+      { content: text, is_error: false },
+      { tool: "ask_user" },
+    );
+    return stored === "storage_failed" ? "storage_failed" : "asked";
+  }
+
+  private async persistToolOutcome(
+    sessionId: string,
+    turn_id: string,
+    tc: ToolCall,
+    result: ToolResult,
+    detail: Record<string, unknown>,
+  ): Promise<"ok" | "storage_failed"> {
+    const msgId = newId("msg");
+    const traceId = newId("trace");
+    const toolMsg: Message = {
+      id: msgId,
+      session_id: sessionId,
+      turn_id,
+      role: "tool",
+      name: tc.function.name,
+      tool_call_id: tc.id,
+      tool_call_arguments: tc.function.arguments,
+      content: result.content,
+      is_error: result.is_error,
+      trace_id: traceId,
+      created_at: nowIso(),
+    };
+    if (!(await this.persistMessage(turn_id, toolMsg))) return "storage_failed";
+    if (
+      !(await this.persistTrace(turn_id, {
+        id: traceId,
+        session_id: sessionId,
+        turn_id,
+        type: "tool_result",
+        message_id: msgId,
+        detail: {
+          tool: tc.function.name,
+          tool_call_id: tc.id,
+          arguments: tc.function.arguments,
+          content: result.content,
+          is_error: result.is_error,
+          ...detail,
+        },
+      }))
+    ) {
+      return "storage_failed";
+    }
+    this.emit({
+      type: "tool_result",
+      turn_id,
+      tool_call_id: tc.id,
+      content: result.content,
+      is_error: result.is_error,
+    });
+    return "ok";
+  }
+
+  /**
+   * Append synthetic tool results for orphaned tool_calls when it is safe to
+   * append at end of jsonl. Best-effort; never emits done (caller owns lifecycle).
+   */
+  private async repairStoredToolCalls(sessionId: string): Promise<void> {
+    let msgs: Message[];
+    try {
+      msgs = await this.store.readMessages(sessionId);
+    } catch {
+      return;
+    }
+    if (!canAppendToolRepair(msgs)) return;
+    const missing = findMissingToolResults(msgs);
+    for (const info of missing) {
+      try {
+        await this.store.appendMessage({
+          id: newId("msg"),
+          session_id: info.session_id,
+          turn_id: info.turn_id,
+          role: "tool",
+          name: info.name,
+          tool_call_id: info.tool_call_id,
+          tool_call_arguments: info.arguments,
+          content: SYNTHETIC_INTERRUPTED_TOOL,
+          is_error: true,
+          created_at: nowIso(),
+        });
+      } catch {
+        break;
+      }
+    }
+  }
+
+  /** Best-effort closes after done(error) already emitted — no second done. */
+  private async appendSyntheticToolResultsBestEffort(
+    sessionId: string,
+    turn_id: string,
+    toolCalls: ToolCall[],
+    content: string,
+  ): Promise<void> {
+    for (const tc of toolCalls) {
+      try {
+        await this.store.appendMessage({
+          id: newId("msg"),
+          session_id: sessionId,
+          turn_id,
+          role: "tool",
+          name: tc.function.name,
+          tool_call_id: tc.id,
+          tool_call_arguments: tc.function.arguments,
+          content,
+          is_error: true,
+          created_at: nowIso(),
+        });
+      } catch {
+        break;
+      }
+    }
+  }
+
+  /**
+   * Persist tool results + traces + UI events for a batch of tool_calls.
+   * @returns false if persistMessage/persistTrace already emitted done(error).
+   */
+  private async closeToolCallsWithPersist(
+    sessionId: string,
+    turn_id: string,
+    toolCalls: ToolCall[],
+    content: string,
+    detail: Record<string, unknown>,
+  ): Promise<boolean> {
+    for (const tc of toolCalls) {
+      const msgId = newId("msg");
+      const traceId = newId("trace");
+      const toolMsg: Message = {
+        id: msgId,
+        session_id: sessionId,
+        turn_id,
+        role: "tool",
+        name: tc.function.name,
+        tool_call_id: tc.id,
+        tool_call_arguments: tc.function.arguments,
+        content,
+        is_error: true,
+        trace_id: traceId,
+        created_at: nowIso(),
+      };
+      if (!(await this.persistMessage(turn_id, toolMsg))) return false;
+      if (
+        !(await this.persistTrace(turn_id, {
+          id: traceId,
+          session_id: sessionId,
+          turn_id,
+          type: "tool_result",
+          message_id: msgId,
+          detail: {
+            tool: tc.function.name,
+            tool_call_id: tc.id,
+            arguments: tc.function.arguments,
+            content,
+            is_error: true,
+            ...detail,
+          },
+        }))
+      ) {
+        return false;
+      }
+      this.emit({
+        type: "tool_result",
+        turn_id,
+        tool_call_id: tc.id,
+        content,
+        is_error: true,
+      });
+    }
+    return true;
+  }
+
+  /**
+   * Finish a cancelled turn.
+   * - Mid-stream: pass accumulated text; do not pass pendingToolCalls (assistant+tools not persisted).
+   * - Mid-tools: pass "" for text and remaining tool_calls to close without executing.
+   * Persist helpers already emit done(error) on failure — never emit a second done.
+   */
+  private async handleCancel(
+    sessionId: string,
+    turn_id: string,
+    assistantText: string,
+    pendingToolCalls: ToolCall[] = [],
+  ): Promise<void> {
+    if (assistantText.length > 0) {
+      const msgId = newId("msg");
+      const traceId = newId("trace");
+      if (
+        !(await this.persistMessage(turn_id, {
+          id: msgId,
+          session_id: sessionId,
+          turn_id,
+          role: "assistant",
+          content: assistantText,
+          interrupted: true,
+          trace_id: traceId,
+          created_at: nowIso(),
+        }))
+      ) {
+        return;
+      }
+      if (
+        !(await this.persistTrace(turn_id, {
+          id: traceId,
+          session_id: sessionId,
+          turn_id,
+          type: "llm_response",
+          message_id: msgId,
+          detail: { content: assistantText, interrupted: true },
+        }))
+      ) {
+        return;
+      }
+    }
+
+    if (pendingToolCalls.length) {
+      const closed = await this.closeToolCallsWithPersist(
+        sessionId,
+        turn_id,
+        pendingToolCalls,
+        CANCELLED_TOOL_CONTENT,
+        { cancelled: true },
+      );
+      if (!closed) return;
+    }
+
+    if (
+      !(await this.persistTrace(turn_id, {
+        session_id: sessionId,
+        turn_id,
+        type: "cancel",
+        detail: {
+          reason: "user",
+          pending_tool_call_ids: pendingToolCalls.map((t) => t.id),
+        },
+      }))
+    ) {
+      return;
+    }
+    this.emit({ type: "done", turn_id, reason: "cancelled" });
+  }
+}

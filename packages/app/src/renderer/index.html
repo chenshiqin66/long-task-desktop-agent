@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Long-Task Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+    <div id="app">
+      <aside id="sidebar">
+        <nav class="app-menu" aria-label="应用菜单">
+          <button type="button" data-app-menu="0">文件</button>
+          <button type="button" data-app-menu="1">编辑</button>
+          <button type="button" data-app-menu="2">视图</button>
+          <button type="button" data-app-menu="3">窗口</button>
+          <button type="button" data-app-menu="4">帮助</button>
+        </nav>
+        <header class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div class="brand-text">
+            <p class="brand-name">Long-Task</p>
+            <p class="brand-sub">Desktop Agent</p>
+          </div>
+        </header>
+
+        <nav class="sidebar-actions" aria-label="会话操作">
+          <button type="button" id="btn-new" class="btn btn-primary" disabled>新建会话</button>
+        </nav>
+
+        <div class="workspace-group">
+          <div class="workspace-block">
+            <div class="workspace-head">
+              <span class="eyebrow">工作区</span>
+              <button type="button" id="btn-workspace" class="workspace-add" aria-label="增加工作区">+</button>
+            </div>
+          </div>
+          <div id="workspace-trees" class="workspace-trees"></div>
+        </div>
+
+        <div class="sidebar-foot">
+          <button type="button" id="btn-config" class="btn btn-ghost">配置模型</button>
+        </div>
+      </aside>
+
+      <main id="main">
+        <header id="main-bar" class="main-bar">
+          <div id="view-tabs" class="view-tabs" role="tablist">
+            <button type="button" id="main-title" class="view-tab active" role="tab" data-view="chat" aria-selected="true">
+              会话台
+            </button>
+            <div id="store-tabs" hidden>
+              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="meta" aria-selected="false" aria-controls="store-view">
+                meta.json
+              </button>
+              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="messages" aria-selected="false" aria-controls="store-view">
+                messages.jsonl
+              </button>
+              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="trace" aria-selected="false" aria-controls="store-view">
+                trace.jsonl
+              </button>
+              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="context" aria-selected="false" aria-controls="store-view">
+                context.jsonl
+              </button>
+            </div>
+          </div>
+          <div id="status" class="status-chip" data-idle="true" hidden></div>
+        </header>
+
+        <div class="main-stage">
+          <div id="find-bar" class="find-bar" hidden>
+            <svg class="find-glyph" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.25" fill="none" stroke="currentColor" stroke-width="1.4" />
+              <path d="M10.2 10.2 L13.2 13.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
+            <label class="sr-only" for="find-input">搜索当前页</label>
+            <input id="find-input" type="text" placeholder="搜索对话内容" autocomplete="off" spellcheck="false" />
+            <span id="find-count" class="find-count"></span>
+            <button type="button" id="find-prev" class="find-nav" aria-label="上一处">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10 L8 6 L12 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button type="button" id="find-next" class="find-nav" aria-label="下一处">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6 L8 10 L12 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button type="button" id="find-close" class="find-nav" aria-label="关闭搜索">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 5 L11 11 M11 5 L5 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
+            </button>
+          </div>
+          <div id="conversation" class="conversation">
+            <div id="messages" class="messages" aria-live="polite"></div>
+          </div>
+
+          <section id="store-dock" class="store-dock" hidden aria-label="会话数据源">
+            <div id="store-meta-hint" class="store-hint"></div>
+            <pre id="store-view" class="store-view" role="tabpanel"></pre>
+          </section>
+        </div>
+
+        <div class="float-stack">
+          <div id="permission-dock" class="permission-dock" hidden></div>
+
+          <footer class="composer-dock">
+            <div id="composer">
+              <div id="composer-images" class="composer-images" hidden></div>
+              <label class="sr-only" for="input">输入消息</label>
+              <textarea
+                id="input"
+                rows="2"
+                placeholder="向 Agent 下指令… Enter 发送，Shift+Enter 换行"
+              ></textarea>
+              <div class="composer-actions">
+                <button type="button" id="btn-image" class="btn-image" aria-label="添加图片" disabled>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
+                    <circle cx="5.5" cy="6" r="1.1" fill="currentColor" />
+                    <path d="M2.5 11.5 L6 8.2 L8.2 10.2 L10.4 7.4 L13.5 11.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                  </svg>
+                </button>
+                <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+                <button type="button" id="btn-send" class="btn btn-accent" disabled>发送</button>
+              </div>
+            </div>
+          </footer>
+        </div>
+      </main>
+    </div>
+
+    <div id="page-ctx-menu" class="page-ctx-menu" hidden role="menu">
+      <button type="button" class="page-ctx-item" role="menuitem" data-ctx="copy">复制</button>
+    </div>
+
+    <dialog id="config-dialog" class="config-dialog">
+      <form method="dialog" id="config-form" class="config-form">
+        <header class="config-head">
+          <h2>配置模型</h2>
+          <p>密钥仅保存在本机用户目录，不会写入会话记录。</p>
+        </header>
+        <label class="field">
+          <span>Base URL</span>
+          <input id="cfg-baseUrl" name="baseUrl" type="url" required autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <input id="cfg-model" name="model" type="text" required autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>API Key</span>
+          <input id="cfg-apiKey" name="apiKey" type="password" autocomplete="off" />
+        </label>
+        <div class="config-actions">
+          <button type="submit" value="cancel" class="btn btn-ghost">取消</button>
+          <button type="submit" value="save" class="btn btn-accent">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
