@@ -40,7 +40,8 @@
         </div>
 
         <div class="sidebar-foot">
-          <button type="button" id="btn-config" class="btn btn-ghost">配置模型</button>
+          <button type="button" id="btn-skills" class="btn btn-ghost" aria-pressed="false">技能</button>
+          <button type="button" id="btn-config" class="btn btn-ghost" aria-label="配置模型">模型</button>
         </div>
       </aside>
 
@@ -65,7 +66,6 @@
               </button>
             </div>
           </div>
-          <div id="status" class="status-chip" data-idle="true" hidden></div>
         </header>
 
         <div class="main-stage">
@@ -89,11 +89,22 @@
           </div>
           <div id="conversation" class="conversation">
             <div id="messages" class="messages" aria-live="polite"></div>
+            <div id="status" class="run-status" hidden></div>
           </div>
 
           <section id="store-dock" class="store-dock" hidden aria-label="会话数据源">
             <div id="store-meta-hint" class="store-hint"></div>
             <pre id="store-view" class="store-view" role="tabpanel"></pre>
+          </section>
+
+          <section id="skills-page" class="skills-page" hidden aria-label="技能">
+            <header class="skills-page-head">
+              <h2>技能</h2>
+              <span id="skills-count" class="skills-count">已安装(0)</span>
+              <button type="button" id="skills-add" class="btn btn-primary skills-add">+ 添加技能</button>
+            </header>
+            <p id="skills-note" class="skills-note" hidden></p>
+            <div id="skills-list" class="skills-grid"></div>
           </section>
         </div>
 
@@ -102,13 +113,17 @@
 
           <footer class="composer-dock">
             <div id="composer">
+              <div id="skill-menu" class="skill-menu" hidden role="listbox" aria-label="已安装技能"></div>
               <div id="composer-images" class="composer-images" hidden></div>
               <label class="sr-only" for="input">输入消息</label>
-              <textarea
-                id="input"
-                rows="2"
-                placeholder="向 Agent 下指令… Enter 发送，Shift+Enter 换行"
-              ></textarea>
+              <div class="composer-input">
+                <textarea
+                  id="input"
+                  rows="2"
+                  placeholder="向 Agent 下指令… Enter 发送，Shift+Enter 换行"
+                ></textarea>
+                <p id="composer-lock-note" class="composer-lock-note" hidden>另一个会话正在执行</p>
+              </div>
               <div class="composer-actions">
                 <button type="button" id="btn-image" class="btn-image" aria-label="添加图片" disabled>
                   <svg viewBox="0 0 16 16" aria-hidden="true">

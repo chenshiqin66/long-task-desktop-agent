@@ -1,5 +1,12 @@
 import type { ImageAttachment, Message, ToolCall } from "../types.js";
 import type { ToolDefinition } from "../tools/types.js";
+import {
+  readSkillHistoryStub,
+  renderInstalledSkills,
+  renderSkillBodies,
+  type SkillBodyAttachment,
+  type SkillCatalogEntry,
+} from "../skills/prompt.js";
 import { compressMessages } from "./compress.js";
 import {
   SYNTHETIC_INTERRUPTED_TOOL,
@@ -38,6 +45,8 @@ export function assembleContext(opts: {
   history: Message[];
   currentUser: Message;
   contextCharLimit: number;
+  installedSkills?: SkillCatalogEntry[];
+  skillBodies?: SkillBodyAttachment[];
 }): AssembledContext {
   const toolsBlock = opts.toolDefinitions
     .map(
@@ -45,14 +54,19 @@ export function assembleContext(opts: {
         `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`,
     )
     .join("\n");
-  const systemContent = `${opts.systemPrompt}\n\n# Tools\n${toolsBlock}`;
+  const preface = [
+    opts.systemPrompt,
+    renderInstalledSkills(opts.installedSkills ?? []),
+    renderSkillBodies(opts.skillBodies ?? []),
+  ].filter((part) => part.length > 0);
+  const systemContent = `${preface.join("\n\n")}\n\n# Tools\n${toolsBlock}`;
   const budget = Math.max(
     1000,
     opts.contextCharLimit - systemContent.length - opts.currentUser.content.length - 100,
   );
   // Shrink settled write payloads on a copy. Disk jsonl stays complete; compression
   // only sees message content, so this must happen even when that pass is a no-op.
-  const viewed = elideSettledWrites([...opts.history, opts.currentUser]);
+  const viewed = elidePriorReadSkills(elideSettledWrites([...opts.history, opts.currentUser]));
   const history = viewed.slice(0, -1);
   const currentUser = viewed[viewed.length - 1]!;
   const compressed = compressMessages(history, { contextCharLimit: budget });
@@ -113,6 +127,34 @@ function shrinkSettledCall(tc: ToolCall, settled: boolean): ToolCall {
     ...tc,
     function: { ...tc.function, arguments: JSON.stringify(stub) },
   };
+}
+
+/** Outbound copy only. read_skill results from earlier user turns become a one-line stub. */
+export function elidePriorReadSkills(messages: Message[]): Message[] {
+  let currentTurn = "";
+  for (const message of messages) {
+    if (message.role === "user") currentTurn = message.turn_id;
+  }
+  return messages.map((message) => {
+    if (message.role !== "tool" || message.name !== "read_skill" || message.is_error) return message;
+    if (message.turn_id === currentTurn) return message;
+    return { ...message, content: stubFromToolMessage(message) };
+  });
+}
+
+function stubFromToolMessage(message: Message): string {
+  let name = "未知";
+  let relative = "";
+  if (message.tool_call_arguments) {
+    try {
+      const args = JSON.parse(message.tool_call_arguments) as { name?: unknown; path?: unknown };
+      if (typeof args.name === "string" && args.name.trim()) name = args.name.trim();
+      if (typeof args.path === "string" && args.path.trim()) relative = args.path.trim();
+    } catch {
+      /* keep defaults */
+    }
+  }
+  return readSkillHistoryStub(name, relative);
 }
 
 /** Outbound copy only. Successful write_file / str_replace payloads become path + sizes. */

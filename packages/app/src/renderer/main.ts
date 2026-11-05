@@ -10,6 +10,7 @@ import {
   setToolDetailContent,
 } from "./ui.js";
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
+import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey, skillTokensIn } from "./skills.js";
 
 declare global {
   interface Window {
@@ -19,7 +20,9 @@ declare global {
         active: string | null;
         paths: string[];
         labels: Record<string, string>;
+        collapsed?: string[];
       }>;
+      setWorkspaceExpanded(path: string, open: boolean): Promise<void>;
       addWorkspace(): Promise<{
         active: string | null;
         paths: string[];
@@ -48,7 +51,7 @@ declare global {
         meta: Record<string, unknown>;
         messages: unknown[];
         traces: unknown[];
-        context: string;
+        context: unknown[];
       }>;
       readWorkspaceImage(path: string, sessionId: string, relativePath: string): Promise<string>;
       renameWorkspaceSession(
@@ -81,7 +84,7 @@ declare global {
         meta: Record<string, unknown>;
         messages: unknown[];
         traces: unknown[];
-        context: string;
+        context: unknown[];
       }>;
       renameSession(
         sessionId: string,
@@ -94,15 +97,22 @@ declare global {
         text: string,
         images?: Array<{ mime: string; base64: string }>,
       ): Promise<void>;
+      listSkills(): Promise<Array<{ name: string; description: string; enabled: boolean }>>;
+      installSkill(): Promise<{ name: string; description: string; enabled: boolean } | null>;
+      setSkillEnabled(name: string, enabled: boolean): Promise<void>;
+      uninstallSkill(name: string): Promise<void>;
+      openSkillFolder(name: string): Promise<void>;
       readSessionImage(sessionId: string, relativePath: string): Promise<string>;
       cancel(): Promise<void>;
       respondPermission(requestId: string, decision: "allow" | "deny"): Promise<boolean>;
       answerAsk(requestId: string, text: string): Promise<boolean>;
       getConfig(): Promise<any>;
       saveConfig(cfg: any): Promise<void>;
+      localTargetsExist(targets: string[]): Promise<Record<string, boolean>>;
       openExternal(target: string): Promise<{ ok: boolean; error?: string }>;
       popupAppMenu(index: number, x: number, y: number): Promise<void>;
       onEvent(cb: (e: any) => void): () => void;
+      onSkillsChanged(cb: () => void): () => void;
     };
   }
 }
@@ -111,6 +121,7 @@ const messagesEl = document.getElementById("messages")!;
 const treesEl = document.getElementById("workspace-trees")!;
 const statusEl = document.getElementById("status")!;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
+const composerLockNote = document.getElementById("composer-lock-note") as HTMLElement;
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnImage = document.getElementById("btn-image") as HTMLButtonElement;
@@ -132,6 +143,9 @@ const findInput = document.getElementById("find-input") as HTMLInputElement;
 const findCount = document.getElementById("find-count")!;
 const configDialog = document.getElementById("config-dialog") as HTMLDialogElement;
 const configForm = document.getElementById("config-form") as HTMLFormElement;
+const skillsPage = document.getElementById("skills-page") as HTMLElement;
+const btnSkills = document.getElementById("btn-skills") as HTMLButtonElement;
+const skillMenu = document.getElementById("skill-menu") as HTMLElement;
 const pageCtxMenu = document.getElementById("page-ctx-menu")!;
 const pageCtxCopy = pageCtxMenu.querySelector('[data-ctx="copy"]') as HTMLButtonElement;
 
@@ -164,18 +178,33 @@ const runBoard = document.createElement("div");
 let runParked = false;
 let parkedSessionId: string | null = null;
 let isRunning = false;
+/** Latest phase of the in-flight submit. Shown only on that session's page. */
+let runLiveStatus = "";
+let statusIsRun = false;
 let creatingSession = false;
 let pendingAsk: { requestId: string } | null = null;
 
-type StoreTab = "meta" | "messages" | "trace" | "context";
+const FILE_TABS = ["meta", "messages", "trace", "context"] as const;
+type StoreTab = (typeof FILE_TABS)[number];
 type MainView = "chat" | StoreTab;
+
+function isFileTab(value: string | undefined): value is StoreTab {
+  return !!value && (FILE_TABS as readonly string[]).includes(value);
+}
 let activeView: MainView = "chat";
+/** Keep the transcript pinned to the latest line until the user scrolls up to read. */
+let followTail = true;
+let tailAnchor = 0;
+/** Scroll offset saved with a parked run, so leaving and coming back does not jump. */
+let parkedFollowTail = true;
+let parkedScrollTop = 0;
+let skillsPageOpen = false;
 let activeStoreTab: StoreTab = "meta";
 let sessionArtifacts: {
   meta: Record<string, unknown>;
   messages: unknown[];
   traces: unknown[];
-  context: string;
+  context: unknown[];
 } | null = null;
 const STORE_STRING_PREVIEW = 1600;
 
@@ -186,13 +215,39 @@ function cancelStreamRichPaint(): void {
   }
 }
 
+function distanceFromTail(): number {
+  return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+}
+
+let applyingTailScroll = false;
+
+/** Jump to the latest line. Callers decide whether the user is still following. */
+function revealTail(): void {
+  if (conversationEl.hidden || activeView !== "chat") return;
+  const previous = messagesEl.style.scrollBehavior;
+  messagesEl.style.scrollBehavior = "auto";
+  applyingTailScroll = true;
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  applyingTailScroll = false;
+  messagesEl.style.scrollBehavior = previous;
+  tailAnchor = messagesEl.scrollTop;
+}
+
+/** Grow the transcript, then stay put when the user has scrolled up to read. */
+function keepTail(mutate: () => void): void {
+  const stick = followTail;
+  mutate();
+  if (stick) revealTail();
+}
+
 function paintStreamRich(immediate = false): void {
   if (!streamingEl) return;
   const paint = () => {
     streamRaf = 0;
     if (!streamingEl) return;
+    const stick = followTail && !!streamingEl.closest("#messages");
     setRichText(streamingEl, streamBuffer, true);
-    if (streamingEl.closest("#messages")) messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (stick) revealTail();
   };
   if (immediate) {
     cancelStreamRichPaint();
@@ -296,7 +351,54 @@ function setMainView(view: MainView): void {
   storeDock.hidden = chatOn || storeTabs.hidden;
   viewTabs.classList.toggle("has-files", !storeTabs.hidden);
   if (!chatOn) paintStoreView();
+  if (skillsPageOpen) {
+    coverStageWithSkills();
+    mainTitle.classList.remove("active");
+    mainTitle.setAttribute("aria-selected", "false");
+    for (const tab of storeTabButtons()) {
+      tab.classList.remove("active");
+      tab.setAttribute("aria-selected", "false");
+    }
+  }
   if (!findBar.hidden) runFind(true);
+  else if (!conversationEl.hidden && followTail) revealTail();
+}
+
+function coverStageWithSkills(): void {
+  conversationEl.hidden = true;
+  composerDock.hidden = true;
+  storeDock.hidden = true;
+  mainBar.classList.add("is-covered");
+  if (document.activeElement === inputEl) inputEl.blur();
+}
+
+function leaveSkillsPage(): void {
+  if (!skillsPageOpen) return;
+  skillsPageOpen = false;
+  skillsPage.hidden = true;
+  mainBar.classList.remove("is-covered");
+  btnSkills.classList.remove("is-current");
+  btnSkills.setAttribute("aria-pressed", "false");
+}
+
+function closeSkillsPage(): void {
+  if (!skillsPageOpen) return;
+  leaveSkillsPage();
+  setMainView(activeView);
+}
+
+function openSkillsPage(): void {
+  skillsPageOpen = true;
+  skillsPage.hidden = false;
+  btnSkills.classList.add("is-current");
+  btnSkills.setAttribute("aria-pressed", "true");
+  mainTitle.classList.remove("active");
+  mainTitle.setAttribute("aria-selected", "false");
+  for (const tab of storeTabButtons()) {
+    tab.classList.remove("active");
+    tab.setAttribute("aria-selected", "false");
+  }
+  coverStageWithSkills();
 }
 
 function paintStoreView(): void {
@@ -312,8 +414,8 @@ function paintStoreView(): void {
     paintStoreEntries(sessionArtifacts.messages, "messages.jsonl", renderMessageEntry);
   } else if (activeStoreTab === "trace") {
     paintStoreEntries(sessionArtifacts.traces, "trace.jsonl", renderTraceEntry);
-  } else {
-    paintContextEntries(sessionArtifacts.context ?? "");
+  } else if (activeStoreTab === "context") {
+    paintStoreEntries(sessionArtifacts.context, "context.jsonl", renderContextEntry);
   }
 }
 
@@ -394,10 +496,19 @@ function traceRecordSummary(row: Record<string, unknown>, index: number): string
     if (preview) bits.push(preview);
     return bits.join(" · ");
   }
+  if (type === "tool_call") {
+    const tool = recordString(detail, "tool");
+    if (tool) bits.push(tool);
+    bits.push("开始");
+    return bits.join(" · ");
+  }
   if (type === "tool_result") {
     const tool = recordString(detail, "tool");
     if (tool) bits.push(tool);
-    if (detail.is_error === true) bits.push("错误");
+    if (typeof detail.duration_ms === "number") bits.push(formatDuration(detail.duration_ms));
+    if (detail.denied === true) bits.push("已拒绝");
+    else if (detail.cancelled === true) bits.push("已终止");
+    else if (detail.is_error === true) bits.push("错误");
     const preview = oneLinePreview(recordString(detail, "content"));
     if (preview) bits.push(preview);
     return bits.join(" · ");
@@ -418,47 +529,41 @@ function renderTraceEntry(item: unknown, index: number): { summary: string; clas
   return { summary: traceRecordSummary(item, index), className };
 }
 
-function contextEntrySummary(row: Record<string, unknown> | null, index: number): string {
-  if (!row) return `第 ${index + 1} 条 · 无法解析`;
-  if (row.type === "tools") {
-    const sha = typeof row.sha256 === "string" ? row.sha256.slice(0, 12) : "";
-    const n = Array.isArray(row.tools) ? row.tools.length : 0;
-    const count = n ? ` · ${n} 个工具` : "";
-    return `工具表${sha ? ` · ${sha}` : ""}${count}`;
+function contextRecordSummary(row: Record<string, unknown>, index: number): string {
+  const type = recordString(row, "type") || "未知";
+  const bits = [`${index + 1}`, type];
+  if (type === "tools") {
+    const sha = recordString(row, "sha256");
+    if (sha) bits.push(sha.slice(0, 12));
+    if (Array.isArray(row.tools)) bits.push(`${row.tools.length} 个工具`);
+    return bits.join(" · ");
   }
-  if (row.type === "request") {
-    const id = typeof row.id === "string" ? row.id : "";
-    const n = Array.isArray(row.messages) ? row.messages.length : 0;
-    // Row field is `id`. trace.jsonl stores that same value as context_id.
-    return id ? `context_id ${id} · ${n} 条消息` : `请求 · ${n} 条消息`;
+  if (type === "request") {
+    const id = recordString(row, "id");
+    if (id) bits.push(id);
+    if (Array.isArray(row.messages)) bits.push(`${row.messages.length} 条消息`);
+    const model = recordString(row, "model");
+    if (model) bits.push(model);
+    return bits.join(" · ");
   }
-  return `第 ${index + 1} 条`;
+  return bits.join(" · ");
+}
+
+function renderContextEntry(item: unknown, index: number): { summary: string; className: string } {
+  if (!isRecord(item)) return { summary: `${index + 1} · 无法解析`, className: "" };
+  return { summary: contextRecordSummary(item, index), className: "" };
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} 毫秒`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)} 秒`;
+  return `${Math.round(ms / 1000)} 秒`;
 }
 
 function oneLinePreview(text: string, max = 48): string {
   const line = text.replace(/\s+/g, " ").trim();
   if (!line) return "";
   return line.length > max ? `${line.slice(0, max)}…` : line;
-}
-
-function contextPre(text: string): HTMLPreElement {
-  const body = document.createElement("pre");
-  body.className = "context-entry-body";
-  body.textContent = text;
-  return body;
-}
-
-function contextMessageSummary(row: Record<string, unknown>, index: number): string {
-  const role = typeof row.role === "string" ? row.role : "未知";
-  const name = typeof row.name === "string" ? row.name : "";
-  const who = name ? `${role} ${name}` : role;
-  const calls = toolCallNames(row.tool_calls);
-  const text = typeof row.text === "string" ? row.text : "";
-  if (!text.trim() && calls.length) {
-    return `${index + 1} · ${who} · ${calls.join(", ")}`;
-  }
-  const preview = oneLinePreview(text);
-  return preview ? `${index + 1} · ${who} · ${preview}` : `${index + 1} · ${who}`;
 }
 
 function toolCallNames(value: unknown): string[] {
@@ -470,143 +575,6 @@ function toolCallNames(value: unknown): string[] {
     if (typeof fn?.name === "string" && fn.name) names.push(fn.name);
   }
   return names;
-}
-
-function contextMessageBody(row: Record<string, unknown>): string {
-  const parts: string[] = [];
-  if (typeof row.tool_call_id === "string" && row.tool_call_id) {
-    parts.push(`tool_call_id ${row.tool_call_id}`);
-  }
-  if (typeof row.text === "string" && row.text) parts.push(row.text);
-  if (Array.isArray(row.images) && row.images.length) {
-    const lines = row.images.map((image) => {
-      if (!image || typeof image !== "object") return String(image);
-      const path = typeof (image as { path?: unknown }).path === "string" ? (image as { path: string }).path : "";
-      const bytes = (image as { bytes?: unknown }).bytes;
-      return `${path || "图片"}${typeof bytes === "number" ? ` · ${bytes} 字节` : ""}`;
-    });
-    parts.push(lines.join("\n"));
-  }
-  if (Array.isArray(row.tool_calls) && row.tool_calls.length) {
-    parts.push(JSON.stringify(row.tool_calls, null, 2));
-  }
-  return parts.join("\n\n") || "（无正文）";
-}
-
-function renderContextMessage(message: unknown, index: number): HTMLElement {
-  const entry = document.createElement("details");
-  entry.className = "context-msg";
-  const summary = document.createElement("summary");
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    summary.textContent = `${index + 1} · 无法解析`;
-    entry.append(summary, contextPre(typeof message === "string" ? message : JSON.stringify(message, null, 2)));
-    return entry;
-  }
-  const row = message as Record<string, unknown>;
-  summary.textContent = contextMessageSummary(row, index);
-  entry.append(summary, contextPre(contextMessageBody(row)));
-  return entry;
-}
-
-function renderContextRequest(row: Record<string, unknown>): HTMLElement {
-  const wrap = document.createElement("div");
-  wrap.className = "context-request";
-  const sha = typeof row.tools_sha256 === "string" ? row.tools_sha256 : "";
-  const bits = [
-    typeof row.turn_id === "string" ? `turn_id ${row.turn_id}` : "",
-    typeof row.model === "string" ? row.model : "",
-    sha ? `tools_sha256 ${sha.slice(0, 12)}` : "",
-  ].filter(Boolean);
-  if (bits.length) {
-    const meta = document.createElement("div");
-    meta.className = "context-meta";
-    meta.textContent = bits.join(" · ");
-    if (sha) meta.title = sha;
-    wrap.append(meta);
-  }
-  const messages = Array.isArray(row.messages) ? row.messages : null;
-  const msgList = document.createElement("div");
-  msgList.className = "context-messages";
-  if (!messages) {
-    msgList.append(contextPre(JSON.stringify(row, null, 2)));
-  } else if (!messages.length) {
-    const empty = document.createElement("div");
-    empty.className = "context-meta";
-    empty.textContent = "没有消息";
-    msgList.append(empty);
-  } else {
-    messages.forEach((message, index) => msgList.append(renderContextMessage(message, index)));
-  }
-  wrap.append(msgList);
-  return wrap;
-}
-
-function toolRecord(tool: unknown): { name: string; description: string; parameters: unknown } | null {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return null;
-  const fn = (tool as { function?: unknown }).function;
-  if (!fn || typeof fn !== "object" || Array.isArray(fn)) return null;
-  const rec = fn as { name?: unknown; description?: unknown; parameters?: unknown };
-  return {
-    name: typeof rec.name === "string" && rec.name ? rec.name : "未命名工具",
-    description: typeof rec.description === "string" ? rec.description : "",
-    parameters: rec.parameters,
-  };
-}
-
-function renderContextTools(row: Record<string, unknown>): HTMLElement {
-  const wrap = document.createElement("div");
-  wrap.className = "context-messages";
-  const tools = Array.isArray(row.tools) ? row.tools : null;
-  if (!tools) {
-    wrap.append(contextPre(JSON.stringify(row, null, 2)));
-    return wrap;
-  }
-  for (const tool of tools) {
-    const entry = document.createElement("details");
-    entry.className = "context-msg";
-    const summary = document.createElement("summary");
-    const rec = toolRecord(tool);
-    summary.textContent = rec?.name ?? "未命名工具";
-    const body = rec
-      ? [rec.description, rec.parameters !== undefined ? JSON.stringify(rec.parameters, null, 2) : ""]
-          .filter(Boolean)
-          .join("\n\n") || "（无说明）"
-      : JSON.stringify(tool, null, 2);
-    entry.append(summary, contextPre(body));
-    wrap.append(entry);
-  }
-  return wrap;
-}
-
-function paintContextEntries(raw: string): void {
-  const lines = raw.split("\n").filter((line) => line.trim());
-  storeHint.textContent = `${lines.length} 条 · context.jsonl · 点开后按消息拆开`;
-  storeView.replaceChildren();
-  if (!lines.length) return;
-  const list = document.createElement("div");
-  list.className = "context-list";
-  lines.forEach((line, index) => {
-    let row: Record<string, unknown> | null = null;
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        row = parsed as Record<string, unknown>;
-      }
-    } catch {
-      row = null;
-    }
-    const entry = document.createElement("details");
-    entry.className = "context-entry";
-    const summary = document.createElement("summary");
-    summary.textContent = contextEntrySummary(row, index);
-    entry.append(summary);
-    if (!row) entry.append(contextPre(line));
-    else if (row.type === "request") entry.append(renderContextRequest(row));
-    else if (row.type === "tools") entry.append(renderContextTools(row));
-    else entry.append(contextPre(JSON.stringify(row, null, 2)));
-    list.append(entry);
-  });
-  storeView.append(list);
 }
 
 function hideStoreDock(): void {
@@ -628,21 +596,16 @@ async function refreshStoreDock(sessionId: string | null): Promise<void> {
         ? await window.agent.loadWorkspaceArtifacts(viewWorkspace, sessionId)
         : await window.agent.loadSessionArtifacts(sessionId);
     storeTabs.hidden = false;
-    const msgTab = storeTabs.querySelector('[data-store-tab="messages"]');
-    const trTab = storeTabs.querySelector('[data-store-tab="trace"]');
-    if (msgTab) {
-      msgTab.textContent = `messages.jsonl (${sessionArtifacts.messages.length})`;
+    const labels: Record<StoreTab, string> = {
+      meta: "meta.json",
+      messages: `messages.jsonl (${sessionArtifacts.messages.length})`,
+      trace: `trace.jsonl (${sessionArtifacts.traces.length})`,
+      context: `context.jsonl (${sessionArtifacts.context.length})`,
+    };
+    for (const name of FILE_TABS) {
+      const tab = storeTabs.querySelector(`[data-store-tab="${name}"]`);
+      if (tab) tab.textContent = labels[name];
     }
-    if (trTab) {
-      trTab.textContent = `trace.jsonl (${sessionArtifacts.traces.length})`;
-    }
-    const ctxTab = storeTabs.querySelector('[data-store-tab="context"]');
-    if (ctxTab) {
-      const n = (sessionArtifacts.context ?? "").split("\n").filter((line) => line.trim()).length;
-      ctxTab.textContent = `context.jsonl (${n})`;
-    }
-    const metaTab = storeTabs.querySelector('[data-store-tab="meta"]');
-    if (metaTab) metaTab.textContent = "meta.json";
     setMainView(activeView);
   } catch (err) {
     sessionArtifacts = null;
@@ -655,11 +618,15 @@ async function refreshStoreDock(sessionId: string | null): Promise<void> {
   }
 }
 
-mainTitle.addEventListener("click", () => setMainView("chat"));
+mainTitle.addEventListener("click", () => {
+  leaveSkillsPage();
+  setMainView("chat");
+});
 for (const btn of storeTabButtons()) {
   btn.addEventListener("click", () => {
-    const tab = btn.dataset.storeTab as StoreTab | undefined;
-    if (tab === "meta" || tab === "messages" || tab === "trace" || tab === "context") setMainView(tab);
+    if (!isFileTab(btn.dataset.storeTab)) return;
+    leaveSkillsPage();
+    setMainView(btn.dataset.storeTab);
   });
 }
 for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>("[data-app-menu]"))) {
@@ -667,11 +634,9 @@ for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>("[data
     const index = Number(btn.dataset.appMenu);
     if (!Number.isInteger(index) || !window.agent?.popupAppMenu) return;
     const rect = btn.getBoundingClientRect();
-    void window.agent.popupAppMenu(
-      index,
-      Math.round(window.screenX + rect.left),
-      Math.round(window.screenY + rect.bottom),
-    );
+    // Content-relative. Electron adds the window origin itself; adding
+    // screenX/screenY again detaches the menu whenever the window is not at (0, 0).
+    void window.agent.popupAppMenu(index, Math.round(rect.left), Math.round(rect.bottom));
   });
 }
 
@@ -731,6 +696,21 @@ function onPageContextMenu(ev: MouseEvent): void {
 }
 
 messagesEl.addEventListener("contextmenu", onPageContextMenu);
+messagesEl.addEventListener(
+  "scroll",
+  () => {
+    const top = messagesEl.scrollTop;
+    if (applyingTailScroll) {
+      tailAnchor = top;
+      return;
+    }
+    // At the bottom again: follow. Any upward move away from it: the user is reading.
+    if (distanceFromTail() <= 4) followTail = true;
+    else if (top < tailAnchor - 1) followTail = false;
+    tailAnchor = top;
+  },
+  { passive: true },
+);
 storeView.addEventListener("contextmenu", onPageContextMenu);
 pageCtxCopy.addEventListener("click", (ev) => {
   ev.preventDefault();
@@ -755,7 +735,7 @@ btnSend.disabled = true;
 
 const PHASE_LABEL: Record<string, string> = {
   assembling: "整理上下文…",
-  llm: "调用模型…",
+  llm: "思考中……",
   tool: "执行工具…",
   awaiting_permission: "等待确认权限…",
   awaiting_user: "等你回答…",
@@ -765,19 +745,26 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function setStatus(text: string, busy = false): void {
+function setStatus(text: string, busy = false, source: "page" | "run" = "page"): void {
   statusEl.textContent = text || "";
-  statusEl.hidden = !busy;
-  if (busy) statusEl.removeAttribute("data-idle");
-  else statusEl.setAttribute("data-idle", "true");
+  statusEl.hidden = !busy || !text;
+  statusIsRun = source === "run" && Boolean(text);
   syncHomeBar();
+  syncFloatPad();
+}
+
+/** Remember the running session's phase. Paint it only while that page is open. */
+function showRunStatus(text: string): void {
+  runLiveStatus = text;
+  if (!isRunning || currentSessionId !== runGate.runSessionId) return;
+  setStatus(text, true, "run");
 }
 
 /** No open session: the title row is the home page the user asked to remove. */
 function syncHomeBar(): void {
   const home = !currentSessionId && storeTabs.hidden;
   mainTitle.hidden = home;
-  mainBar.hidden = home && statusEl.hidden;
+  mainBar.hidden = home;
 }
 
 function showStatusError(err: unknown): void {
@@ -835,21 +822,30 @@ function updateChrome(): void {
   const onRun = viewingRun();
   const lockedOut = isRunning && !onRun;
   const canCompose = hasWorkspace && onRun && !asking && !isRunning && !creatingSession;
-  btnSend.disabled = lockedOut ? true : asking || (isRunning && onRun) ? false : !canCompose;
-  btnSend.textContent = lockedOut ? "发送" : asking ? "回答" : isRunning && onRun ? "停止" : "发送";
-  btnSend.classList.toggle("is-stop", isRunning && onRun && !asking);
+  // Stop belongs to the running session's composer, not to every page.
+  const stopHere = isRunning && onRun && !asking;
+  btnSend.disabled = stopHere || asking ? false : !canCompose;
+  btnSend.textContent = asking ? "回答" : stopHere ? "停止" : "发送";
+  btnSend.classList.toggle("is-stop", stopHere);
   btnSend.setAttribute(
     "aria-label",
-    lockedOut ? "发送已禁用" : asking ? "回答" : isRunning && onRun ? "停止" : "发送",
+    asking ? "回答" : stopHere ? "停止" : canCompose ? "发送" : "发送已禁用",
   );
   btnNew.disabled = !hasWorkspace || creatingSession;
   inputEl.disabled = lockedOut || creatingSession || (isRunning && !asking);
   composerEl.classList.toggle("is-locked", lockedOut);
+  composerEl.classList.toggle("has-draft", lockedOut && inputEl.value.length > 0);
+  composerLockNote.hidden = !lockedOut;
   inputEl.placeholder = lockedOut
-    ? "有会话正在执行，不能在这里输入"
+    ? ""
     : asking
       ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
       : "向 Agent 下指令… Enter 发送，Shift+Enter 换行";
+  if (lockedOut) {
+    if (statusIsRun) setStatus("", false);
+  } else if (isRunning && onRun && runLiveStatus) {
+    setStatus(runLiveStatus, true, "run");
+  }
   btnImage.disabled = !canCompose;
   syncImageRemoveLock();
   syncLiveDock();
@@ -902,6 +898,8 @@ function syncImageRemoveLock(): void {
 function parkRun(): void {
   if (!isRunning || !currentSessionId || currentSessionId !== runGate.runSessionId) return;
   if (runParked) return;
+  parkedFollowTail = followTail;
+  parkedScrollTop = messagesEl.scrollTop;
   while (messagesEl.firstChild) runBoard.appendChild(messagesEl.firstChild);
   runParked = true;
   parkedSessionId = currentSessionId;
@@ -913,7 +911,14 @@ function takeParkedRun(sessionId: string): boolean {
   while (runBoard.firstChild) messagesEl.appendChild(runBoard.firstChild);
   runParked = false;
   parkedSessionId = null;
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  followTail = parkedFollowTail;
+  const previous = messagesEl.style.scrollBehavior;
+  messagesEl.style.scrollBehavior = "auto";
+  applyingTailScroll = true;
+  messagesEl.scrollTop = followTail ? messagesEl.scrollHeight : parkedScrollTop;
+  applyingTailScroll = false;
+  messagesEl.style.scrollBehavior = previous;
+  tailAnchor = messagesEl.scrollTop;
   return true;
 }
 
@@ -1243,6 +1248,8 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   const ul = document.createElement("ul");
   ul.className = "session-list";
   ul.hidden = !open;
+  const runningHere = isRunning && sameWorkspace(path, activeWorkspace);
+  if (runningHere && !open) row.append(sessionSpinner());
   row.append(pathBtn, chevron, more);
   block.append(row, ul);
   treesEl.appendChild(block);
@@ -1250,8 +1257,27 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
 }
 
 function toggleWorkspaceList(path: string, open: boolean): void {
-  workspaceExpanded.set(path, !open);
+  const next = !open;
+  workspaceExpanded.set(path, next);
+  void window.agent.setWorkspaceExpanded(path, next).catch(showStatusError);
   void refreshSessions();
+}
+
+function rememberWorkspaceFold(paths: string[], collapsed: string[]): void {
+  const folded = new Set(collapsed.map((item) => item.replace(/[\\/]+$/, "").toLowerCase()));
+  for (const path of paths) {
+    workspaceExpanded.set(path, !folded.has(path.replace(/[\\/]+$/, "").toLowerCase()));
+  }
+}
+
+function sessionSpinner(): HTMLElement {
+  const mark = document.createElement("span");
+  mark.className = "session-spinner";
+  mark.setAttribute("role", "img");
+  mark.setAttribute("aria-label", "执行中");
+  mark.innerHTML =
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.25" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.28"/><path d="M8 2.75a5.25 5.25 0 0 1 5.25 5.25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  return mark;
 }
 
 function placeSessionMenu(trigger: HTMLElement, pop: HTMLElement): void {
@@ -1438,14 +1464,8 @@ async function refreshSessions(): Promise<void> {
 
       pop.append(btnRename, btnDel);
       menu.append(btnMore, pop);
-      if (executing) {
-        const mark = document.createElement("span");
-        mark.className = "session-running";
-        mark.textContent = "执行中";
-        li.append(label, mark, menu);
-      } else {
-        li.append(label, menu);
-      }
+      if (executing) li.append(sessionSpinner());
+      li.append(label, menu);
       listEl.appendChild(li);
       }
     } catch (err) {
@@ -1455,7 +1475,12 @@ async function refreshSessions(): Promise<void> {
 }
 
 async function showSession(workspace: string, sessionId: string, title: string): Promise<void> {
-  if (sessionId === currentSessionId && sameWorkspace(workspace, viewWorkspace)) return;
+  const sameSession = sessionId === currentSessionId && sameWorkspace(workspace, viewWorkspace);
+  leaveSkillsPage();
+  if (sameSession) {
+    setMainView(activeView);
+    return;
+  }
   rememberComposer();
   const leavingRun =
     isRunning &&
@@ -1487,8 +1512,13 @@ async function showNewPage(): Promise<void> {
     setStatus("请先选择工作区", true);
     return;
   }
-  if (creatingSession) return;
+  leaveSkillsPage();
+  if (creatingSession) {
+    setMainView(activeView);
+    return;
+  }
   if (!currentSessionId && sameWorkspace(viewWorkspace, activeWorkspace)) {
+    setMainView("chat");
     if (!inputEl.disabled) inputEl.focus();
     return;
   }
@@ -1510,6 +1540,7 @@ async function showNewPage(): Promise<void> {
   }
   hideStoreDock();
   messagesEl.innerHTML = "";
+  followTail = true;
   setMainView("chat");
   restoreComposer();
   await refreshSessions();
@@ -1576,7 +1607,8 @@ async function loadCurrent(): Promise<void> {
     }
     // Force a second pass so opening a session always uses the latest renderer.
     rerenderAllAssistantMarkdown(messagesEl);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    followTail = true;
+    revealTail();
   } catch (err) {
     showStatusError(err);
   } finally {
@@ -1624,6 +1656,7 @@ document.getElementById("btn-workspace")!.onclick = async () => {
     activeWorkspace = added.active;
     hasWorkspace = Boolean(activeWorkspace);
     workspaceExpanded.set(added.added, true);
+    void window.agent.setWorkspaceExpanded(added.added, true).catch(showStatusError);
     if (first) {
       currentSessionId = null;
       viewWorkspace = null;
@@ -1642,6 +1675,9 @@ document.getElementById("btn-workspace")!.onclick = async () => {
 btnNew.onclick = () => {
   void showNewPage();
 };
+
+attachSkillLibrary(btnSkills, skillsPage, { onOpen: openSkillsPage, onClose: closeSkillsPage });
+attachSkillMenu(inputEl, skillMenu);
 
 document.getElementById("btn-config")!.onclick = async () => {
   try {
@@ -1820,6 +1856,35 @@ async function ensureSession(): Promise<string | null> {
   }
 }
 
+async function acceptSkillTokens(text: string): Promise<boolean> {
+  const tokens = skillTokensIn(text);
+  if (!tokens.length) return true;
+  try {
+    const installed = await window.agent.listSkills();
+    const byName = new Map(installed.map((skill) => [skill.name, skill]));
+    for (const name of tokens) {
+      const skill = byName.get(name);
+      if (!skill) {
+        showChatError(new Error(`未知技能 /${name}`));
+        return false;
+      }
+      if (!skill.enabled) {
+        showChatError(new Error(`技能 /${name} 已停用`));
+        return false;
+      }
+    }
+  } catch (err) {
+    showChatError(err);
+    return false;
+  }
+  return true;
+}
+
+function isSkillSendFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("未知技能 /") || message.includes("无法读取技能 /") || message.includes("已停用");
+}
+
 async function sendMessage(): Promise<void> {
   if (pendingAsk && viewingRun()) {
     await answerPending(inputEl.value);
@@ -1829,6 +1894,7 @@ async function sendMessage(): Promise<void> {
   const text = inputEl.value.trim();
   const images = pendingImages.slice();
   if (!text && images.length === 0) return;
+  if (text && !(await acceptSkillTokens(text))) return;
   const draftKey = currentComposerKey();
   try {
     if (viewWorkspace && !sameWorkspace(viewWorkspace, activeWorkspace)) {
@@ -1849,14 +1915,17 @@ async function sendMessage(): Promise<void> {
   inputEl.value = "";
   discardParkedRun();
   if (messagesEl.querySelector(".empty-state")) messagesEl.innerHTML = "";
+  followTail = true;
   appendMessage(messagesEl, "user", text, {
     images: images.map((image) => image.previewUrl),
   });
   resetStreamTarget(appendMessage(messagesEl, "assistant", ""));
   clearOpenTools();
-  setStatus("运行中…", true);
-  setRunning(true);
+  runLiveStatus = "运行中…";
+  // Record the run before painting. updateChrome treats a running flag with an
+  // empty run session as "some other session", which locks this page for the whole turn.
   runGate = beginRun(sessionId);
+  setRunning(true);
   try {
     await window.agent.submit(
       sessionId,
@@ -1868,8 +1937,30 @@ async function sendMessage(): Promise<void> {
   } catch (err) {
     runGate = idleGate();
     setRunning(false);
+    if (isSkillSendFailure(err)) {
+      inputEl.value = text;
+      pendingImages = images;
+      renderPendingImages();
+      rememberComposer();
+      const bubbles = Array.from(messagesEl.querySelectorAll(":scope > .msg"));
+      bubbles.at(-1)?.remove();
+      bubbles.at(-2)?.remove();
+      if (!messagesEl.querySelector(".msg")) renderEmptyState(messagesEl, "idle");
+    }
     showChatError(err);
   }
+}
+
+function requestStop(): void {
+  clearPermissionDock();
+  void (async () => {
+    try {
+      await window.agent.cancel();
+      showRunStatus("已请求停止");
+    } catch (err) {
+      showStatusError(err);
+    }
+  })();
 }
 
 btnSend.onclick = () => {
@@ -1878,20 +1969,15 @@ btnSend.onclick = () => {
     return;
   }
   if (isRunning && viewingRun()) {
-    void (async () => {
-      try {
-        await window.agent.cancel();
-        setStatus("已请求停止", true);
-      } catch (err) {
-        showStatusError(err);
-      }
-    })();
+    requestStop();
     return;
   }
+  if (isRunning) return;
   void sendMessage();
 };
 
 inputEl.addEventListener("keydown", (ev) => {
+  if (onSkillMenuKey(ev)) return;
   if (ev.key === "Enter" && !ev.shiftKey) {
     ev.preventDefault();
     void sendMessage();
@@ -1914,6 +2000,70 @@ inputEl.addEventListener("paste", (ev) => {
   void addImageFiles(files);
 });
 
+const localLinkExists = new Map<string, boolean>();
+
+function linkKey(raw: string): string {
+  return `${activeWorkspace ?? ""}\0${raw}`;
+}
+
+function unwrapLocalLink(node: Element): void {
+  const parent = node.parentElement;
+  if (parent?.classList.contains("md-inline-link")) parent.classList.remove("md-inline-link");
+  node.replaceWith(document.createTextNode(node.textContent ?? ""));
+}
+
+function dropMissingLocalLinks(root: ParentNode): void {
+  root.querySelectorAll('a.md-link[data-local="1"]').forEach((node) => {
+    const raw = node.getAttribute("data-open") ?? "";
+    if (localLinkExists.get(linkKey(raw)) !== false) return;
+    unwrapLocalLink(node);
+  });
+}
+
+let linkCheckTimer = 0;
+let linkCheckGen = 0;
+
+function scheduleLocalLinkCheck(): void {
+  if (linkCheckTimer) clearTimeout(linkCheckTimer);
+  linkCheckTimer = window.setTimeout(() => {
+    linkCheckTimer = 0;
+    void confirmLocalLinks(messagesEl);
+  }, 150);
+}
+
+async function confirmLocalLinks(root: HTMLElement): Promise<void> {
+  const workspace = activeWorkspace;
+  const unknown: string[] = [];
+  const seen = new Set<string>();
+  root.querySelectorAll('a.md-link[data-local="1"]').forEach((node) => {
+    const raw = node.getAttribute("data-open") ?? "";
+    if (!raw || seen.has(raw) || localLinkExists.has(`${workspace ?? ""}\0${raw}`)) return;
+    seen.add(raw);
+    unknown.push(raw);
+  });
+  dropMissingLocalLinks(root);
+  if (!unknown.length || !window.agent?.localTargetsExist) return;
+  const gen = ++linkCheckGen;
+  try {
+    for (let i = 0; i < unknown.length; i += 500) {
+      const slice = unknown.slice(i, i + 500);
+      const found = await window.agent.localTargetsExist(slice);
+      if (gen !== linkCheckGen && activeWorkspace !== workspace) return;
+      for (const raw of slice) {
+        localLinkExists.set(`${workspace ?? ""}\0${raw}`, found[raw] === true);
+      }
+    }
+  } catch {
+    return;
+  }
+  dropMissingLocalLinks(root);
+}
+
+new MutationObserver(() => scheduleLocalLinkCheck()).observe(messagesEl, {
+  childList: true,
+  subtree: true,
+});
+
 messagesEl.addEventListener("click", (ev) => {
   const t = ev.target;
   if (!(t instanceof Element)) return;
@@ -1922,8 +2072,22 @@ messagesEl.addEventListener("click", (ev) => {
   ev.preventDefault();
   const raw = a.getAttribute("data-open") || "";
   if (!raw || !window.agent?.openExternal) return;
+  if (a.getAttribute("data-local") === "1" && localLinkExists.get(linkKey(raw)) === false) {
+    unwrapLocalLink(a);
+    return;
+  }
   void window.agent.openExternal(raw).then((res) => {
-    if (!res.ok) setStatus(res.error || "无法打开链接", true);
+    if (res.ok) return;
+    if (
+      a.isConnected &&
+      a.getAttribute("data-local") === "1" &&
+      (res.error || "").startsWith("Path not found")
+    ) {
+      localLinkExists.set(linkKey(raw), false);
+      unwrapLocalLink(a);
+      return;
+    }
+    setStatus(res.error || "无法打开链接", true);
   });
 });
 
@@ -1938,8 +2102,8 @@ window.addEventListener("keydown", (ev) => {
     closeFindBar();
     return;
   }
-  if (ev.key === "Escape" && isRunning) {
-    void window.agent.cancel();
+  if (ev.key === "Escape" && isRunning && viewingRun()) {
+    requestStop();
   }
 });
 
@@ -2107,7 +2271,7 @@ function recordLivePrompt(e: {
     .querySelectorAll(`[data-request-id="${CSS.escape(String(e.request_id))}"]`)
     .forEach((n) => n.remove());
   if (e.type === "permission_request") {
-    setStatus("等待确认权限…", true);
+    showRunStatus("等待确认权限…");
     appendPermissionCard(permissionDock, {
       requestId: e.request_id,
       tool: e.tool ?? "",
@@ -2119,12 +2283,15 @@ function recordLivePrompt(e: {
       onDeny: () => {
         void window.agent.respondPermission(e.request_id, "deny");
       },
+      onStop: () => {
+        requestStop();
+      },
     });
     syncLiveDock();
     return;
   }
   pendingAsk = { requestId: e.request_id };
-  setStatus("等你回答…", true);
+  showRunStatus("等你回答…");
   appendAskCard(permissionDock, {
     requestId: e.request_id,
     question: e.question ?? "",
@@ -2133,7 +2300,7 @@ function recordLivePrompt(e: {
       void answerPending(text);
     },
     onCancel: () => {
-      void window.agent.cancel();
+      requestStop();
     },
   });
   updateChrome();
@@ -2156,44 +2323,53 @@ function applyTranscript(host: HTMLElement, e: {
   tool_call?: { id: string; function: { name: string; arguments: string } };
   tool_call_id?: string;
 }): boolean {
+  const place = (mutate: () => void) => {
+    if (host === messagesEl) keepTail(mutate);
+    else mutate();
+  };
   if (e.type === "text") {
-    if (!streamingEl) resetStreamTarget(appendMessage(host, "assistant", ""));
+    if (!streamingEl) place(() => resetStreamTarget(appendMessage(host, "assistant", "")));
     streamBuffer += e.delta ?? "";
     paintStreamRich(false);
     return true;
   }
   if (e.type === "tool_call" && e.tool_call) {
+    const call = e.tool_call;
     if (streamingEl && streamBuffer) paintStreamRich(true);
     resetStreamTarget(null);
-    const body = appendToolStep(host, {
-      title: toolCallTitle(e.tool_call.function.name, e.tool_call.function.arguments),
-      detail: "等待结果…",
-      open: true,
+    place(() => {
+      const body = appendToolStep(host, {
+        title: toolCallTitle(call.function.name, call.function.arguments),
+        detail: "等待结果…",
+        open: true,
+      });
+      openTools.set(call.id, body);
+      openToolDetail = body;
     });
-    openTools.set(e.tool_call.id, body);
-    openToolDetail = body;
     return true;
   }
   if (e.type === "tool_result") {
     const detail = (e.content ?? "").slice(0, 4000);
     const node = e.tool_call_id ? openTools.get(e.tool_call_id) : undefined;
     if (node) {
-      setToolDetailContent(node, detail);
-      const details = node.closest("details");
-      const summary = details?.querySelector(".tool-summary")?.textContent ?? "";
-      const isAsk = summary.includes("ask_user");
-      if (details) details.open = false;
-      if (e.tool_call_id) openTools.delete(e.tool_call_id);
-      if (openToolDetail === node) openToolDetail = null;
-      if (isAsk && !e.is_error) appendMessage(host, "user", e.content ?? "");
+      place(() => {
+        setToolDetailContent(node, detail);
+        const details = node.closest("details");
+        const summary = details?.querySelector(".tool-summary")?.textContent ?? "";
+        const isAsk = summary.includes("ask_user");
+        if (details) details.open = false;
+        if (e.tool_call_id) openTools.delete(e.tool_call_id);
+        if (openToolDetail === node) openToolDetail = null;
+        if (isAsk && !e.is_error) appendMessage(host, "user", e.content ?? "");
+      });
     } else {
-      appendToolStep(host, { title: "工具结果", detail, open: false });
+      place(() => appendToolStep(host, { title: "工具结果", detail, open: false }));
     }
     return true;
   }
   if (e.type === "error") {
     clearPermissionDock();
-    appendMessage(host, "error", e.message ?? "");
+    place(() => appendMessage(host, "error", e.message ?? ""));
     return true;
   }
   return false;
@@ -2204,8 +2380,11 @@ function finishRun(reason: string, refreshStore: boolean): void {
   resetStreamTarget(null);
   clearPermissionDock();
   clearOpenTools();
+  const showHere = refreshStore;
+  runLiveStatus = "";
   setRunning(false);
-  setStatus(runStatusText(reason), reason !== "completed");
+  if (showHere) setStatus(runStatusText(reason), reason !== "completed");
+  else if (statusIsRun) setStatus("", false);
   if (refreshStore && currentSessionId) void refreshStoreDock(currentSessionId);
   noteRunFinished();
   void refreshSessions();
@@ -2226,6 +2405,10 @@ window.agent.onEvent((e) => {
   runGate = decision.next;
   if (!decision.paint) {
     if (!decision.keep) return;
+    if (e.type === "status") {
+      runLiveStatus = PHASE_LABEL[e.phase] ?? e.phase;
+      return;
+    }
     if (e.type === "ask_user" || e.type === "permission_request") {
       recordLivePrompt(e);
       return;
@@ -2244,7 +2427,7 @@ window.agent.onEvent((e) => {
   } else if (e.type === "done") {
     finishRun(e.reason, true);
   } else if (e.type === "status") {
-    setStatus(PHASE_LABEL[e.phase] ?? e.phase, true);
+    showRunStatus(PHASE_LABEL[e.phase] ?? e.phase);
   }
 });
 
@@ -2254,12 +2437,19 @@ function refreshVisibleAssistantMarkdown(): void {
 }
 
 const floatStack = document.querySelector(".float-stack");
+function syncFloatPad(): void {
+  const stackH =
+    floatStack instanceof HTMLElement
+      ? Math.ceil(floatStack.getBoundingClientRect().height) + 12
+      : 120;
+  const statusH = statusEl.hidden ? 0 : Math.ceil(statusEl.getBoundingClientRect().height) + 8;
+  const stick = followTail;
+  messagesEl.style.paddingBottom = `${stackH + statusH}px`;
+  storeView.style.paddingBottom = `${stackH}px`;
+  statusEl.style.bottom = `${stackH}px`;
+  if (stick) revealTail();
+}
 if (floatStack instanceof HTMLElement) {
-  const syncFloatPad = () => {
-    const h = Math.ceil(floatStack.getBoundingClientRect().height) + 12;
-    messagesEl.style.paddingBottom = `${h}px`;
-    storeView.style.paddingBottom = `${h}px`;
-  };
   new ResizeObserver(syncFloatPad).observe(floatStack);
   syncFloatPad();
 }
@@ -2274,6 +2464,7 @@ async function boot(): Promise<void> {
     const restored = await window.agent.restoreWorkspace();
     workspacePaths = restored?.paths ?? [];
     workspaceLabels = restored?.labels ?? {};
+    rememberWorkspaceFold(workspacePaths, restored?.collapsed ?? []);
     if (restored?.active) await applyWorkspace(restored.active);
     else {
       await refreshSessions();

@@ -7,6 +7,8 @@ import { listDirTool } from "./listDir.js";
 import { deleteFileTool } from "./deleteFile.js";
 import { searchTool } from "./search.js";
 import { webSearchTool } from "./webSearch.js";
+import { readSkillTool } from "./readSkill.js";
+import { runSkillScriptTool } from "./runSkillScript.js";
 import { ASK_USER_NOT_LOCAL, ASK_USER_TOOL_NAME, askUserTool } from "./askUserTool.js";
 import { isDangerousBash } from "./dangerous.js";
 
@@ -25,6 +27,8 @@ export function createBuiltinTools(): Tool[] {
     searchTool,
     webSearchTool,
     askUserTool,
+    readSkillTool,
+    runSkillScriptTool,
   ];
 }
 

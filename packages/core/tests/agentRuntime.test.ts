@@ -290,6 +290,13 @@ describe("AgentRuntime", () => {
     expect(toolTrace.detail?.arguments).toBe(toolMsg.tool_call_arguments);
     expect(toolTrace.detail?.content).toBe(toolMsg.content);
     expect(toolTrace.detail?.tool).toBe(SHELL_TOOL_NAME);
+    expect(toolTrace.detail?.duration_ms).toEqual(expect.any(Number));
+    expect(toolTrace.detail?.duration_ms as number).toBeGreaterThanOrEqual(0);
+    const callTrace = traces.find((t) => t.id === toolTrace.request_id);
+    expect(callTrace?.type).toBe("tool_call");
+    expect(callTrace?.detail?.tool).toBe(SHELL_TOOL_NAME);
+    expect(callTrace?.detail?.tool_call_id).toBe(toolMsg.tool_call_id);
+    expect(callTrace?.detail?.arguments).toBe(toolMsg.tool_call_arguments);
   });
 
   it("tool-path storage failure emits error and done", async () => {

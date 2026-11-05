@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from "electron";
-import { access } from "node:fs/promises";
+import { watch, type FSWatcher } from "node:fs";
+import { access, mkdir, realpath } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -14,9 +15,17 @@ import {
   assertValidSessionId,
   DeferredPermissionGate,
   DeferredAskGate,
+  defaultSkillsRoot,
+  installSkill,
+  isPathInside,
+  isSkillName,
+  listInstalledSkills,
+  setSkillEnabled,
+  skillDirectory,
+  uninstallSkill,
 } from "@agent/core";
 import type { ImageMime, PermissionDecision, RuntimeEvent, StoredConfig, SubmittedImage } from "@agent/core";
-import { openTarget } from "./openTarget.js";
+import { localTargetsExist, openTarget } from "./openTarget.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -105,6 +114,19 @@ const CONFIG_DEFAULTS = {
 
 function cleanPath(p: string): string {
   return p.replace(/[\\/]+$/, "");
+}
+
+async function pickSkillFolder(title: string): Promise<string | null> {
+  const opts = {
+    title,
+    properties: ["openDirectory" as const],
+  };
+  const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+  win?.focus();
+  if (res.canceled || !res.filePaths[0]) return null;
+  const picked = cleanPath(res.filePaths[0]);
+  await access(picked);
+  return picked;
 }
 
 function samePath(a: string, b: string): boolean {
@@ -240,6 +262,28 @@ function createWindow() {
     event.preventDefault();
   });
   win.loadFile(join(__dirname, "../src/renderer/index.html"));
+  if (win) watchSkillFolders(win);
+}
+
+function watchSkillFolders(window: BrowserWindow): void {
+  const root = defaultSkillsRoot();
+  void mkdir(root, { recursive: true })
+    .then(() => {
+      let timer: NodeJS.Timeout | undefined;
+      const watcher: FSWatcher = watch(root, { recursive: true }, () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (!window.isDestroyed()) window.webContents.send("agent:skillsChanged");
+        }, 400);
+      });
+      window.once("closed", () => {
+        if (timer) clearTimeout(timer);
+        watcher.close();
+      });
+    })
+    .catch((err) => {
+      console.error("skill watch failed", err);
+    });
 }
 
 app.whenReady().then(() => {
@@ -280,7 +324,10 @@ app.whenReady().then(() => {
         lastWorkspacePath: active ?? undefined,
       });
     }
-    return { active, paths, labels };
+    const collapsed = (stored?.workspaceCollapsed ?? []).filter(
+      (item) => typeof item === "string" && paths.some((known) => samePath(known, item)),
+    );
+    return { active, paths, labels, collapsed };
   });
 
   ipcMain.handle("agent:addWorkspace", async () => {
@@ -348,7 +395,7 @@ app.whenReady().then(() => {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
-    const context = await new ContextStore(path).readRaw(sessionId);
+    const context = await new ContextStore(path).read(sessionId);
     return { meta, messages, traces, context };
   });
   ipcMain.handle(
@@ -423,6 +470,9 @@ app.whenReady().then(() => {
       ...stored,
       workspacePaths: paths,
       workspaceLabels: labels,
+      workspaceCollapsed: (stored.workspaceCollapsed ?? []).filter(
+        (item) => typeof item === "string" && paths.some((known) => samePath(known, item)),
+      ),
       lastWorkspacePath: workspacePath ?? undefined,
     });
     return { paths, active: workspacePath, labels };
@@ -486,6 +536,52 @@ app.whenReady().then(() => {
       return permissionGate?.respond(requestId, decision) ?? false;
     },
   );
+  ipcMain.handle("agent:listSkills", async () => listInstalledSkills());
+  ipcMain.handle("agent:installSkill", async () => {
+    const picked = await pickSkillFolder("添加技能");
+    if (!picked) return null;
+    return installSkill(picked);
+  });
+  ipcMain.handle("agent:setSkillEnabled", async (_e, name: unknown, enabled: unknown) => {
+    if (typeof name !== "string" || !isSkillName(name)) throw new Error(`未找到技能 ${String(name)}`);
+    if (typeof enabled !== "boolean") throw new Error("技能开关无效");
+    await setSkillEnabled(name, enabled);
+  });
+  ipcMain.handle("agent:uninstallSkill", async (_e, name: unknown) => {
+    if (typeof name !== "string" || !isSkillName(name)) throw new Error(`未找到技能 ${String(name)}`);
+    await uninstallSkill(name);
+  });
+  ipcMain.handle("agent:openSkillFolder", async (_e, name: unknown) => {
+    if (typeof name !== "string" || !isSkillName(name)) throw new Error(`未找到技能 ${String(name)}`);
+    const root = defaultSkillsRoot();
+    let realRoot: string;
+    let realDir: string;
+    try {
+      realRoot = await realpath(root);
+      realDir = await realpath(skillDirectory(name));
+    } catch {
+      throw new Error(`未找到技能 ${name}`);
+    }
+    const inside =
+      isPathInside(realRoot, realDir) ||
+      (process.platform === "win32" && isPathInside(realRoot.toLowerCase(), realDir.toLowerCase()));
+    if (!inside || realDir.toLowerCase() === realRoot.toLowerCase()) {
+      throw new Error(`未找到技能 ${name}`);
+    }
+    const err = await shell.openPath(realDir);
+    if (err) throw new Error(err);
+  });
+  ipcMain.handle("agent:setWorkspaceExpanded", async (_e, raw: unknown, open: unknown) => {
+    if (typeof raw !== "string" || typeof open !== "boolean") throw new Error("折叠状态无效");
+    const path = await assertKnownWorkspace(raw);
+    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const paths = workspaceList(stored);
+    const collapsed = (stored.workspaceCollapsed ?? []).filter(
+      (item) => typeof item === "string" && paths.some((known) => samePath(known, item)) && !samePath(item, path),
+    );
+    if (!open) collapsed.push(path);
+    await saveStoredConfig({ ...stored, workspaceCollapsed: collapsed });
+  });
   ipcMain.handle("agent:getConfig", async () => loadStoredConfig());
   ipcMain.handle("agent:saveConfig", async (_e, cfg: StoredConfig) => {
     const prev = await loadStoredConfig();
@@ -493,9 +589,14 @@ app.whenReady().then(() => {
       ...cfg,
       workspacePaths: cfg.workspacePaths ?? prev?.workspacePaths,
       workspaceLabels: cfg.workspaceLabels ?? prev?.workspaceLabels,
+      workspaceCollapsed: cfg.workspaceCollapsed ?? prev?.workspaceCollapsed,
       lastWorkspacePath: cfg.lastWorkspacePath ?? prev?.lastWorkspacePath,
     });
     resetRuntime();
+  });
+  ipcMain.handle("agent:localTargetsExist", async (_e, targets: unknown) => {
+    if (!Array.isArray(targets) || targets.some((item) => typeof item !== "string")) return {};
+    return localTargetsExist(targets, workspacePath);
   });
   ipcMain.handle("agent:openExternal", async (_e, target: string) => {
     if (typeof target !== "string") return { ok: false, error: "Invalid target" };

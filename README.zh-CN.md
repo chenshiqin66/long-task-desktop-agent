@@ -2,7 +2,7 @@
 
 本仓库是一个本地 Electron 客户端。它在用户选定的工作区里跑可中断的 ReAct：向 OpenAI 兼容接口流式要模型输出，按模型给出的工具调用去读改文件、跑命令或搜索，并把对话与审计分开落在工作区里。换工作区不会串历史。密钥只留在本机用户目录。
 
-界面是一块独占的主区：会话、`meta.json`、`messages.jsonl`、`trace.jsonl` 四个标签各占整页。输入框浮在内容上，不占一条横贯的底栏。
+界面是一块独占的主区：会话页，加上 `meta.json`、`messages.jsonl`、`trace.jsonl`、`context.jsonl` 四个文件页，各占整页。输入框浮在内容上，不占一条横贯的底栏。
 
 ## 系统架构
 
@@ -40,8 +40,8 @@ flowchart LR
 
 约束：
 
-- 侧边栏可以记下多个工作区，点 + 是增加，不会换掉已有的那一条。点工作区名字或旁边的箭头，只展开或折叠该目录的会话，不换掉右侧正在看的页面。点开某个会话才会显示它。任务进行中仍可点开别的会话查看，发送和输入都是灰色，不能打字；停止只在正在执行的那个会话页上，左侧那一行会标「执行中」。输入框跟页面绑定：新建会话页和每个会话各留自己的草稿，切走再切回来还在，不会带到别的会话里。同一时刻只有一个 `AgentRuntime`。在「配置模型」里保存会丢掉当前 runtime，下次调用再按新配置建。
-- 一个 runtime 同时只跑一轮 `submit`。再提交会得到 `busy`。发送按钮在运行中变成「停止」，停止走 `cancel()`。
+- 侧边栏可以记下多个工作区，点 + 是增加，不会换掉已有的那一条。点工作区名字或旁边的箭头，只展开或折叠该目录的会话，不换掉右侧正在看的页面。点开某个会话才会显示它。任务进行中仍可点开别的会话查看，发送和输入都是灰色，不能打字。那一页的输入框里用绿色写「另一个会话正在执行」，不把正在跑的阶段提示带到这一页。停止和「等待确认权限」这类实时状态只在正在执行的那个会话页上。左侧该会话标题前有一枚发送按钮同色的转圈；工作区若被折叠，转圈改标在工作区名字前。工作区的展开和折叠记在本机配置里，重启后保持。输入框跟页面绑定：新建会话页和每个会话各留自己的草稿，切走再切回来还在，不会带到别的会话里。同一时刻只有一个 `AgentRuntime`。在「配置模型」里保存会丢掉当前 runtime，下次调用再按新配置建。
+- 一个 runtime 同时只跑一轮 `submit`。再提交会得到 `busy`。正在执行的那一页，发送按钮变成「停止」；其他会话页的发送保持灰色，不能从那一页停止。停止走 `cancel()`。
 - 主进程打开窗口时打开 `contextIsolation`，关闭 `nodeIntegration`，并拒绝页面内导航和新窗口。preload 必须编成 CommonJS（`preload.cjs`），沙箱里不能用 ESM。
 - 应用从 `packages/app/dist` 启动。改了渲染层的 TypeScript 要重新 `build`；只改 `index.html` 或 `styles.css` 时，构建末尾的静态拷贝会把它们抄进 dist。
 
@@ -72,7 +72,7 @@ flowchart LR
 | `electron/main.ts` | 窗口、中文菜单、工作区对话框、IPC、把 `RuntimeEvent` 转成 `agent:event`。也记住上次工作区路径。系统菜单不占通栏，收在侧栏里弹出 |
 | `electron/preload.ts` | 唯一暴露给页面的 API：`window.agent` |
 | `electron/openTarget.ts` | 打开外链。页面不能自己导航 |
-| `src/renderer/main.ts` | 工作区与会话列表、四个标签的切换、订阅事件、发送/停止、页内搜索 |
+| `src/renderer/main.ts` | 工作区与会话列表、会话页和四个文件页的切换、订阅事件、发送/停止、页内搜索 |
 | `src/renderer/ui.ts` | 消息气泡、Markdown、工具条、来源块、空状态。不持有会话状态 |
 | `src/renderer/runEventGate.ts` | 进行中的事件若不属于当前正在看的会话或轮次，就不往界面上画。`done` 仍会清掉这轮的门闩 |
 
@@ -111,13 +111,13 @@ flowchart TB
   call -->|"id = tool_call_id"| toolmsg
 ```
 
-一条用户消息打开一个 `turn_id`。这一轮里的助手文本、工具调用和工具结果都带同一个 `turn_id`。`messages` 是模型下一次能看见的历史；`trace` 是同一次动作的审计。两边用 `trace_id` / `message_id` 互指。`llm_response` 和 `llm_error` 再用 `request_id` 指回对应的 `llm_request`。
+一条用户消息打开一个 `turn_id`。这一轮里的助手文本、工具调用和工具结果都带同一个 `turn_id`。`messages` 是模型下一次能看见的历史；`trace` 是同一次动作的审计。两边用 `trace_id` / `message_id` 互指。`llm_response` 和 `llm_error` 再用 `request_id` 指回对应的 `llm_request`。每一条 `tool_result` 同样用 `request_id` 指回它的 `tool_call`。
 
 `role=tool` 的消息可以带 `tool_call_arguments`，只给界面和审计看。组装上下文时不会把它再发给模型，因为参数已经在配对的那条助手消息的 `tool_calls` 上。
 
 标识前缀：`sess`、`turn`、`msg`、`trace`、`perm`。
 
-配置里的 `apiKey` 不会出现在 messages、trace 或 context 里。`llm_request` 只记模型名、条数、字数、图片张数和 `context_id`。这个 id 就是 `context.jsonl` 里对应请求行的 `id`，文件字段名不改。界面在 trace 页签后面显示该文件：请求标题写成 `context_id`，点开后每条消息单独折叠。用当前页搜索这个 id 即可定位。`messages.jsonl` 和 `trace.jsonl` 也按条折叠，标题是角色或事件类型加一行摘要；展开后是这一条的 JSON，超过 1600 字的字符串仍截断。`user_message` 这条 trace 只记字数，不记正文。
+配置里的 `apiKey` 不会出现在 messages、trace 或 context 里。`llm_request` 只记模型名、条数、字数、图片张数和 `context_id`。这个 id 就是 `context.jsonl` 里对应请求行的 `id`，文件字段名不改。四个文件页里，`messages.jsonl`、`trace.jsonl`、`context.jsonl` 都按条折叠：标题是序号、角色或事件类型，再加一行摘要；展开后是这一条的 JSON，超过 1600 字的字符串截断。`meta.json` 是整份 JSON。用当前页搜索 `context_id` 即可定位。`user_message` 这条 trace 只记字数，不记正文。
 
 ## 一轮提问
 
@@ -130,9 +130,9 @@ flowchart TB
    - 有工具调用则 `steps` 加一。本批调用按顺序执行，不是并行。
 4. 每个工具先经 `classifyToolCall`：
    - `read`：直接执行。
-   - `write`：发出 `permission_request`，等界面允许或拒绝。拒绝写成一条错误工具结果，循环可以继续。
-   - `blocked`：不执行，写成错误工具结果。
-5. 工具结果追加为 `role=tool` 的消息，并发出 `tool_result`。然后回到第 3 步，让模型看见结果。
+   - `write`：发出 `permission_request`，等界面允许或拒绝。允许一次即放行这一轮剩下的写操作和命令；拒绝只否定这一次，写成一条错误工具结果，循环可以继续。`ask_user` 不在这次放行里。
+   - `blocked`：不执行，写成错误工具结果。上一轮的允许也不会把这类命令放出来。
+5. 每条工具调用先写一条 `tool_call` trace（工具名、参数）。真正执行的记在开跑之前；拒绝、停止、未执行而收口的记在结果前面，两条时间会贴在一起。然后追加 `role=tool` 的消息和 `tool_result`。`tool_result.request_id` 指回这条 `tool_call`。拒绝、停止写在结果的 `denied` / `cancelled` 上，不写进开始记录。`duration_ms` 只出现在真正执行过的结果上，不算等你点允许的时间。然后回到第 3 步，让模型看见结果。
 6. 取消会留下已经流出的文本（标成 interrupted），停掉正在跑的 shell，尚未执行的工具调用用合成结果收口，并写 cancel trace。
 
 `maxSteps` 数的是「模型返回了一批工具调用」的次数，不是单次 HTTP。一批里有三次 `web_search`，这一轮只把 `steps` 加一，但会打出三次搜索请求，外加这一轮的对话补全请求。搜索和 token 是两笔用量。
@@ -144,8 +144,8 @@ flowchart TB
 | `read_file`、`list_dir`、`keyword_search` | 自动放行 | 路径限制在工作区内。读和搜索有字符与条数上限 |
 | `web_search` | 自动放行 | 一次调用向 `{llmBase}/v1/tools/search` 发一个 POST。`count` 默认 8、最大 50。`need_content` 为 false，返回的是摘要不是整页。查询最长 128 字 |
 | `ask_user` | 停下来问人 | 同一轮挂起，直到用户回答。回答写成这条工具调用的结果，然后模型继续。同一条回复里排在它后面的工具不会执行。只把问题打印出来、不调用这个工具，会结束这一轮 |
-| `write_file`、`str_replace`、`delete_file` | 需确认 | 路径同样不能逃出工作区 |
-| `powershell`（Windows）/ `bash`（其他系统） | 看命令 | Windows 上启动 `powershell.exe`，工作目录是 Windows 路径。只读命令自动放行；其余需确认；危险命令直接拦截。超时默认 60 秒，输出会截断。旧会话里的 `bash` 调用会返回错误，不再进入 WSL |
+| `write_file`、`str_replace`、`delete_file` | 这一轮确认一次 | 路径同样不能逃出工作区。点「允许这一轮」后，同一次发送里后面的写操作不再逐条询问 |
+| `powershell`（Windows）/ `bash`（其他系统） | 看命令 | Windows 上启动 `powershell.exe`，工作目录是 Windows 路径。只读命令，以及不落盘的 `curl` / `Invoke-WebRequest` / `Invoke-RestMethod`（不是 POST、PUT、DELETE、PATCH，也没有 `-OutFile`、`-o`）自动放行。其余需确认，允许一次覆盖这一轮剩下的命令。清空磁盘根目录仍直接拦截。超时默认 60 秒，输出会截断。旧会话里的 `bash` 调用会返回错误，不再进入 WSL |
 | 未知工具 | 需确认 | 分类上按写操作对待；宿主找不到实现时返回错误结果 |
 
 界面上每个工具条按 `tool_call.id` 和后来的 `tool_result.tool_call_id` 配对。同名工具不会合并：合并会藏掉不同的查询，也不能少计一次已经发出的请求。
@@ -224,7 +224,7 @@ flowchart TB
 
 主区四个标签互斥，点哪一个就只显示那一页。侧栏换会话时回到「会话」页，并直接跳到对话底部，不做平滑滚动。
 
-`Ctrl+F` 只搜当前这一页，按大小写不敏感的原文包含来比，不用正则。高亮用 CSS Highlight API，不改写 Markdown 的 DOM。对话页搜气泡和工具结果；三个文件页搜各自的 JSON。换页会沿用关键字，并从该页第一处重新数。被链接或加粗从中间切开的词对不上，因为比对是按可见文本节点做的。
+`Ctrl+F` 只搜当前这一页，按大小写不敏感的原文包含来比，不用正则。高亮用 CSS Highlight API，不改写 Markdown 的 DOM。对话页搜气泡和工具结果；四个文件页搜各自的 JSON。换页会沿用关键字，并从该页第一处重新数。被链接或加粗从中间切开的词对不上，因为比对是按可见文本节点做的。
 
 输入框是浮在主区底部的白卡片，不占文档流。对话和文件视图铺满到窗口底，滚动区底部留出与卡片等高的空白，避免最后一行被挡住。确认写操作的卡片叠在输入框上方，同样不铺一条底栏。
 
@@ -244,6 +244,6 @@ npm start -w @agent/app
 
 ## 现在还不做
 
-没有跨会话记忆，没有用户自定义工具，没有子 Agent，也没有右侧检视面板。文件页就是主区里的三个标签，不是分栏。
+没有跨会话记忆，没有用户自定义工具，没有子 Agent，也没有右侧检视面板。文件页就是主区里的四个标签，不是分栏。
 
 旧说明里写过「不做 web」。这已经不对：`web_search` 是内置工具。

@@ -72,6 +72,19 @@ const backticked = formatMarkdown(
   "打开 `/mnt/c/Users/陈仕勤/Desktop/temp-20261029/shanghai-country-parks.html` 查看",
 );
 assert(backticked.includes("md-link"), "backtick path is link");
+assert(backticked.includes('data-local="1"'), "absolute path is a local link");
+
+const bareName = formatMarkdown("你打开看一眼 `system-architecture.png`，如果出现方块");
+assert(!bareName.includes("md-link"), "bare file name is not a link");
+assert(bareName.includes("system-architecture.png"), "bare file name still shown");
+
+const missingRel = formatMarkdown("见 [图](diagrams/system-architecture.png)");
+assert(missingRel.includes('data-open="diagrams/system-architecture.png"'), "relative path stays a candidate");
+assert(missingRel.includes('data-local="1"'), "relative path is checked locally");
+
+const bareMd = formatMarkdown("见 [图](system-architecture.png)");
+assert(!bareMd.includes("md-link"), "markdown bare file name is not a link");
+assert(bareMd.includes(">图<") || bareMd.includes("图"), "markdown label kept");
 assert(
   backticked.includes(
     'data-open="/mnt/c/Users/陈仕勤/Desktop/temp-20261029/shanghai-country-parks.html"',

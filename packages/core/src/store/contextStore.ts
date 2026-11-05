@@ -22,6 +22,16 @@ export class ContextStore {
     }
   }
 
+  /** One parsed object per jsonl line, same shape the file tabs use for messages and trace. */
+  async read(sessionId: string): Promise<unknown[]> {
+    const raw = await this.readRaw(sessionId);
+    if (!raw.trim()) return [];
+    return raw
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as unknown);
+  }
+
   async appendRequest(opts: {
     sessionId: string;
     id: string;

@@ -23,6 +23,10 @@ export interface ToolContext {
   /** Optional override for search endpoint origin (tests / custom gateways). */
   searchBaseUrl?: string;
   fetchImpl?: typeof fetch;
+  /** Skill names whose bodies are already attached to this submit. */
+  attachedSkillNames?: ReadonlySet<string>;
+  /** Installed-skill root. Defaults to the user skills directory. */
+  skillsRoot?: string;
 }
 
 export interface Tool {

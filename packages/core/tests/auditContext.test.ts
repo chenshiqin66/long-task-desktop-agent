@@ -104,6 +104,6 @@ describe("outbound context audit", () => {
     expect(llm.map((row) => row.detail?.context_id)).toEqual(requests.map((row) => row.id));
 
     const artifacts = await rt.loadSessionArtifacts(meta.session_id);
-    expect(artifacts.context).toBe(raw);
+    expect(artifacts.context).toEqual(rows);
   });
 });
