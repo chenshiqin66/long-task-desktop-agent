@@ -4,6 +4,35 @@ import { normalizeOpenTarget, resolveLocalOpenPath } from "./openTargetNormalize
 
 export { decodeBasicEntities, normalizeOpenTarget, resolveLocalOpenPath } from "./openTargetNormalize.js";
 
+/** Same resolution as a click. Missing paths are false; http(s) is not a local file. */
+export async function localTargetsExist(
+  targets: string[],
+  workspacePath?: string | null,
+): Promise<Record<string, boolean>> {
+  const out: Record<string, boolean> = {};
+  const list = targets.filter((item) => typeof item === "string").slice(0, 500);
+  await Promise.all(
+    list.map(async (raw) => {
+      if (!raw || raw.length > 4096 || /^https?:\/\//i.test(raw)) {
+        out[raw] = false;
+        return;
+      }
+      const resolved = resolveLocalOpenPath(raw, workspacePath ?? null);
+      if (!resolved.ok) {
+        out[raw] = false;
+        return;
+      }
+      try {
+        await access(resolved.path);
+        out[raw] = true;
+      } catch {
+        out[raw] = false;
+      }
+    }),
+  );
+  return out;
+}
+
 export async function openTarget(
   raw: string,
   workspacePath?: string | null,

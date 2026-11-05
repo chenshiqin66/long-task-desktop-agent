@@ -109,7 +109,7 @@ export interface TraceEvent {
   timestamp: string;
   /** Matching Message.id when this event corresponds to a persisted message. */
   message_id?: string;
-  /** Links llm_response / llm_error back to the llm_request event id. */
+  /** Links llm_response / llm_error back to llm_request, and tool_result back to tool_call. */
   request_id?: string;
   token_usage?: {
     prompt_tokens?: number;

@@ -102,17 +102,54 @@ function segmentLooksReadOnly(segment: string): boolean {
   return true;
 }
 
+/** Fetch commands that print to stdout. GNU wget is omitted: it saves a file by default. */
+const WEB_GET_CMDS = new Set([
+  "curl",
+  "curl.exe",
+  "invoke-webrequest",
+  "iwr",
+  "invoke-restmethod",
+  "irm",
+]);
+
+const DIR_ONLY = new Set([
+  "cd",
+  "set-location",
+  "sl",
+  "push-location",
+  "pop-location",
+  "pushd",
+  "popd",
+]);
+
+/** True when a web get would write a file or send a mutating method. */
+function webGetWrites(rest: string): boolean {
+  const scan = rest.toLowerCase();
+  if (
+    /(?:^|\s)--?(?:outfile|infile|output|remote-name|upload-file|body)\b/.test(scan) ||
+    /(?:^|\s)(?:--data(?:-raw|-binary|-urlencode)?|--form)\b/.test(scan)
+  ) {
+    return true;
+  }
+  if (/(?:^|\s)-[oOTdF](?:\s|$)/.test(rest)) return true;
+  if (/(?:^|\s)(?:-x|--request|-method)\s*:?\s*(post|put|delete|patch)\b/i.test(rest)) return true;
+  return false;
+}
+
 function stageIsReadOnly(stage: string): boolean {
   const m = stage.match(/^\s*([a-zA-Z0-9_./+-]+)/);
   if (!m) return false;
   const cmd = m[1]!.toLowerCase();
+  const rest = stage.slice(m[0].length);
   if (cmd === "git") {
-    const rest = stage.slice(m[0].length).trim();
-    const sub = (rest.match(/^([a-zA-Z0-9_-]+)/)?.[1] ?? "").toLowerCase();
+    const sub = (rest.trim().match(/^([a-zA-Z0-9_-]+)/)?.[1] ?? "").toLowerCase();
     return sub === "status" || sub === "diff" || sub === "log" || sub === "show" || sub === "branch";
   }
   if (WRITEISH.test(cmd) && cmd !== "git") return false;
-  return READ_COMMANDS.has(cmd);
+  if (READ_COMMANDS.has(cmd)) return true;
+  if (DIR_ONLY.has(cmd)) return true;
+  if (WEB_GET_CMDS.has(cmd)) return !webGetWrites(rest);
+  return false;
 }
 
 export function classifyBashCommand(command: string): PolicyVerdict {
@@ -141,7 +178,8 @@ export function classifyToolCall(
     toolName === "read_file" ||
     toolName === "list_dir" ||
     toolName === "keyword_search" ||
-    toolName === "web_search"
+    toolName === "web_search" ||
+    toolName === "read_skill"
   ) {
     return { risk: "read", summary: `Auto-allow ${toolName}` };
   }
@@ -154,6 +192,18 @@ export function classifyToolCall(
       return { risk: "write", summary: `${toolName} with invalid JSON args`, command: argsJson };
     }
     return classifyBashCommand(command);
+  }
+  if (toolName === "run_skill_script") {
+    let label = toolName;
+    try {
+      const args = argsJson ? (JSON.parse(argsJson) as { name?: unknown; path?: unknown }) : {};
+      const name = typeof args.name === "string" ? args.name : "";
+      const path = typeof args.path === "string" ? args.path : "";
+      label = [toolName, name, path].filter(Boolean).join(" ");
+    } catch {
+      return { risk: "write", summary: "run_skill_script with invalid JSON args" };
+    }
+    return { risk: "write", summary: `Needs confirmation: ${label.slice(0, 160)}` };
   }
   if (toolName === "write_file" || toolName === "str_replace" || toolName === "delete_file") {
     let path = "";

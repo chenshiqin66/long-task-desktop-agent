@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("agent", {
   restoreWorkspace: () => ipcRenderer.invoke("agent:restoreWorkspace"),
   addWorkspace: () => ipcRenderer.invoke("agent:addWorkspace"),
   activateWorkspace: (path: string) => ipcRenderer.invoke("agent:activateWorkspace", path),
+  setWorkspaceExpanded: (path: string, open: boolean) =>
+    ipcRenderer.invoke("agent:setWorkspaceExpanded", path, open),
   listWorkspaceSessions: (path: string) => ipcRenderer.invoke("agent:listWorkspaceSessions", path),
   loadWorkspaceMessages: (path: string, sessionId: string) =>
     ipcRenderer.invoke("agent:loadWorkspaceMessages", path, sessionId),
@@ -45,6 +47,12 @@ contextBridge.exposeInMainWorld("agent", {
     text: string,
     images?: Array<{ mime: string; base64: string }>,
   ) => ipcRenderer.invoke("agent:submit", sessionId, text, images),
+  listSkills: () => ipcRenderer.invoke("agent:listSkills"),
+  installSkill: () => ipcRenderer.invoke("agent:installSkill"),
+  setSkillEnabled: (name: string, enabled: boolean) =>
+    ipcRenderer.invoke("agent:setSkillEnabled", name, enabled),
+  uninstallSkill: (name: string) => ipcRenderer.invoke("agent:uninstallSkill", name),
+  openSkillFolder: (name: string) => ipcRenderer.invoke("agent:openSkillFolder", name),
   readSessionImage: (sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readSessionImage", sessionId, relativePath),
   cancel: () => ipcRenderer.invoke("agent:cancel"),
@@ -54,6 +62,7 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:answerAsk", requestId, text),
   getConfig: () => ipcRenderer.invoke("agent:getConfig"),
   saveConfig: (cfg: unknown) => ipcRenderer.invoke("agent:saveConfig", cfg),
+  localTargetsExist: (targets: string[]) => ipcRenderer.invoke("agent:localTargetsExist", targets),
   openExternal: (target: string) => ipcRenderer.invoke("agent:openExternal", target),
   popupAppMenu: (index: number, x: number, y: number) =>
     ipcRenderer.invoke("agent:popupAppMenu", index, x, y),
@@ -61,5 +70,10 @@ contextBridge.exposeInMainWorld("agent", {
     const listener = (_: unknown, e: RuntimeEvent) => cb(e);
     ipcRenderer.on("agent:event", listener);
     return () => ipcRenderer.removeListener("agent:event", listener);
+  },
+  onSkillsChanged: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on("agent:skillsChanged", listener);
+    return () => ipcRenderer.removeListener("agent:skillsChanged", listener);
   },
 });

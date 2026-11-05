@@ -49,12 +49,16 @@ export function formatMarkdown(src: string): string {
 const AUTO_LINK_RE =
   /(?:https?:\/\/[^\s<\u0000]+|file:\/\/[^\s<\u0000]+|\/mnt\/[a-zA-Z]\/[^\s<\u0000；。，、）)」』]+|(?:[A-Za-z]:)(?:\\[^\s<\u0000；。，、）)」』]+|\/[^\s<\u0000；。，、）)」』]+))/g;
 
-function mdLink(href: string, label: string): string {
-  const title = /^https?:\/\//i.test(href) ? "点击打开" : "点击打开所在文件夹";
-  return `<a class="md-link" href="#" data-open="${href}" title="${title}">${label}</a>`;
+function mdLink(href: string, label: string, local = false): string {
+  const title = local ? "点击打开所在文件夹" : "点击打开";
+  const flag = local ? ' data-local="1"' : "";
+  return `<a class="md-link" href="#" data-open="${href}"${flag} title="${title}">${label}</a>`;
 }
 
-/** Paths/URLs agents often wrap in backticks — still make them openable. */
+/**
+ * True when the text is an URL or a path with a directory, not a bare file name.
+ * Bare names like `system-architecture.png` are mentions, not locations.
+ */
 export function looksOpenable(raw: string): boolean {
   const s = raw.trim();
   if (!s || s.length > 2048) return false;
@@ -62,9 +66,15 @@ export function looksOpenable(raw: string): boolean {
   if (/^\/mnt\/[a-zA-Z]\//.test(s)) return true;
   if (/^[A-Za-z]:[\\/]/.test(s)) return true;
   if (/^\/[a-zA-Z]\//.test(s) && /\.[a-zA-Z0-9]{1,8}$/.test(s)) return true;
-  // Workspace-relative file names the model wraps in backticks or markdown.
-  if (s.includes("..") || s.includes("\\") && !/^[A-Za-z]:[\\/]/.test(s)) return false;
-  return /^(?:[^\\/:*?"<>|\s]+\/)*[^\\/:*?"<>|\s]+\.[A-Za-z0-9]{1,8}$/.test(s);
+  if (s.includes("..") || (s.includes("\\") && !/^[A-Za-z]:[\\/]/.test(s))) return false;
+  return /^(?:[^\\/:*?"<>|\s]+\/)+[^\\/:*?"<>|\s]+\.[A-Za-z0-9]{1,8}$/.test(s);
+}
+
+function linkedHtml(raw: string, label: string): string | null {
+  const target = trimOpenable(raw);
+  if (/^https?:\/\//i.test(target)) return mdLink(target, label, false);
+  if (!looksOpenable(target)) return null;
+  return mdLink(target, label, true);
 }
 
 function trimOpenable(raw: string): string {
@@ -81,16 +91,14 @@ function inlineFormat(s: string): string {
   };
 
   let t = s.replace(/`([^`]+)`/g, (_m, c: string) => {
-    const inner = c.trim();
-    if (looksOpenable(inner)) {
-      const target = trimOpenable(inner);
-      return hold(`<code class="md-inline md-inline-link">${mdLink(target, c)}</code>`);
-    }
+    const link = linkedHtml(c, c);
+    if (link) return hold(`<code class="md-inline md-inline-link">${link}</code>`);
     return hold(`<code class="md-inline">${c}</code>`);
   });
-  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text: string, url: string) =>
-    hold(mdLink(url, text)),
-  );
+  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text: string, url: string) => {
+    const link = linkedHtml(url, text);
+    return hold(link ?? text);
+  });
   // 来源行: [n] title — https://… → [n] <a>title</a>（不展示裸 URL）
   t = t.replace(
     /\[(\d+)\]\s+(.+?)\s+[—–\-]\s+(https?:\/\/[^\s<]+)/g,
@@ -101,10 +109,7 @@ function inlineFormat(s: string): string {
   );
   t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   t = t.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-  t = t.replace(AUTO_LINK_RE, (m) => {
-    const target = trimOpenable(m);
-    return hold(mdLink(target, target));
-  });
+  t = t.replace(AUTO_LINK_RE, (m) => hold(linkedHtml(m, trimOpenable(m)) ?? m));
   return t.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => slots[Number(i)] ?? "");
 }
 
@@ -116,10 +121,7 @@ export function linkifyPlainText(src: string): string {
     slots.push(html);
     return `\u0000${slots.length - 1}\u0000`;
   };
-  const linked = escaped.replace(AUTO_LINK_RE, (m) => {
-    const target = trimOpenable(m);
-    return hold(mdLink(target, target));
-  });
+  const linked = escaped.replace(AUTO_LINK_RE, (m) => hold(linkedHtml(m, trimOpenable(m)) ?? m));
   return linked
     .replace(/\u0000(\d+)\u0000/g, (_m, i: string) => slots[Number(i)] ?? "")
     .replace(/\n/g, "<br>");
@@ -377,7 +379,6 @@ export function appendMessage(
   }
   if (content || role !== "user") div.append(body);
   container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
   return body;
 }
 
@@ -398,11 +399,18 @@ export function appendToolStep(
   details.append(summary, body);
   wrap.append(details);
   container.appendChild(wrap);
-  container.scrollTop = container.scrollHeight;
   return body;
 }
 
 const PERMISSION_CMD_PREVIEW = 2400;
+
+function permissionCommandText(opts: { tool: string; summary: string; command?: string }): string {
+  const command = opts.command?.trim() ?? "";
+  const summary = opts.summary.replace(/^Needs confirmation:\s*/i, "").trim();
+  const raw = command || summary || opts.tool;
+  if (raw.length <= PERMISSION_CMD_PREVIEW) return raw;
+  return `${raw.slice(0, PERMISSION_CMD_PREVIEW)}\n…（已截断，共 ${raw.length} 字符）`;
+}
 
 export function appendPermissionCard(
   container: HTMLElement,
@@ -413,25 +421,27 @@ export function appendPermissionCard(
     command?: string;
     onAllow: () => void;
     onDeny: () => void;
+    onStop: () => void;
   },
 ): HTMLElement {
   const card = el("div", { class: "permission-card", "data-request-id": opts.requestId });
   const title = el("div", { class: "permission-title" }, "需要确认才能执行");
-  const meta = el("div", { class: "permission-meta" }, `${opts.tool} · ${opts.summary}`);
-
-  const raw = opts.command?.trim() ? opts.command : "";
-  const truncated =
-    raw.length > PERMISSION_CMD_PREVIEW
-      ? `${raw.slice(0, PERMISSION_CMD_PREVIEW)}\n…（已截断，共 ${raw.length} 字符）`
-      : raw;
-  const body = el("pre", { class: "permission-body" }, truncated || opts.summary);
+  const hint = el(
+    "p",
+    { class: "permission-hint" },
+    "允许后，这一轮剩下的写操作和命令不再逐条询问。停止仍可打断。清空磁盘这类命令不会放行。",
+  );
+  const body = el("pre", { class: "permission-body" }, permissionCommandText(opts));
 
   const actions = el("div", { class: "permission-actions" });
-  const allowBtn = el("button", { type: "button", class: "perm-allow" }, "允许");
+  const allowBtn = el("button", { type: "button", class: "perm-allow" }, "允许这一轮");
+  allowBtn.setAttribute("aria-label", "允许这一轮剩下的写操作");
   const denyBtn = el("button", { type: "button", class: "perm-deny" }, "拒绝");
+  const stopBtn = el("button", { type: "button", class: "perm-stop" }, "停止");
   const dismiss = () => {
     allowBtn.disabled = true;
     denyBtn.disabled = true;
+    stopBtn.disabled = true;
     card.remove();
     // No leftover "ghost" cards — hide dock when nothing pending.
     if (!container.querySelector(".permission-card")) {
@@ -447,8 +457,12 @@ export function appendPermissionCard(
     dismiss();
     opts.onDeny();
   };
-  actions.append(allowBtn, denyBtn);
-  card.append(title, meta, body, actions);
+  stopBtn.onclick = () => {
+    dismiss();
+    opts.onStop();
+  };
+  actions.append(allowBtn, denyBtn, stopBtn);
+  card.append(title, body, hint, actions);
   container.hidden = false;
   container.appendChild(card);
   // Keep action row reachable; don't scroll the huge body into the middle of the viewport.

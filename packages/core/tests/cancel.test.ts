@@ -196,6 +196,14 @@ describe("cancel", () => {
 
     const traces = await new TraceStore(workspace).read(meta.session_id);
     expect(traces.some((t) => t.type === "cancel")).toBe(true);
+    const results = traces.filter((t) => t.type === "tool_result");
+    expect(results.length).toBeGreaterThanOrEqual(2);
+    for (const result of results) {
+      const start = traces.find((t) => t.id === result.request_id);
+      expect(start?.type).toBe("tool_call");
+      expect(start?.detail?.tool_call_id).toBe(result.detail?.tool_call_id);
+    }
+    expect(results.some((t) => t.detail?.cancelled === true)).toBe(true);
 
     // Only one LLM round — cancelled mid-tools, no second chatStream
     expect(calls).toBe(1);

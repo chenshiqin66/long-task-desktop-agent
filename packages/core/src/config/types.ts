@@ -6,6 +6,8 @@ export interface StoredConfig {
   workspacePaths?: string[];
   /** Sidebar labels keyed by workspace path. Missing key means show the folder name. Does not rename the directory. */
   workspaceLabels?: Record<string, string>;
+  /** Workspaces the user collapsed. Missing paths stay expanded. */
+  workspaceCollapsed?: string[];
   /** Workspace the agent runs in. Restored on launch. */
   lastWorkspacePath?: string;
   bashTimeoutMs?: number;

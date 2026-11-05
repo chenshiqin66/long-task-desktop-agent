@@ -30,6 +30,13 @@ import {
 } from "../session/autoTitle.js";
 import type { LlmProvider } from "../provider/types.js";
 import { AgentError } from "./errors.js";
+import { extractSkillTokens } from "../skills/tokens.js";
+import {
+  defaultSkillsRoot,
+  listInstalledSkills,
+  readInstalledSkillFile,
+} from "../skills/installedSkills.js";
+import type { SkillBodyAttachment } from "../skills/prompt.js";
 import { AutoAllowGate, type PermissionGate } from "./permission.js";
 import { ClosedAskGate, type AskGate } from "./askGate.js";
 import { ASK_USER_TOOL_NAME, parseAskUserArgs } from "../tools/askUserTool.js";
@@ -120,6 +127,11 @@ export class AgentRuntime {
   private listeners = new Set<EventListener>();
   private abort: AbortController | null = null;
   private running = false;
+  /** Set when the user allows one write. Covers later writes in this submit, not ask_user or blocked commands. */
+  private turnWritesAllowed = false;
+  private readonly skillsRoot: string;
+  /** Bodies pinned for the submit currently running. Cleared when it ends. */
+  private skillBodies: SkillBodyAttachment[] = [];
 
   constructor(opts: {
     workspacePath: string;
@@ -132,6 +144,8 @@ export class AgentRuntime {
     tools?: ToolHost;
     permissions?: PermissionGate;
     asks?: AskGate;
+    /** Installed-skill root. Tests pass a temporary directory. */
+    skillsRoot?: string;
   }) {
     this.workspacePath = opts.workspacePath;
     this.config = opts.config;
@@ -143,6 +157,7 @@ export class AgentRuntime {
     this.tools = opts.tools ?? new ToolHost();
     this.permissions = opts.permissions ?? new AutoAllowGate();
     this.asks = opts.asks ?? new ClosedAskGate();
+    this.skillsRoot = opts.skillsRoot ?? defaultSkillsRoot();
   }
 
   onEvent(listener: EventListener): () => void {
@@ -223,17 +238,17 @@ export class AgentRuntime {
     return this.store.readMessages(sessionId);
   }
 
-  /** Session artifacts the UI reads. `context` is the raw context.jsonl text. */
+  /** Session artifacts the UI reads. Each file is already parsed records, not raw text. */
   async loadSessionArtifacts(sessionId: string): Promise<{
     meta: SessionMeta;
     messages: Message[];
     traces: TraceEvent[];
-    context: string;
+    context: unknown[];
   }> {
     const meta = await this.store.getMeta(sessionId);
     const messages = await this.store.readMessages(sessionId);
     const traces = await this.traces.read(sessionId);
-    const context = await this.contexts.readRaw(sessionId);
+    const context = await this.contexts.read(sessionId);
     return { meta, messages, traces, context };
   }
 
@@ -308,9 +323,11 @@ export class AgentRuntime {
       throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
     }
     this.running = true;
+    this.turnWritesAllowed = false;
     this.abort = new AbortController();
     const turn_id = newId("turn");
     try {
+      this.skillBodies = await this.loadSkillBodies(trimmed);
       // Close any orphaned tool_calls from a prior crash/storage failure before
       // appending the new user message (append-only jsonl needs them at the end).
       await this.repairStoredToolCalls(sessionId);
@@ -361,12 +378,15 @@ export class AgentRuntime {
 
         this.emit({ type: "status", turn_id, phase: "assembling" });
         const loopHistory = await this.store.readMessages(sessionId);
+        const installedSkills = (await listInstalledSkills(this.skillsRoot)).filter((skill) => skill.enabled);
         const ctx = assembleContext({
           systemPrompt: this.systemPrompt,
           toolDefinitions: this.tools.listDefinitions(),
           history: loopHistory.slice(0, -1),
           currentUser: loopHistory[loopHistory.length - 1]!,
           contextCharLimit: this.config.contextCharLimit,
+          installedSkills,
+          skillBodies: this.skillBodies,
         });
 
         this.emit({ type: "status", turn_id, phase: "llm" });
@@ -601,8 +621,36 @@ export class AgentRuntime {
       }
     } finally {
       this.running = false;
+      this.turnWritesAllowed = false;
       this.abort = null;
+      this.skillBodies = [];
     }
+  }
+
+  private async loadSkillBodies(text: string): Promise<SkillBodyAttachment[]> {
+    const bodies: SkillBodyAttachment[] = [];
+    for (const name of extractSkillTokens(text)) {
+      const result = await readInstalledSkillFile(
+        name,
+        undefined,
+        this.config.maxReadChars,
+        this.skillsRoot,
+      );
+      if (result.is_error || !result.directory) {
+        const missing = result.content.startsWith("未找到技能");
+        const disabled = result.content === `技能 ${name} 已停用`;
+        throw new AgentError(
+          missing
+            ? `未知技能 /${name}`
+            : disabled
+              ? `技能 /${name} 已停用`
+              : `无法读取技能 /${name}：${result.content}`,
+          "unknown_skill",
+        );
+      }
+      bodies.push({ name, directory: result.directory, body: result.content });
+    }
+    return bodies;
   }
 
   /**
@@ -626,7 +674,7 @@ export class AgentRuntime {
       }, { blocked: true });
     }
 
-    if (verdict.risk === "write") {
+    if (verdict.risk === "write" && !this.turnWritesAllowed) {
       const request_id = newId("perm");
       this.emit({ type: "status", turn_id, phase: "awaiting_permission" });
       this.emit({
@@ -649,6 +697,9 @@ export class AgentRuntime {
         command: verdict.command,
         signal: this.abort?.signal,
       });
+      if (decision === "allow" && !this.abort?.signal.aborted) {
+        this.turnWritesAllowed = true;
+      }
       if (this.abort?.signal.aborted || decision === "deny") {
         // If user denied (not abort), still close this tool_call with deny text then
         // let caller continue or cancel remaining — abort path uses cancelled.
@@ -667,6 +718,9 @@ export class AgentRuntime {
     }
 
     this.emit({ type: "status", turn_id, phase: "tool" });
+    const callTraceId = await this.persistToolCallStart(sessionId, turn_id, tc);
+    if (callTraceId === "storage_failed") return "storage_failed";
+    const started = Date.now();
     const result = await this.tools.execute(tc.function.name, tc.function.arguments, {
       workspacePath: this.workspacePath,
       signal: this.abort!.signal,
@@ -676,11 +730,21 @@ export class AgentRuntime {
       maxSearchResults: this.config.maxSearchResults,
       apiKey: this.config.apiKey,
       llmBaseUrl: this.config.baseUrl,
+      skillsRoot: this.skillsRoot,
+      attachedSkillNames: new Set(this.skillBodies.map((skill) => skill.name)),
     });
-    return this.persistToolOutcome(sessionId, turn_id, tc, result, {
-      tool: tc.function.name,
-      is_error: result.is_error,
-    });
+    return this.persistToolOutcome(
+      sessionId,
+      turn_id,
+      tc,
+      result,
+      {
+        tool: tc.function.name,
+        is_error: result.is_error,
+        duration_ms: Date.now() - started,
+      },
+      callTraceId,
+    );
   }
 
   /**
@@ -704,6 +768,8 @@ export class AgentRuntime {
       return stored === "storage_failed" ? "storage_failed" : "ok";
     }
 
+    const callTraceId = await this.persistToolCallStart(sessionId, turn_id, tc);
+    if (callTraceId === "storage_failed") return "storage_failed";
     const request_id = newId("ask");
     this.emit({ type: "status", turn_id, phase: "awaiting_user" });
     this.emit({
@@ -730,6 +796,7 @@ export class AgentRuntime {
         tc,
         { content: CANCELLED_TOOL_CONTENT, is_error: true },
         { cancelled: true },
+        callTraceId,
       );
       return stored === "storage_failed" ? "storage_failed" : "cancelled";
     }
@@ -741,6 +808,7 @@ export class AgentRuntime {
         tc,
         { content: ASK_UNAVAILABLE_CONTENT, is_error: true },
         { tool: "ask_user" },
+        callTraceId,
       );
       return stored === "storage_failed" ? "storage_failed" : "asked";
     }
@@ -753,6 +821,7 @@ export class AgentRuntime {
         tc,
         { content: ASK_EMPTY_CONTENT, is_error: true },
         { tool: "ask_user" },
+        callTraceId,
       );
       return stored === "storage_failed" ? "storage_failed" : "asked";
     }
@@ -763,8 +832,33 @@ export class AgentRuntime {
       tc,
       { content: text, is_error: false },
       { tool: "ask_user" },
+      callTraceId,
     );
     return stored === "storage_failed" ? "storage_failed" : "asked";
+  }
+
+  private async persistToolCallStart(
+    sessionId: string,
+    turn_id: string,
+    tc: ToolCall,
+  ): Promise<string | "storage_failed"> {
+    const id = newId("trace");
+    if (
+      !(await this.persistTrace(turn_id, {
+        id,
+        session_id: sessionId,
+        turn_id,
+        type: "tool_call",
+        detail: {
+          tool: tc.function.name,
+          tool_call_id: tc.id,
+          arguments: tc.function.arguments,
+        },
+      }))
+    ) {
+      return "storage_failed";
+    }
+    return id;
   }
 
   private async persistToolOutcome(
@@ -773,7 +867,14 @@ export class AgentRuntime {
     tc: ToolCall,
     result: ToolResult,
     detail: Record<string, unknown>,
+    requestId?: string,
   ): Promise<"ok" | "storage_failed"> {
+    let startId = requestId;
+    if (!startId) {
+      const started = await this.persistToolCallStart(sessionId, turn_id, tc);
+      if (started === "storage_failed") return "storage_failed";
+      startId = started;
+    }
     const msgId = newId("msg");
     const traceId = newId("trace");
     const toolMsg: Message = {
@@ -797,6 +898,7 @@ export class AgentRuntime {
         turn_id,
         type: "tool_result",
         message_id: msgId,
+        ...(startId ? { request_id: startId } : {}),
         detail: {
           tool: tc.function.name,
           tool_call_id: tc.id,
@@ -891,6 +993,8 @@ export class AgentRuntime {
     detail: Record<string, unknown>,
   ): Promise<boolean> {
     for (const tc of toolCalls) {
+      const callTraceId = await this.persistToolCallStart(sessionId, turn_id, tc);
+      if (callTraceId === "storage_failed") return false;
       const msgId = newId("msg");
       const traceId = newId("trace");
       const toolMsg: Message = {
@@ -914,6 +1018,7 @@ export class AgentRuntime {
           turn_id,
           type: "tool_result",
           message_id: msgId,
+          request_id: callTraceId,
           detail: {
             tool: tc.function.name,
             tool_call_id: tc.id,

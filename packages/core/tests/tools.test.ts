@@ -52,6 +52,8 @@ describe("tools", () => {
       "keyword_search",
       "list_dir",
       "read_file",
+      "read_skill",
+      "run_skill_script",
       "str_replace",
       "web_search",
       "write_file",

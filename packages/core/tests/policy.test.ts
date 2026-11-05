@@ -54,6 +54,7 @@ describe("tool policy", () => {
     expect(classifyToolCall("list_dir", '{"path":"."}').risk).toBe("read");
     expect(classifyToolCall("keyword_search", '{"query":"x"}').risk).toBe("read");
     expect(classifyToolCall("web_search", '{"query":"news"}').risk).toBe("read");
+    expect(classifyToolCall("read_skill", '{"name":"demo"}').risk).toBe("read");
   });
 
   it("classifyToolCall requires confirmation for write_file / str_replace / delete_file", () => {
@@ -76,6 +77,19 @@ describe("tool policy", () => {
   it("classifyToolCall delegates bash", () => {
     expect(classifyToolCall("bash", JSON.stringify({ command: "ls" })).risk).toBe("read");
     expect(classifyToolCall("bash", JSON.stringify({ command: "rm x" })).risk).toBe("write");
+  });
+
+  it("auto-allows a web get that does not save a file or send a mutating method", () => {
+    expect(classifyBashCommand("curl https://example.com").risk).toBe("read");
+    expect(classifyBashCommand("curl -fsSL https://example.com").risk).toBe("read");
+    expect(classifyBashCommand("Invoke-WebRequest https://example.com").risk).toBe("read");
+    expect(classifyBashCommand("iwr -Uri https://example.com").risk).toBe("read");
+    expect(classifyBashCommand("Invoke-RestMethod https://example.com").risk).toBe("read");
+    expect(classifyBashCommand("curl https://example.com -o page.html").risk).toBe("write");
+    expect(classifyBashCommand("curl -X POST https://example.com").risk).toBe("write");
+    expect(classifyBashCommand('iwr https://example.com -OutFile page.html').risk).toBe("write");
+    expect(classifyBashCommand("iwr https://example.com -Method POST").risk).toBe("write");
+    expect(classifyBashCommand("irm https://example.com -Body '{}'").risk).toBe("write");
   });
 
   it("treats common PowerShell inspection as read and a drive-root wipe as blocked", () => {

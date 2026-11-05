@@ -8,6 +8,7 @@ import { DeferredPermissionGate } from "../src/runtime/permission.js";
 import type { LlmProvider, LlmStreamChunk } from "../src/provider/types.js";
 import type { RuntimeEvent, AgentConfig } from "../src/types.js";
 import { DEFAULT_AGENT_CONFIG } from "../src/types.js";
+import { TraceStore } from "../src/store/traceStore.js";
 import { rmWorkspace } from "./rmWorkspace.js";
 
 function config(over: Partial<AgentConfig> = {}): AgentConfig {
@@ -99,6 +100,13 @@ describe("permission gate", () => {
       (e) => e.type === "tool_result" && e.is_error && /denied permission/i.test(e.content),
     );
     expect(denied).toBeTruthy();
+    const traces = await new TraceStore(workspace).read(meta.session_id);
+    const deniedTrace = traces.find((t) => t.type === "tool_result" && t.detail?.denied === true);
+    const start = traces.find((t) => t.id === deniedTrace?.request_id);
+    expect(start?.type).toBe("tool_call");
+    expect(start?.detail?.tool).toBe(SHELL_TOOL_NAME);
+    expect(start?.detail?.arguments).toContain("rm doomed.txt");
+    expect(deniedTrace?.detail).not.toHaveProperty("duration_ms");
     // After deny, model gets another round (tool result in history)
     expect(calls).toBeGreaterThanOrEqual(1);
   });
@@ -137,6 +145,104 @@ describe("permission gate", () => {
     const msgs = await rt.loadMessages(meta.session_id);
     expect(msgs.some((m) => m.role === "tool" && !m.content.includes("denied"))).toBe(true);
     expect(calls).toBe(2);
+  });
+
+  it("allowing one write covers later writes in the same turn", async () => {
+    let calls = 0;
+    const provider: LlmProvider = {
+      chatStream() {
+        calls += 1;
+        if (calls === 1) return bashCall("rm a.txt");
+        if (calls === 2) return bashCall("rm b.txt");
+        return (async function* () {
+          yield { type: "text", text: "done" };
+        })();
+      },
+    };
+    const gate = new DeferredPermissionGate();
+    const events: RuntimeEvent[] = [];
+    const rt = new AgentRuntime({
+      workspacePath: workspace,
+      config: config(),
+      provider,
+      permissions: gate,
+    });
+    rt.onEvent((e) => {
+      events.push(e);
+      if (e.type === "permission_request") {
+        queueMicrotask(() => gate.respond(e.request_id, "allow"));
+      }
+    });
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "delete two");
+    expect(events.filter((e) => e.type === "permission_request")).toHaveLength(1);
+    expect(calls).toBe(3);
+    expect(events.some((e) => e.type === "done" && e.reason === "completed")).toBe(true);
+  });
+
+  it("denying one write does not cover the next write", async () => {
+    let calls = 0;
+    const provider: LlmProvider = {
+      chatStream() {
+        calls += 1;
+        if (calls === 1) return bashCall("rm a.txt");
+        if (calls === 2) return bashCall("rm b.txt");
+        return (async function* () {
+          yield { type: "text", text: "done" };
+        })();
+      },
+    };
+    const gate = new DeferredPermissionGate();
+    const events: RuntimeEvent[] = [];
+    const rt = new AgentRuntime({
+      workspacePath: workspace,
+      config: config(),
+      provider,
+      permissions: gate,
+    });
+    rt.onEvent((e) => {
+      events.push(e);
+      if (e.type === "permission_request") {
+        queueMicrotask(() => gate.respond(e.request_id, "deny"));
+      }
+    });
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "delete two");
+    expect(events.filter((e) => e.type === "permission_request")).toHaveLength(2);
+  });
+
+  it("a turn grant does not execute a blocked command", async () => {
+    let calls = 0;
+    const provider: LlmProvider = {
+      chatStream() {
+        calls += 1;
+        if (calls === 1) return bashCall("rm a.txt");
+        if (calls === 2) return bashCall("rm -rf /");
+        return (async function* () {
+          yield { type: "text", text: "done" };
+        })();
+      },
+    };
+    const gate = new DeferredPermissionGate();
+    const events: RuntimeEvent[] = [];
+    const rt = new AgentRuntime({
+      workspacePath: workspace,
+      config: config(),
+      provider,
+      permissions: gate,
+    });
+    rt.onEvent((e) => {
+      events.push(e);
+      if (e.type === "permission_request") {
+        queueMicrotask(() => gate.respond(e.request_id, "allow"));
+      }
+    });
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "then wipe");
+    expect(events.filter((e) => e.type === "permission_request")).toHaveLength(1);
+    expect(
+      events.some((e) => e.type === "tool_result" && /Blocked dangerous/i.test(e.content)),
+    ).toBe(true);
   });
 
   it("blocked bash never asks permission", async () => {
