@@ -1,0 +1,15 @@
+{
+  "name": "long-task-desktop-agent",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm run test -w @agent/core",
+    "build": "npm run build -w @agent/core && npm run build -w @agent/app",
+    "start": "npm run build -w @agent/core && npm run start -w @agent/app"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}
