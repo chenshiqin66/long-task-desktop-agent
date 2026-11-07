@@ -5,6 +5,7 @@ import {
   assertStillInside,
   resolveWritableFile,
 } from "./fsSandbox.js";
+import { writeScopeError } from "./writeScope.js";
 
 export const writeFileTool: Tool = {
   definition: {
@@ -30,6 +31,13 @@ export const writeFileTool: Tool = {
     const requested = String(args.path ?? "");
     const content = args.content == null ? "" : String(args.content);
     if (!requested) return { content: "Missing path", is_error: true };
+    const scoped = writeScopeError({
+      workspacePath: ctx.workspacePath,
+      requested,
+      writeRoot: ctx.writeRoot,
+      blockedOutputDirs: ctx.blockedOutputDirs,
+    });
+    if (scoped) return { content: scoped, is_error: true };
     if (content.length > MAX_WRITE_CHARS) {
       return {
         content: `Content too large (${content.length} chars; max ${MAX_WRITE_CHARS}). Split the file or shorten content.`,

@@ -352,6 +352,24 @@ export function rerenderAllAssistantMarkdown(container: HTMLElement): number {
   return count;
 }
 
+export const CANCELLED_TURN_NOTICE = "任务已终止";
+
+export function isCancelledNotice(content: string): boolean {
+  return content.trim() === CANCELLED_TURN_NOTICE;
+}
+
+/** Right-aligned control under a user question. The caller decides when it may send. */
+export function appendReaskButton(messageBody: HTMLElement, onClick: () => void): void {
+  const msg = messageBody.parentElement;
+  if (!msg) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "reask";
+  btn.textContent = "重新问";
+  btn.addEventListener("click", onClick);
+  msg.append(btn);
+}
+
 /** Returns the `.msg-body` element (streaming appends here). */
 export function appendMessage(
   container: HTMLElement,
@@ -388,9 +406,11 @@ export function setToolDetailContent(node: HTMLElement, detail: string): void {
 
 export function appendToolStep(
   container: HTMLElement,
-  opts: { title: string; detail?: string; open?: boolean },
+  opts: { title: string; detail?: string; open?: boolean; nested?: boolean; after?: HTMLElement },
 ): HTMLElement {
-  const wrap = el("div", { class: "msg tool-step" });
+  const wrap = el("div", {
+    class: opts.nested ? "msg tool-step tool-step-nested" : "msg tool-step",
+  });
   const details = document.createElement("details");
   if (opts.open) details.open = true;
   const summary = el("summary", { class: "tool-summary" }, opts.title);
@@ -398,7 +418,8 @@ export function appendToolStep(
   setToolDetailContent(body, opts.detail ?? "");
   details.append(summary, body);
   wrap.append(details);
-  container.appendChild(wrap);
+  if (opts.after?.parentNode) opts.after.after(wrap);
+  else container.appendChild(wrap);
   return body;
 }
 
@@ -526,9 +547,8 @@ export function renderEmptyState(container: HTMLElement, kind: "no-workspace" | 
       <p class="empty-hint">写删类命令会弹出确认；危险命令会被拦截。</p>`;
   } else if (kind === "no-session") {
     box.innerHTML = `
-      <p class="empty-kicker">工作区已就绪</p>
-      <h2 class="empty-title">直接输入，发送即开始</h2>
-      <p class="empty-hint">第一次发送会在左侧加上这个会话。同一工作区可以有多个会话，互不影响历史。</p>`;
+      <h2 class="empty-title">提出好问题，才是真智慧</h2>
+      <p class="empty-hint">人迷茫，不是因为不知道答案，而是不知道问题。</p>`;
   } else {
     box.innerHTML = `
       <p class="empty-kicker">会话已打开</p>

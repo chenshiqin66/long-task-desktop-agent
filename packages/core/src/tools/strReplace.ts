@@ -5,6 +5,7 @@ import {
   assertStillInside,
   resolveExistingFile,
 } from "./fsSandbox.js";
+import { writeScopeError } from "./writeScope.js";
 
 export const strReplaceTool: Tool = {
   definition: {
@@ -41,6 +42,13 @@ export const strReplaceTool: Tool = {
     const replaceAll = Boolean(args.replace_all);
     if (!requested) return { content: "Missing path", is_error: true };
     if (!oldString) return { content: "Missing old_string", is_error: true };
+    const scoped = writeScopeError({
+      workspacePath: ctx.workspacePath,
+      requested,
+      writeRoot: ctx.writeRoot,
+      blockedOutputDirs: ctx.blockedOutputDirs,
+    });
+    if (scoped) return { content: scoped, is_error: true };
 
     const resolved = await resolveExistingFile(ctx.workspacePath, requested);
     if ("error" in resolved) return { content: resolved.error, is_error: true };

@@ -1048,6 +1048,12 @@ body {
   margin-top: -10px;
 }
 
+/* Subagent tools sit under the row that started them, not inside its disclosure. */
+.msg.tool-step.tool-step-nested {
+  margin-left: 22px;
+  width: calc(100% - 22px);
+}
+
 .messages.is-restoring {
   scroll-behavior: auto;
 }
@@ -1100,7 +1106,31 @@ body {
 
 .msg.user {
   align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   text-align: right;
+}
+
+.reask {
+  margin-top: 4px;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--accent-ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.reask:hover,
+.reask:focus-visible {
+  text-decoration: underline;
+}
+
+.msg.assistant.is-cancelled .msg-body {
+  color: var(--ink-muted);
 }
 
 .msg.user .msg-role {
@@ -1831,6 +1861,16 @@ body {
 #btn-send.is-stop:hover:not(:disabled) {
   background: var(--danger-soft);
   filter: none;
+}
+
+#btn-send.is-stopping,
+#btn-send.is-stopping:disabled {
+  color: #7d8694;
+  background: #e6ebf1;
+  border-color: #d5dbe3;
+  cursor: default;
+  filter: none;
+  opacity: 1;
 }
 
 .config-dialog {

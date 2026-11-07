@@ -14,6 +14,15 @@ import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
 import { ToolHost } from "../tools/host.js";
 import { classifyToolCall } from "../tools/policy.js";
+import {
+  AGENT_TOOL_NAME,
+  EXPLORE_TOOL_ROUNDS,
+  parseAgentCall,
+  toolsForSubagent,
+  WORKER_TOOL_ROUNDS,
+  type AgentCall,
+} from "../tools/agentTool.js";
+import { outputDirsOverlap } from "../tools/writeScope.js";
 import type { ToolResult } from "../tools/types.js";
 import { assembleContext } from "../context/assemble.js";
 import { projectAuditMessages, toolsFingerprint } from "../context/auditContext.js";
@@ -40,6 +49,7 @@ import type { SkillBodyAttachment } from "../skills/prompt.js";
 import { AutoAllowGate, type PermissionGate } from "./permission.js";
 import { ClosedAskGate, type AskGate } from "./askGate.js";
 import { ASK_USER_TOOL_NAME, parseAskUserArgs } from "../tools/askUserTool.js";
+import { runIsolatedSubagent } from "./subagentRun.js";
 
 /** Auto-name after this many user turns (completed). */
 const AUTO_TITLE_AFTER_USER_TURNS = 3;
@@ -57,6 +67,24 @@ Asking the user:
 - Do not collect that answer by only printing a question. A reply with no tool calls ends the turn, and the next user message starts a new turn.
 - Ask one question per call. Use options only for a few short choices. The user can type a different answer.
 - Do not put other tool calls in the same response as ask_user. Those later calls are skipped.`;
+
+const SUBAGENT_RULES = `
+Subagents:
+- Call agent when the next step would dump search or file text you do not need later, or when the deliverable is new files in one directory.
+- For a single known file, call read_file yourself. For a one-line edit of a file you have already read, call str_replace yourself.
+- The subagent does not see this conversation. Write the task so it can act without guessing your intent.
+- Say why the task exists and where it sits in the work, so an edge case can be judged instead of followed mechanically.
+- State what to do and what not to do. explore is read-only investigation and has ${EXPLORE_TOOL_ROUNDS} tool rounds. worker may create and edit files only inside the output_dir you pass, and has ${WORKER_TOOL_ROUNDS} tool rounds. One response full of tool calls is one round. Pick the type that matches the boundary. Do not tell a worker to stay read-only, and do not tell explore to edit.
+- Define what finished looks like: a report with file paths and line numbers, or files at named paths with named sections. "Look around" and "understand this" are not done conditions.
+- Give anchors the subagent cannot already know: paths, symbol names, constraints, and approaches already rejected. Do not leave it to rediscover them.
+- You do not pick individual tools. explore may list, read, and search. worker may also write inside output_dir. Neither can run a shell, ask the user, or call agent. Choosing the type is the tool limit. A tool allowlist written into the task is not enforced.
+- Do not delegate understanding. "From what you find, fix the bug" asks the subagent to decide the diagnosis. You do that first. Name the fault, the behavior you want, and how you will check it. Run any verification command yourself after the receipt comes back. The subagent cannot run a shell.
+- Several agent calls in one response run at the same time. Their output directories must not overlap.
+- Do not use agent to ask the user a question or to run a shell command.`;
+
+const SEARCH_RULES = `
+Search:
+- keyword_search takes a path and every term in one call. Pass the narrowest file or directory. Do not call it again for another word in that same path.`;
 
 const WEB_SEARCH_RULES = `
 Web search citations (mandatory when web_search was used in this turn):
@@ -85,8 +113,10 @@ File edits:
 - Make surgical edits with str_replace.
 - Never write file contents via powershell (no here-strings, Set-Content, Add-Content, Out-File, or redirection).
 - Use list_dir / read_file / keyword_search to inspect; powershell for builds, tests, git, and other commands.
+${SEARCH_RULES}
 ${ASK_USER_RULES}
 ${IMAGE_RULES}
+${SUBAGENT_RULES}
 ${WEB_SEARCH_RULES}`;
   }
 
@@ -99,12 +129,16 @@ File edits:
 - Make surgical edits with str_replace.
 - Never write file contents via bash (no heredoc, cat/echo/printf redirects, tee).
 - Use list_dir / read_file / keyword_search to inspect; bash for builds, tests, git, and other commands.
+${SEARCH_RULES}
 ${ASK_USER_RULES}
 ${IMAGE_RULES}
+${SUBAGENT_RULES}
 ${WEB_SEARCH_RULES}`;
 }
 
 const CANCELLED_TOOL_CONTENT = "Cancelled: tool was not executed.";
+/** Shown when the user stops a turn before any assistant text exists. */
+const CANCELLED_TURN_NOTICE = "任务已终止";
 const DENIED_TOOL_CONTENT = "Cancelled: user denied permission";
 const BLOCKED_TOOL_CONTENT = "Blocked dangerous command";
 const ASK_SKIPPED_CONTENT =
@@ -129,6 +163,14 @@ export class AgentRuntime {
   private running = false;
   /** Set when the user allows one write. Covers later writes in this submit, not ask_user or blocked commands. */
   private turnWritesAllowed = false;
+  /**
+   * output_dir values accepted in the current tool batch. Parent writes into
+   * them fail until the next model call, including after the subagent returns,
+   * because that write was planned before the receipt existed.
+   */
+  private batchOutputDirs: string[] = [];
+  /** Serializes parent jsonl appends while several subagents finish together. */
+  private parentWriteChain: Promise<void> = Promise.resolve();
   private readonly skillsRoot: string;
   /** Bodies pinned for the submit currently running. Cleared when it ends. */
   private skillBodies: SkillBodyAttachment[] = [];
@@ -329,6 +371,7 @@ export class AgentRuntime {
     }
     this.running = true;
     this.turnWritesAllowed = false;
+    this.batchOutputDirs = [];
     this.abort = new AbortController();
     const turn_id = newId("turn");
     try {
@@ -587,46 +630,13 @@ export class AgentRuntime {
         }
 
         steps += 1;
-        for (let i = 0; i < toolCalls.length; i++) {
-          const tc = toolCalls[i]!;
-          if (this.abort.signal.aborted) {
-            // Close remaining (including current) without executing.
-            await this.handleCancel(sessionId, turn_id, "", toolCalls.slice(i));
-            return;
-          }
-
-          const result = await this.runAuthorizedTool(sessionId, turn_id, tc);
-          if (result === "storage_failed") {
-            // Close any still-open ids from this batch (current may or may not be written).
-            await this.repairStoredToolCalls(sessionId);
-            return;
-          }
-          if (result === "cancelled") {
-            await this.handleCancel(sessionId, turn_id, "", toolCalls.slice(i + 1));
-            return;
-          }
-          if (result === "asked") {
-            const closed = await this.closeToolCallsWithPersist(
-              sessionId,
-              turn_id,
-              toolCalls.slice(i + 1),
-              ASK_SKIPPED_CONTENT,
-              { skipped_after_ask: true },
-            );
-            if (!closed) return;
-            break;
-          }
-
-          // Abort during/after this tool: do not run the rest.
-          if (this.abort.signal.aborted) {
-            await this.handleCancel(sessionId, turn_id, "", toolCalls.slice(i + 1));
-            return;
-          }
-        }
+        const stop = await this.runToolBatch(sessionId, turn_id, toolCalls);
+        if (stop) return;
       }
     } finally {
       this.running = false;
       this.turnWritesAllowed = false;
+      this.batchOutputDirs = [];
       this.abort = null;
       this.skillBodies = [];
     }
@@ -656,6 +666,285 @@ export class AgentRuntime {
       bodies.push({ name, directory: result.directory, body: result.content });
     }
     return bodies;
+  }
+
+  /**
+   * Run one assistant tool batch. Agent calls before the first ask_user run together.
+   * @returns true when the submit must stop (cancel, storage failure).
+   */
+  private async runToolBatch(
+    sessionId: string,
+    turn_id: string,
+    toolCalls: ToolCall[],
+  ): Promise<boolean> {
+    const settled = new Set<string>();
+    const claimed: string[] = [];
+    for (const tc of toolCalls) {
+      if (tc.function.name === ASK_USER_TOOL_NAME) break;
+      if (tc.function.name !== AGENT_TOOL_NAME) continue;
+      const parsed = parseAgentCall(tc.function.arguments);
+      if (!parsed.ok || parsed.call.subagent_type !== "worker" || !parsed.call.output_dir) continue;
+      if (claimed.some((dir) => outputDirsOverlap(dir, parsed.call.output_dir!))) continue;
+      claimed.push(parsed.call.output_dir);
+    }
+    this.batchOutputDirs = claimed;
+    try {
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i]!;
+        if (settled.has(tc.id)) continue;
+        if (this.abort!.signal.aborted) {
+          await this.handleCancel(
+            sessionId,
+            turn_id,
+            "",
+            toolCalls.filter((call) => !settled.has(call.id)),
+          );
+          return true;
+        }
+
+        if (tc.function.name === AGENT_TOOL_NAME) {
+          const group: ToolCall[] = [];
+          for (let j = i; j < toolCalls.length; j++) {
+            const next = toolCalls[j]!;
+            if (next.function.name === ASK_USER_TOOL_NAME) break;
+            if (next.function.name === AGENT_TOOL_NAME && !settled.has(next.id)) group.push(next);
+          }
+          const outcome = await this.runAgentGroup(sessionId, turn_id, group);
+          for (const call of group) settled.add(call.id);
+          if (outcome === "storage_failed") {
+            await this.repairStoredToolCalls(sessionId);
+            return true;
+          }
+          if (outcome === "stop") {
+            await this.handleCancel(
+              sessionId,
+              turn_id,
+              "",
+              toolCalls.filter((call) => !settled.has(call.id)),
+            );
+            return true;
+          }
+          continue;
+        }
+
+        const result = await this.runAuthorizedTool(sessionId, turn_id, tc);
+        settled.add(tc.id);
+        if (result === "storage_failed") {
+          await this.repairStoredToolCalls(sessionId);
+          return true;
+        }
+        if (result === "cancelled") {
+          await this.handleCancel(
+            sessionId,
+            turn_id,
+            "",
+            toolCalls.filter((call) => !settled.has(call.id)),
+          );
+          return true;
+        }
+        if (result === "asked") {
+          const pending = toolCalls.filter((call) => !settled.has(call.id));
+          const closed = await this.closeToolCallsWithPersist(
+            sessionId,
+            turn_id,
+            pending,
+            ASK_SKIPPED_CONTENT,
+            { skipped_after_ask: true },
+          );
+          if (!closed) return true;
+          break;
+        }
+        if (this.abort!.signal.aborted) {
+          await this.handleCancel(
+            sessionId,
+            turn_id,
+            "",
+            toolCalls.filter((call) => !settled.has(call.id)),
+          );
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      this.batchOutputDirs = [];
+    }
+  }
+
+  /**
+   * Approve worker calls one at a time, then run every accepted subagent together.
+   * Each call in `calls` has a tool result when this returns, unless storage failed.
+   */
+  private async runAgentGroup(
+    sessionId: string,
+    turn_id: string,
+    calls: ToolCall[],
+  ): Promise<"ok" | "stop" | "storage_failed"> {
+    const persisted = new Set<string>();
+    const ready: { tc: ToolCall; call: AgentCall }[] = [];
+    const dirs: string[] = [];
+
+    const persist = async (
+      tc: ToolCall,
+      result: ToolResult,
+      detail: Record<string, unknown>,
+    ): Promise<"ok" | "storage_failed"> => {
+      const stored = await this.enqueueParentWrite(() =>
+        this.persistToolOutcome(sessionId, turn_id, tc, result, detail),
+      );
+      if (stored === "ok") persisted.add(tc.id);
+      return stored;
+    };
+
+    const cancelUnpersisted = async (): Promise<"stop" | "storage_failed"> => {
+      const rest = calls.filter((call) => !persisted.has(call.id));
+      const closed = await this.closeToolCallsWithPersist(
+        sessionId,
+        turn_id,
+        rest,
+        CANCELLED_TOOL_CONTENT,
+        { cancelled: true },
+      );
+      for (const call of rest) persisted.add(call.id);
+      return closed ? "stop" : "storage_failed";
+    };
+
+    for (const tc of calls) {
+      if (this.abort?.signal.aborted) return cancelUnpersisted();
+      const parsed = parseAgentCall(tc.function.arguments);
+      if (!parsed.ok) {
+        const stored = await persist(tc, { content: parsed.error, is_error: true }, { tool: "agent" });
+        if (stored === "storage_failed") return "storage_failed";
+        continue;
+      }
+      if (parsed.call.subagent_type === "worker") {
+        const dir = parsed.call.output_dir!;
+        const clash = dirs.find((existing) => outputDirsOverlap(existing, dir));
+        if (clash) {
+          const stored = await persist(
+            tc,
+            {
+              content: `output_dir ${dir} overlaps ${clash}, already used by another agent call in this response.`,
+              is_error: true,
+            },
+            { tool: "agent" },
+          );
+          if (stored === "storage_failed") return "storage_failed";
+          continue;
+        }
+        if (!this.turnWritesAllowed) {
+          const request_id = newId("perm");
+          const summary = `Needs confirmation: worker writes under ${dir}`;
+          this.emit({ type: "status", turn_id, phase: "awaiting_permission" });
+          this.emit({
+            type: "permission_request",
+            turn_id,
+            request_id,
+            tool_call_id: tc.id,
+            tool: AGENT_TOOL_NAME,
+            risk: "write",
+            summary,
+          });
+          const decision = await this.permissions.request({
+            request_id,
+            turn_id,
+            tool_call_id: tc.id,
+            tool: AGENT_TOOL_NAME,
+            risk: "write",
+            summary,
+            signal: this.abort?.signal,
+          });
+          if (this.abort?.signal.aborted) {
+            const stored = await persist(
+              tc,
+              { content: CANCELLED_TOOL_CONTENT, is_error: true },
+              { cancelled: true },
+            );
+            if (stored === "storage_failed") return "storage_failed";
+            return cancelUnpersisted();
+          }
+          if (decision === "deny") {
+            const stored = await persist(
+              tc,
+              { content: DENIED_TOOL_CONTENT, is_error: true },
+              { denied: true },
+            );
+            if (stored === "storage_failed") return "storage_failed";
+            continue;
+          }
+          this.turnWritesAllowed = true;
+        }
+        dirs.push(dir);
+      }
+      ready.push({ tc, call: parsed.call });
+    }
+
+    this.batchOutputDirs = dirs;
+    this.emit({ type: "status", turn_id, phase: "tool" });
+    const outcomes = await Promise.all(
+      ready.map(async (item) => {
+        try {
+          const result = await runIsolatedSubagent({
+            workspacePath: this.workspacePath,
+            sessionId,
+            parentTurnId: turn_id,
+            parentToolCallId: item.tc.id,
+            config: this.config,
+            provider: this.provider,
+            skillsRoot: this.skillsRoot,
+            tools: this.tools.subset(toolsForSubagent(item.call.subagent_type)),
+            signal: this.abort!.signal,
+            onTool: (event) => {
+              if (event.type === "tool_call") {
+                this.emit({
+                  type: "tool_call",
+                  turn_id,
+                  tool_call: event.tool_call,
+                  parent_tool_call_id: item.tc.id,
+                });
+                return;
+              }
+              this.emit({
+                type: "tool_result",
+                turn_id,
+                tool_call_id: event.tool_call_id,
+                content: event.content,
+                is_error: event.is_error,
+                parent_tool_call_id: item.tc.id,
+              });
+            },
+            subagentType: item.call.subagent_type,
+            task: item.call.task,
+            description: item.call.description,
+            outputDir: item.call.output_dir,
+          });
+          return { item, result };
+        } catch (err) {
+          return {
+            item,
+            result: { content: `Subagent failed: ${String(err)}`, is_error: true } as ToolResult,
+          };
+        }
+      }),
+    );
+    for (const outcome of outcomes) {
+      const stored = await persist(outcome.item.tc, outcome.result, {
+        tool: "agent",
+        subagent_type: outcome.item.call.subagent_type,
+        is_error: outcome.result.is_error,
+      });
+      if (stored === "storage_failed") return "storage_failed";
+    }
+    if (this.abort?.signal.aborted) return "stop";
+    return "ok";
+  }
+
+  private enqueueParentWrite<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.parentWriteChain.then(fn, fn);
+    this.parentWriteChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   /**
@@ -737,6 +1026,7 @@ export class AgentRuntime {
       llmBaseUrl: this.config.baseUrl,
       skillsRoot: this.skillsRoot,
       attachedSkillNames: new Set(this.skillBodies.map((skill) => skill.name)),
+      blockedOutputDirs: this.batchOutputDirs,
     });
     return this.persistToolOutcome(
       sessionId,
@@ -1059,7 +1349,8 @@ export class AgentRuntime {
     assistantText: string,
     pendingToolCalls: ToolCall[] = [],
   ): Promise<void> {
-    if (assistantText.length > 0) {
+    const reply = assistantText.length > 0 ? assistantText : pendingToolCalls.length ? "" : CANCELLED_TURN_NOTICE;
+    if (reply.length > 0) {
       const msgId = newId("msg");
       const traceId = newId("trace");
       if (
@@ -1068,7 +1359,7 @@ export class AgentRuntime {
           session_id: sessionId,
           turn_id,
           role: "assistant",
-          content: assistantText,
+          content: reply,
           interrupted: true,
           trace_id: traceId,
           created_at: nowIso(),
@@ -1083,7 +1374,7 @@ export class AgentRuntime {
           turn_id,
           type: "llm_response",
           message_id: msgId,
-          detail: { content: assistantText, interrupted: true },
+          detail: { content: reply, interrupted: true, cancelled_notice: reply !== assistantText },
         }))
       ) {
         return;

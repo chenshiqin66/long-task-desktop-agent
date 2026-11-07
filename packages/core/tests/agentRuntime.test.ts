@@ -99,6 +99,19 @@ describe("AgentRuntime", () => {
     expect(prompt).toContain("Do not launch bash.exe");
   });
 
+  it("tells the parent to delegate a specific task, not an open-ended investigation", () => {
+    const prompt = buildDefaultSystemPrompt("/tmp/demo");
+    expect(prompt).toContain("does not see this conversation");
+    expect(prompt).toContain("without guessing");
+    expect(prompt).toContain("what finished looks like");
+    expect(prompt).toContain("From what you find, fix the bug");
+    expect(prompt).toContain("Choosing the type is the tool limit");
+    expect(prompt).toContain("8 tool rounds");
+    expect(prompt).toContain("16 tool rounds");
+    expect(prompt).toContain("keyword_search takes a path and every term");
+    expect(prompt).toContain("Run any verification command yourself");
+  });
+
   let workspace: string;
 
   beforeEach(async () => {

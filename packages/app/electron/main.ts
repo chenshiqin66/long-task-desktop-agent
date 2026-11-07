@@ -23,13 +23,16 @@ import {
   setSkillEnabled,
   skillDirectory,
   uninstallSkill,
+  listSubagentToolRows,
 } from "@agent/core";
 import type { AgentConfig, ImageMime, PermissionDecision, RuntimeEvent, StoredConfig, SubmittedImage } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
+import { TaskbarAlert } from "./taskbarAlert.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let win: BrowserWindow | null = null;
+let taskbarAlert: TaskbarAlert | null = null;
 let appMenu: Menu | null = null;
 let runtime: AgentRuntime | null = null;
 /** AgentConfig snapshot used to build `runtime`. Compared on the next submit. */
@@ -274,6 +277,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1100,
     height: 720,
+    icon: taskbarAlert?.restIcon,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -284,6 +288,7 @@ function createWindow() {
     console.error("preload-error", path, error);
   });
   hideNativeMenuBar(win);
+  taskbarAlert?.attach(win);
   win.once("ready-to-show", () => {
     if (win) hideNativeMenuBar(win);
   });
@@ -317,8 +322,13 @@ function watchSkillFolders(window: BrowserWindow): void {
 }
 
 app.whenReady().then(() => {
+  taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
   createWindow();
+
+  ipcMain.handle("agent:setTaskbarPrompt", (_event, open: unknown, inView: unknown) => {
+    taskbarAlert?.setPrompt(open === true, inView === true);
+  });
 
   ipcMain.handle("agent:popupAppMenu", (_event, index: unknown, x: unknown, y: unknown) => {
     if (!win || !appMenu) return;
@@ -412,6 +422,11 @@ app.whenReady().then(() => {
     const path = await assertKnownWorkspace(raw);
     assertValidSessionId(sessionId);
     return new SessionStore(path).readMessages(sessionId);
+  });
+  ipcMain.handle("agent:loadWorkspaceSubagentSteps", async (_e, raw: string, sessionId: string) => {
+    const path = await assertKnownWorkspace(raw);
+    assertValidSessionId(sessionId);
+    return listSubagentToolRows(path, sessionId);
   });
   ipcMain.handle("agent:loadWorkspaceArtifacts", async (_e, raw: string, sessionId: string) => {
     const path = await assertKnownWorkspace(raw);
@@ -515,6 +530,11 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:loadMessages", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);
     return (await ensureRuntime()).loadMessages(sessionId);
+  });
+  ipcMain.handle("agent:loadSubagentSteps", async (_e, sessionId: string) => {
+    assertValidSessionId(sessionId);
+    if (!workspacePath) return [];
+    return listSubagentToolRows(workspacePath, sessionId);
   });
   ipcMain.handle("agent:loadSessionArtifacts", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);

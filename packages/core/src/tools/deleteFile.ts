@@ -1,6 +1,7 @@
 import { unlink, stat } from "node:fs/promises";
 import type { Tool, ToolResult } from "./types.js";
 import { resolveExistingFile } from "./fsSandbox.js";
+import { writeScopeError } from "./writeScope.js";
 
 export const deleteFileTool: Tool = {
   definition: {
@@ -20,6 +21,13 @@ export const deleteFileTool: Tool = {
   async execute(args, ctx): Promise<ToolResult> {
     const requested = String(args.path ?? "");
     if (!requested) return { content: "Missing path", is_error: true };
+    const scoped = writeScopeError({
+      workspacePath: ctx.workspacePath,
+      requested,
+      writeRoot: ctx.writeRoot,
+      blockedOutputDirs: ctx.blockedOutputDirs,
+    });
+    if (scoped) return { content: scoped, is_error: true };
     const resolved = await resolveExistingFile(ctx.workspacePath, requested);
     if ("error" in resolved) return { content: resolved.error, is_error: true };
     try {

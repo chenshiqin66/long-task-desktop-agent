@@ -10,7 +10,8 @@
     "smoke": "npm run build && node ./scripts/smoke-main.mjs"
   },
   "dependencies": {
-    "@agent/core": "0.1.0"
+    "@agent/core": "0.1.0",
+    "koffi": "^3.3.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

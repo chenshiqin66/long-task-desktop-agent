@@ -92,6 +92,31 @@ describe("cancel", () => {
     expect(traces.some((t) => t.type === "cancel")).toBe(true);
   });
 
+  it("writes a termination notice when cancelled before any reply", async () => {
+    const provider: LlmProvider = {
+      async *chatStream(req) {
+        await new Promise<void>((resolve) => {
+          if (req.signal?.aborted) return resolve();
+          req.signal?.addEventListener("abort", () => resolve(), { once: true });
+          setTimeout(resolve, 2000);
+        });
+      },
+    };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: cfg, provider });
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((e) => events.push(e));
+    const meta = await rt.createSession();
+    const submitPromise = rt.submit(meta.session_id, "杨利伟是哪里人？");
+    await new Promise((r) => setTimeout(r, 30));
+    rt.cancel();
+    await submitPromise;
+    expect(events.some((e) => e.type === "done" && e.reason === "cancelled")).toBe(true);
+    const msgs = await rt.loadMessages(meta.session_id);
+    const asst = msgs.find((m) => m.role === "assistant");
+    expect(asst?.interrupted).toBe(true);
+    expect(asst?.content).toBe("任务已终止");
+  });
+
   it("does not execute tool_calls after cancel before tools run", async () => {
     const provider: LlmProvider = {
       async *chatStream(req): AsyncIterable<LlmStreamChunk> {

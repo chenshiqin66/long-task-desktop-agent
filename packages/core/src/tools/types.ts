@@ -27,6 +27,13 @@ export interface ToolContext {
   attachedSkillNames?: ReadonlySet<string>;
   /** Installed-skill root. Defaults to the user skills directory. */
   skillsRoot?: string;
+  /** Worker subagent: writes must stay inside this workspace-relative directory. */
+  writeRoot?: string;
+  /**
+   * Parent turn: writes into these directories fail. Set for output_dir values
+   * claimed by subagents in the same assistant response.
+   */
+  blockedOutputDirs?: readonly string[];
 }
 
 export interface Tool {

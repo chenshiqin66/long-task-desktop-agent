@@ -36,17 +36,22 @@ describe("tools", () => {
     await rmWorkspace(workspace);
   });
 
-  it("refuses to run ask_user as a local command", async () => {
+  it("refuses to run ask_user and agent as local commands", async () => {
     await expect(
       host.execute("ask_user", JSON.stringify({ question: "继续？" }), ctx),
     ).rejects.toThrow(/not a local command/);
+    await expect(
+      host.execute("agent", JSON.stringify({ description: "x", subagent_type: "explore", task: "y" }), ctx),
+    ).rejects.toThrow(/not a local command/);
     expect(host.listDefinitions().some((d) => d.name === "ask_user")).toBe(true);
+    expect(host.listDefinitions().some((d) => d.name === "agent")).toBe(true);
   });
 
   it("lists builtin tool definitions", () => {
     const names = host.listDefinitions().map((d) => d.name).sort();
     expect(names).toEqual([
       SHELL_TOOL_NAME,
+      "agent",
       "ask_user",
       "delete_file",
       "keyword_search",
@@ -84,6 +89,23 @@ describe("tools", () => {
     );
     expect(r.is_error).toBe(true);
     expect(r.content).toMatch(/outside/i);
+  });
+
+  it("write_file stays inside a subagent output_dir and out of a claimed one", async () => {
+    const outside = await host.execute(
+      "write_file",
+      JSON.stringify({ path: "src/a.ts", content: "nope" }),
+      { ...ctx, writeRoot: "docs/notes" },
+    );
+    expect(outside.is_error).toBe(true);
+    expect(outside.content).toMatch(/output_dir/);
+    const claimed = await host.execute(
+      "write_file",
+      JSON.stringify({ path: "docs/notes/a.md", content: "x" }),
+      { ...ctx, blockedOutputDirs: ["docs/notes"] },
+    );
+    expect(claimed.is_error).toBe(true);
+    expect(claimed.content).toMatch(/docs\/notes/);
   });
 
   it("str_replace updates unique substring", async () => {
@@ -245,6 +267,42 @@ describe("tools", () => {
     );
     expect(r.is_error).toBe(false);
     expect(r.content).toMatch(/a\.ts/);
+    expect(r.content).toMatch(/Pass path next time/);
+  });
+
+  it("keyword_search stays inside path and matches every term in one call", async () => {
+    const scoped = await host.execute(
+      "keyword_search",
+      JSON.stringify({ path: "src", queries: ["foo", "line2"] }),
+      ctx,
+    );
+    expect(scoped.is_error).toBe(false);
+    expect(scoped.content).toMatch(/a\.ts/);
+    expect(scoped.content).toMatch(/foo/);
+    expect(scoped.content).not.toMatch(/hello\.txt/);
+    expect(scoped.content).not.toMatch(/Pass path next time/);
+
+    const fileOnly = await host.execute(
+      "keyword_search",
+      JSON.stringify({ path: "hello.txt", query: "foo" }),
+      ctx,
+    );
+    expect(fileOnly.is_error).toBe(false);
+    expect(fileOnly.content).toMatch(/No matches/i);
+  });
+
+  it("keyword_search returns immediately when the signal is already aborted", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const started = Date.now();
+    const r = await host.execute(
+      "keyword_search",
+      JSON.stringify({ path: ".", query: "foo" }),
+      { ...ctx, signal: ac.signal },
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(r.is_error).toBe(true);
+    expect(r.content).toMatch(/cancel/i);
   });
 
   it("unknown tool returns error result not throw", async () => {

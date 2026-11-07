@@ -1,6 +1,9 @@
 import {
   appendAskCard,
   appendMessage,
+  appendReaskButton,
+  CANCELLED_TURN_NOTICE,
+  isCancelledNotice,
   appendPermissionCard,
   appendToolStep,
   escapeHtml,
@@ -11,6 +14,14 @@ import {
 } from "./ui.js";
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey, skillTokensIn } from "./skills.js";
+
+type SubagentToolRow = {
+  parent_tool_call_id: string;
+  name: string;
+  content: string;
+  is_error: boolean;
+  arguments?: string;
+};
 
 declare global {
   interface Window {
@@ -40,10 +51,15 @@ declare global {
           content: string;
           name?: string;
           is_error?: boolean;
+          tool_call_id?: string;
           tool_call_arguments?: string;
           images?: Array<{ path: string }>;
         }>
       >;
+      loadWorkspaceSubagentSteps(
+        path: string,
+        sessionId: string,
+      ): Promise<SubagentToolRow[]>;
       loadWorkspaceArtifacts(
         path: string,
         sessionId: string,
@@ -76,10 +92,12 @@ declare global {
           content: string;
           name?: string;
           is_error?: boolean;
+          tool_call_id?: string;
           tool_call_arguments?: string;
           images?: Array<{ path: string }>;
         }>
       >;
+      loadSubagentSteps(sessionId: string): Promise<SubagentToolRow[]>;
       loadSessionArtifacts(sessionId: string): Promise<{
         meta: Record<string, unknown>;
         messages: unknown[];
@@ -111,6 +129,7 @@ declare global {
       localTargetsExist(targets: string[]): Promise<Record<string, boolean>>;
       openExternal(target: string): Promise<{ ok: boolean; error?: string }>;
       popupAppMenu(index: number, x: number, y: number): Promise<void>;
+      setTaskbarPrompt(open: boolean, inView: boolean): Promise<void>;
       onEvent(cb: (e: any) => void): () => void;
       onSkillsChanged(cb: () => void): () => void;
     };
@@ -156,8 +175,12 @@ let streamingEl: HTMLElement | null = null;
 let streamBuffer = "";
 let streamRaf = 0;
 let openToolDetail: HTMLElement | null = null;
-/** Live tool bars keyed by tool_call id. One slot used to leave earlier bars on「等待结果…」. */
+/** Live tool bars keyed by tool_call id. Nested rows use parent id + call id. */
 const openTools = new Map<string, HTMLElement>();
+/** The `.msg.tool-step` element for a live call, so a child row can sit after it. */
+const toolStepNodes = new Map<string, HTMLElement>();
+/** Last nested tool row under the tool call that started a subagent. */
+const nestedTails = new Map<string, HTMLElement>();
 let runGate: RunGate = idleGate();
 let hasWorkspace = false;
 let workspacePaths: string[] = [];
@@ -178,6 +201,8 @@ const runBoard = document.createElement("div");
 let runParked = false;
 let parkedSessionId: string | null = null;
 let isRunning = false;
+/** Stop was asked; the turn has not emitted done yet. Composer stays locked. */
+let stopRequested = false;
 /** Latest phase of the in-flight submit. Shown only on that session's page. */
 let runLiveStatus = "";
 let statusIsRun = false;
@@ -779,18 +804,40 @@ function showChatError(err: unknown): void {
 
 function clearOpenTools(): void {
   openTools.clear();
+  toolStepNodes.clear();
+  nestedTails.clear();
   openToolDetail = null;
+}
+
+function toolRowKey(callId: string, parentId?: string): string {
+  return parentId ? `${parentId}\n${callId}` : callId;
+}
+
+function stepWrap(body: HTMLElement): HTMLElement | null {
+  const wrap = body.closest(".msg.tool-step");
+  return wrap instanceof HTMLElement ? wrap : null;
 }
 
 function toolCallTitle(name: string, argsJson: string): string {
   let hint = "";
   try {
     const args = JSON.parse(argsJson) as {
+      path?: unknown;
       query?: unknown;
+      queries?: unknown;
       command?: unknown;
       question?: unknown;
+      description?: unknown;
     };
-    const raw = String(args.question ?? args.query ?? args.command ?? "")
+    const termText = [
+      typeof args.query === "string" ? args.query : "",
+      Array.isArray(args.queries) ? args.queries.map((term) => String(term)).filter(Boolean).join(", ") : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const scope = typeof args.path === "string" ? args.path.trim() : "";
+    const search = [scope, termText].filter(Boolean).join(" ");
+    const raw = String(search || args.question || args.command || args.description || "")
       .trim()
       .replace(/\s+/g, " ");
     if (raw) hint = raw.length > 36 ? `${raw.slice(0, 36)}…` : raw;
@@ -798,6 +845,11 @@ function toolCallTitle(name: string, argsJson: string): string {
     hint = "";
   }
   return hint ? `调用 ${name} · ${hint}` : `调用 ${name}`;
+}
+
+function historyToolTitle(name: string, argsJson?: string): string {
+  const live = toolCallTitle(name, argsJson ?? "{}");
+  return live.startsWith("调用 ") ? `工具结果 · ${live.slice("调用 ".length)}` : `工具结果 · ${name}`;
 }
 
 function sameWorkspace(a: string | null, b: string | null): boolean {
@@ -824,12 +876,14 @@ function updateChrome(): void {
   const canCompose = hasWorkspace && onRun && !asking && !isRunning && !creatingSession;
   // Stop belongs to the running session's composer, not to every page.
   const stopHere = isRunning && onRun && !asking;
-  btnSend.disabled = stopHere || asking ? false : !canCompose;
-  btnSend.textContent = asking ? "回答" : stopHere ? "停止" : "发送";
-  btnSend.classList.toggle("is-stop", stopHere);
+  const stopping = stopHere && stopRequested;
+  btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose;
+  btnSend.textContent = asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : "发送";
+  btnSend.classList.toggle("is-stop", stopHere && !stopping);
+  btnSend.classList.toggle("is-stopping", stopping);
   btnSend.setAttribute(
     "aria-label",
-    asking ? "回答" : stopHere ? "停止" : canCompose ? "发送" : "发送已禁用",
+    asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : canCompose ? "发送" : "发送已禁用",
   );
   btnNew.disabled = !hasWorkspace || creatingSession;
   inputEl.disabled = lockedOut || creatingSession || (isRunning && !asking);
@@ -840,7 +894,7 @@ function updateChrome(): void {
     ? ""
     : asking
       ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
-      : "向 Agent 下指令… Enter 发送，Shift+Enter 换行";
+      : "向CSQ-Agent发送消息...";
   if (lockedOut) {
     if (statusIsRun) setStatus("", false);
   } else if (isRunning && onRun && runLiveStatus) {
@@ -930,6 +984,7 @@ function discardParkedRun(): void {
 
 function setRunning(v: boolean): void {
   isRunning = v;
+  if (!v) stopRequested = false;
   updateChrome();
 }
 
@@ -962,12 +1017,29 @@ function clearPermissionDock(): void {
     pendingAsk = null;
     updateChrome();
   }
+  syncTaskbarAttention();
+}
+
+let taskbarPromptKey = "";
+
+/** Tell the shell to blink when a card is waiting and this page is not showing it. */
+function syncTaskbarAttention(): void {
+  const open = permissionDock.childElementCount > 0;
+  const inView = open && viewingRun();
+  const key = `${open}:${inView}`;
+  if (key === taskbarPromptKey) return;
+  taskbarPromptKey = key;
+  void window.agent.setTaskbarPrompt?.(open, inView);
 }
 
 function syncLiveDock(): void {
   const show = isRunning && viewingRun() && permissionDock.childElementCount > 0;
   permissionDock.hidden = !show;
+  syncTaskbarAttention();
 }
+
+// Allow / deny removes the card without going through clearPermissionDock.
+new MutationObserver(() => syncTaskbarAttention()).observe(permissionDock, { childList: true });
 
 function askQuestion(argsJson: string | undefined): string {
   if (!argsJson) return "";
@@ -1566,16 +1638,40 @@ async function loadCurrent(): Promise<void> {
   void refreshStoreDock(currentSessionId);
   messagesEl.classList.add("is-restoring");
   try {
-    const msgs =
-      viewWorkspace && !sameWorkspace(viewWorkspace, activeWorkspace)
-        ? await window.agent.loadWorkspaceMessages(viewWorkspace, currentSessionId)
-        : await window.agent.loadMessages(currentSessionId);
+    const otherWorkspace =
+      viewWorkspace && !sameWorkspace(viewWorkspace, activeWorkspace) ? viewWorkspace : null;
+    const msgs = otherWorkspace
+      ? await window.agent.loadWorkspaceMessages(otherWorkspace, currentSessionId)
+      : await window.agent.loadMessages(currentSessionId);
+    let childSteps: SubagentToolRow[] = [];
+    try {
+      childSteps = otherWorkspace
+        ? await window.agent.loadWorkspaceSubagentSteps(otherWorkspace, currentSessionId)
+        : await window.agent.loadSubagentSteps(currentSessionId);
+    } catch {
+      childSteps = [];
+    }
+    const childrenByParent = new Map<string, SubagentToolRow[]>();
+    for (const step of childSteps) {
+      const list = childrenByParent.get(step.parent_tool_call_id) ?? [];
+      list.push(step);
+      childrenByParent.set(step.parent_tool_call_id, list);
+    }
     if (!msgs.length) {
       renderEmptyState(messagesEl, "idle");
       return;
     }
+    let openQuestion: { body: HTMLElement; text: string } | null = null;
+    const liveHere = isRunning && runGate.runSessionId === currentSessionId;
+    const closeUnanswered = () => {
+      if (!openQuestion) return;
+      ensureReask(openQuestion.body, openQuestion.text);
+      appendCancelledNotice(messagesEl);
+      openQuestion = null;
+    };
     for (const m of msgs) {
       if (m.role === "tool" && m.name === "ask_user") {
+        openQuestion = null;
         const question = askQuestion(m.tool_call_arguments);
         if (question) {
           appendToolStep(messagesEl, {
@@ -1593,18 +1689,47 @@ async function loadCurrent(): Promise<void> {
           });
         }
       } else if (m.role === "tool") {
-        appendToolStep(messagesEl, {
+        const body = appendToolStep(messagesEl, {
           title: `工具结果${m.name ? ` · ${m.name}` : ""}`,
           detail: m.content.slice(0, 4000),
           open: false,
         });
+        if (m.name === "agent" && m.tool_call_id) {
+          let after = stepWrap(body) ?? undefined;
+          for (const step of childrenByParent.get(m.tool_call_id) ?? []) {
+            const child = appendToolStep(messagesEl, {
+              title: historyToolTitle(step.name, step.arguments),
+              detail: step.content.slice(0, 4000),
+              open: false,
+              nested: true,
+              after,
+            });
+            after = stepWrap(child) ?? after;
+          }
+        }
       } else if (m.role === "assistant") {
-        appendMessage(messagesEl, "assistant", m.content, { rich: true });
+        if (isCancelledNotice(m.content)) {
+          if (openQuestion) {
+            ensureReask(openQuestion.body, openQuestion.text);
+            openQuestion = null;
+          }
+          const body = appendMessage(messagesEl, "assistant", m.content, { rich: true });
+          body.closest(".msg")?.classList.add("is-cancelled");
+        } else {
+          openQuestion = null;
+          appendMessage(messagesEl, "assistant", m.content, { rich: true });
+        }
+      } else if (m.role === "user") {
+        if (openQuestion) closeUnanswered();
+        const urls = await imageDataUrls(viewWorkspace, currentSessionId, m.images);
+        openQuestion = { body: appendUserQuestion(m.content, urls), text: m.content };
       } else {
+        openQuestion = null;
         const urls = await imageDataUrls(viewWorkspace, currentSessionId, m.images);
         appendMessage(messagesEl, m.role, m.content, urls.length ? { images: urls } : undefined);
       }
     }
+    if (openQuestion && !liveHere) closeUnanswered();
     // Force a second pass so opening a session always uses the latest renderer.
     rerenderAllAssistantMarkdown(messagesEl);
     followTail = true;
@@ -1886,6 +2011,32 @@ function isSkillSendFailure(err: unknown): boolean {
   return message.includes("未知技能 /") || message.includes("无法读取技能 /") || message.includes("已停用");
 }
 
+function appendCancelledNotice(container: HTMLElement): void {
+  const body = appendMessage(container, "assistant", CANCELLED_TURN_NOTICE, { rich: false });
+  body.closest(".msg")?.classList.add("is-cancelled");
+}
+
+function ensureReask(body: HTMLElement, text: string): void {
+  if (!text.trim() || body.parentElement?.querySelector(".reask")) return;
+  appendReaskButton(body, () => {
+    void reask(text);
+  });
+}
+
+function appendUserQuestion(text: string, images: string[]): HTMLElement {
+  return appendMessage(messagesEl, "user", text, images.length ? { images } : undefined);
+}
+
+async function reask(text: string): Promise<void> {
+  if (!text.trim()) return;
+  if (isRunning || creatingSession || (pendingAsk && viewingRun())) {
+    setStatus("请先停止当前任务再重新问", true);
+    return;
+  }
+  inputEl.value = text;
+  await sendMessage();
+}
+
 async function sendMessage(): Promise<void> {
   if (pendingAsk && viewingRun()) {
     await answerPending(inputEl.value);
@@ -1917,9 +2068,7 @@ async function sendMessage(): Promise<void> {
   discardParkedRun();
   if (messagesEl.querySelector(".empty-state")) messagesEl.innerHTML = "";
   followTail = true;
-  appendMessage(messagesEl, "user", text, {
-    images: images.map((image) => image.previewUrl),
-  });
+  appendUserQuestion(text, images.map((image) => image.previewUrl));
   resetStreamTarget(appendMessage(messagesEl, "assistant", ""));
   clearOpenTools();
   runLiveStatus = "运行中…";
@@ -1953,12 +2102,17 @@ async function sendMessage(): Promise<void> {
 }
 
 function requestStop(): void {
+  if (!isRunning || stopRequested) return;
+  stopRequested = true;
   clearPermissionDock();
+  updateChrome();
   void (async () => {
     try {
       await window.agent.cancel();
       showRunStatus("已请求停止");
     } catch (err) {
+      stopRequested = false;
+      updateChrome();
       showStatusError(err);
     }
   })();
@@ -2323,6 +2477,7 @@ function applyTranscript(host: HTMLElement, e: {
   is_error?: boolean;
   tool_call?: { id: string; function: { name: string; arguments: string } };
   tool_call_id?: string;
+  parent_tool_call_id?: string;
 }): boolean {
   const place = (mutate: () => void) => {
     if (host === messagesEl) keepTail(mutate);
@@ -2336,22 +2491,36 @@ function applyTranscript(host: HTMLElement, e: {
   }
   if (e.type === "tool_call" && e.tool_call) {
     const call = e.tool_call;
-    if (streamingEl && streamBuffer) paintStreamRich(true);
-    resetStreamTarget(null);
+    const parentId = e.parent_tool_call_id;
+    if (!parentId && streamingEl && streamBuffer) paintStreamRich(true);
+    if (!parentId) resetStreamTarget(null);
     place(() => {
+      const after = parentId
+        ? nestedTails.get(parentId) ?? toolStepNodes.get(parentId)
+        : undefined;
       const body = appendToolStep(host, {
         title: toolCallTitle(call.function.name, call.function.arguments),
         detail: "等待结果…",
         open: true,
+        nested: Boolean(parentId),
+        after,
       });
-      openTools.set(call.id, body);
-      openToolDetail = body;
+      const key = toolRowKey(call.id, parentId);
+      openTools.set(key, body);
+      const wrap = stepWrap(body);
+      if (wrap) {
+        toolStepNodes.set(key, wrap);
+        if (parentId) nestedTails.set(parentId, wrap);
+        else toolStepNodes.set(call.id, wrap);
+      }
+      if (!parentId) openToolDetail = body;
     });
     return true;
   }
   if (e.type === "tool_result") {
     const detail = (e.content ?? "").slice(0, 4000);
-    const node = e.tool_call_id ? openTools.get(e.tool_call_id) : undefined;
+    const key = e.tool_call_id ? toolRowKey(e.tool_call_id, e.parent_tool_call_id) : "";
+    const node = key ? openTools.get(key) : undefined;
     if (node) {
       place(() => {
         setToolDetailContent(node, detail);
@@ -2359,12 +2528,25 @@ function applyTranscript(host: HTMLElement, e: {
         const summary = details?.querySelector(".tool-summary")?.textContent ?? "";
         const isAsk = summary.includes("ask_user");
         if (details) details.open = false;
-        if (e.tool_call_id) openTools.delete(e.tool_call_id);
+        if (key) openTools.delete(key);
         if (openToolDetail === node) openToolDetail = null;
-        if (isAsk && !e.is_error) appendMessage(host, "user", e.content ?? "");
+        if (isAsk && !e.is_error && !e.parent_tool_call_id) appendMessage(host, "user", e.content ?? "");
       });
     } else {
-      place(() => appendToolStep(host, { title: "工具结果", detail, open: false }));
+      place(() => {
+        const after = e.parent_tool_call_id
+          ? nestedTails.get(e.parent_tool_call_id) ?? toolStepNodes.get(e.parent_tool_call_id)
+          : undefined;
+        const body = appendToolStep(host, {
+          title: "工具结果",
+          detail,
+          open: false,
+          nested: Boolean(e.parent_tool_call_id),
+          after,
+        });
+        const wrap = stepWrap(body);
+        if (wrap && e.parent_tool_call_id) nestedTails.set(e.parent_tool_call_id, wrap);
+      });
     }
     return true;
   }
@@ -2377,7 +2559,15 @@ function applyTranscript(host: HTMLElement, e: {
 }
 
 function finishRun(reason: string, refreshStore: boolean): void {
-  if (streamingEl && streamBuffer) paintStreamRich(true);
+  if (reason === "cancelled" && streamingEl && !streamBuffer.trim()) {
+    streamingEl.textContent = CANCELLED_TURN_NOTICE;
+    streamingEl.closest(".msg")?.classList.add("is-cancelled");
+    const questions = messagesEl.querySelectorAll(":scope > .msg.user .msg-body");
+    const asked = questions[questions.length - 1];
+    if (asked instanceof HTMLElement) ensureReask(asked, asked.textContent ?? "");
+  } else if (streamingEl && streamBuffer) {
+    paintStreamRich(true);
+  }
   resetStreamTarget(null);
   clearPermissionDock();
   clearOpenTools();

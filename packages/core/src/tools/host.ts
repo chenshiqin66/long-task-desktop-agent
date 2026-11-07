@@ -10,6 +10,7 @@ import { webSearchTool } from "./webSearch.js";
 import { readSkillTool } from "./readSkill.js";
 import { runSkillScriptTool } from "./runSkillScript.js";
 import { ASK_USER_NOT_LOCAL, ASK_USER_TOOL_NAME, askUserTool } from "./askUserTool.js";
+import { AGENT_NOT_LOCAL, AGENT_TOOL_NAME, agentTool } from "./agentTool.js";
 import { isDangerousBash } from "./dangerous.js";
 
 export { truncateOutput, SHELL_TOOL_NAME, isDangerousBash };
@@ -29,6 +30,7 @@ export function createBuiltinTools(): Tool[] {
     askUserTool,
     readSkillTool,
     runSkillScriptTool,
+    agentTool,
   ];
 }
 
@@ -43,9 +45,19 @@ export class ToolHost {
     return [...this.byName.values()].map((t) => t.definition);
   }
 
+  /** Tools whose names are in `names` and already registered on this host. */
+  subset(names: readonly string[]): ToolHost {
+    const allow = new Set(names);
+    const tools = [...this.byName.values()].filter((tool) => allow.has(tool.definition.name));
+    return new ToolHost(tools);
+  }
+
   async execute(name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
     if (name === ASK_USER_TOOL_NAME) {
       throw new Error(ASK_USER_NOT_LOCAL);
+    }
+    if (name === AGENT_TOOL_NAME) {
+      throw new Error(AGENT_NOT_LOCAL);
     }
     if (process.platform === "win32" && name === "bash") {
       return {

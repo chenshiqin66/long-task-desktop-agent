@@ -55,6 +55,12 @@ describe("tool policy", () => {
     expect(classifyToolCall("keyword_search", '{"query":"x"}').risk).toBe("read");
     expect(classifyToolCall("web_search", '{"query":"news"}').risk).toBe("read");
     expect(classifyToolCall("read_skill", '{"name":"demo"}').risk).toBe("read");
+    expect(
+      classifyToolCall(
+        "agent",
+        JSON.stringify({ subagent_type: "explore", task: "find auth", description: "find auth" }),
+      ).risk,
+    ).toBe("read");
   });
 
   it("classifyToolCall requires confirmation for write_file / str_replace / delete_file", () => {
@@ -66,6 +72,17 @@ describe("tool policy", () => {
       classifyToolCall("str_replace", '{"path":"a.ts","old_string":"a","new_string":"b"}').risk,
     ).toBe("write");
     expect(classifyToolCall("delete_file", '{"path":"a.ts"}').risk).toBe("write");
+    expect(
+      classifyToolCall(
+        "agent",
+        JSON.stringify({
+          subagent_type: "worker",
+          task: "write the note",
+          description: "write note",
+          output_dir: "docs/notes",
+        }),
+      ).summary,
+    ).toMatch(/docs\/notes/);
   });
 
   it("ask_user does not require command permission", () => {

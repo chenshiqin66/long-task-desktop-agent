@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld("agent", {
   createSession: (title?: string) => ipcRenderer.invoke("agent:createSession", title),
   listSessions: () => ipcRenderer.invoke("agent:listSessions"),
   loadMessages: (sessionId: string) => ipcRenderer.invoke("agent:loadMessages", sessionId),
+  loadSubagentSteps: (sessionId: string) => ipcRenderer.invoke("agent:loadSubagentSteps", sessionId),
+  loadWorkspaceSubagentSteps: (path: string, sessionId: string) =>
+    ipcRenderer.invoke("agent:loadWorkspaceSubagentSteps", path, sessionId),
   loadSessionArtifacts: (sessionId: string) =>
     ipcRenderer.invoke("agent:loadSessionArtifacts", sessionId),
   renameSession: (
@@ -66,6 +69,8 @@ contextBridge.exposeInMainWorld("agent", {
   openExternal: (target: string) => ipcRenderer.invoke("agent:openExternal", target),
   popupAppMenu: (index: number, x: number, y: number) =>
     ipcRenderer.invoke("agent:popupAppMenu", index, x, y),
+  setTaskbarPrompt: (open: boolean, inView: boolean) =>
+    ipcRenderer.invoke("agent:setTaskbarPrompt", open, inView),
   onEvent: (cb: (e: RuntimeEvent) => void) => {
     const listener = (_: unknown, e: RuntimeEvent) => cb(e);
     ipcRenderer.on("agent:event", listener);

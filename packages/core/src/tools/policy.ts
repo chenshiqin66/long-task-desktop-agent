@@ -174,6 +174,22 @@ export function classifyToolCall(
   if (toolName === "ask_user") {
     return { risk: "read", summary: "Ask the user" };
   }
+  if (toolName === "agent") {
+    let subagentType = "";
+    let outputDir = "";
+    try {
+      const args = argsJson
+        ? (JSON.parse(argsJson) as { subagent_type?: unknown; output_dir?: unknown })
+        : {};
+      subagentType = typeof args.subagent_type === "string" ? args.subagent_type : "";
+      outputDir = typeof args.output_dir === "string" ? args.output_dir : "";
+    } catch {
+      return { risk: "write", summary: "agent with invalid JSON args" };
+    }
+    if (subagentType === "explore") return { risk: "read", summary: "Auto-allow explore subagent" };
+    const label = outputDir ? `worker writes under ${outputDir}` : "worker subagent";
+    return { risk: "write", summary: `Needs confirmation: ${label.slice(0, 160)}` };
+  }
   if (
     toolName === "read_file" ||
     toolName === "list_dir" ||
