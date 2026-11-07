@@ -1710,7 +1710,8 @@ configForm.addEventListener("submit", async (ev) => {
     const apiKey = (document.getElementById("cfg-apiKey") as HTMLInputElement).value.trim();
     await window.agent.saveConfig({ ...cur, baseUrl, model, apiKey });
     configDialog.close();
-    setStatus("配置已保存");
+    // A running turn owns the status line. Saving must not clear 「等待确认权限」 or 「等你回答」.
+    if (!isRunning) setStatus("配置已保存");
   } catch (err) {
     showStatusError(err);
   }

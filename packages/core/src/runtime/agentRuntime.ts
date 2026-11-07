@@ -308,6 +308,11 @@ export class AgentRuntime {
     this.abort?.abort();
   }
 
+  /** True for the whole submit, including permission and ask waits. */
+  get isTurnRunning(): boolean {
+    return this.running;
+  }
+
   readSessionImage(sessionId: string, relativePath: string): Promise<string> {
     return this.store.readImageDataUrl(sessionId, relativePath);
   }

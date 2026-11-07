@@ -24,7 +24,7 @@ import {
   skillDirectory,
   uninstallSkill,
 } from "@agent/core";
-import type { ImageMime, PermissionDecision, RuntimeEvent, StoredConfig, SubmittedImage } from "@agent/core";
+import type { AgentConfig, ImageMime, PermissionDecision, RuntimeEvent, StoredConfig, SubmittedImage } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +32,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 let win: BrowserWindow | null = null;
 let appMenu: Menu | null = null;
 let runtime: AgentRuntime | null = null;
+/** AgentConfig snapshot used to build `runtime`. Compared on the next submit. */
+let runtimeConfigKey: string | null = null;
 let permissionGate: DeferredPermissionGate | null = null;
 let askGate: DeferredAskGate | null = null;
 let workspacePath: string | null = null;
@@ -188,15 +190,33 @@ async function assertKnownWorkspace(raw: string): Promise<string> {
   return match;
 }
 
-async function ensureRuntime(): Promise<AgentRuntime> {
-  if (!workspacePath) throw new Error("No workspace selected");
-  if (runtime) return runtime;
+async function readAgentConfig() {
   const stored = (await loadStoredConfig()) ?? {
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     apiKey: "",
   };
-  const config = toAgentConfig(stored);
+  return toAgentConfig(stored);
+}
+
+function agentConfigKey(config: AgentConfig): string {
+  return JSON.stringify([
+    config.baseUrl,
+    config.model,
+    config.apiKey,
+    config.bashTimeoutMs,
+    config.maxSteps,
+    config.contextCharLimit,
+    config.maxToolOutputChars,
+    config.maxReadChars,
+    config.maxSearchResults,
+  ]);
+}
+
+async function ensureRuntime(): Promise<AgentRuntime> {
+  if (!workspacePath) throw new Error("No workspace selected");
+  if (runtime) return runtime;
+  const config = await readAgentConfig();
   const provider = new OpenAICompatibleProvider({
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
@@ -210,8 +230,17 @@ async function ensureRuntime(): Promise<AgentRuntime> {
     permissions: permissionGate,
     asks: askGate,
   });
+  runtimeConfigKey = agentConfigKey(config);
   runtime.onEvent(sendEvent);
   return runtime;
+}
+
+/** Next send picks up a saved model config. A live turn keeps its provider and gates. */
+async function adoptConfigIfIdle(): Promise<void> {
+  if (!runtime || runtime.isTurnRunning) return;
+  const key = agentConfigKey(await readAgentConfig());
+  if (key === runtimeConfigKey) return;
+  resetRuntime();
 }
 
 const IMAGE_MIMES = new Set<ImageMime>(["image/png", "image/jpeg", "image/webp", "image/gif"]);
@@ -237,6 +266,7 @@ function resetRuntime(): void {
   askGate?.cancelAll();
   askGate = null;
   runtime = null;
+  runtimeConfigKey = null;
 }
 
 function createWindow() {
@@ -509,6 +539,7 @@ app.whenReady().then(() => {
     "agent:submit",
     async (_e, sessionId: string, text: string, images?: unknown) => {
       assertValidSessionId(sessionId);
+      await adoptConfigIfIdle();
       await (await ensureRuntime()).submit(sessionId, text, normalizeSubmittedImages(images));
     },
   );
@@ -592,7 +623,6 @@ app.whenReady().then(() => {
       workspaceCollapsed: cfg.workspaceCollapsed ?? prev?.workspaceCollapsed,
       lastWorkspacePath: cfg.lastWorkspacePath ?? prev?.lastWorkspacePath,
     });
-    resetRuntime();
   });
   ipcMain.handle("agent:localTargetsExist", async (_e, targets: unknown) => {
     if (!Array.isArray(targets) || targets.some((item) => typeof item !== "string")) return {};
