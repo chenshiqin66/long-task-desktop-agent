@@ -57,15 +57,19 @@ flowchart LR
 
 | 模块 | 职责 |
 | --- | --- |
-| `runtime/agentRuntime.ts` | 一轮对话的状态机：落库、组装上下文、流式调用、按序执行工具、取消、自动标题 |
+| `runtime/agentRuntime.ts` | 一轮对话的状态机：落库、组装上下文、流式调用、执行工具、取消、自动标题。同一条回复里的多个 `agent` 一起跑，其余工具按顺序 |
+| `runtime/subagentRun.ts` | 一个子代理的独立循环。自己的上下文，回给父会话的只有一条回执 |
 | `runtime/permission.ts` | 写操作的许可门。Electron 用 `DeferredPermissionGate`，测试可用 `AutoAllowGate` |
 | `provider/openaiCompatible.ts` | 把组装好的消息打成 chat-completions 流，解析文本、工具调用和 token 用量 |
 | `context/assemble.ts` | 发给模型的顺序：system（含工具说明）→ 压缩后的历史 → 当前用户消息 |
 | `context/compress.ts` | 只压缩「这一次发给模型的副本」。用户轮次超过 10 时保留前 3 轮和后 10 轮，中间收成摘要，再按字符上限截断。磁盘上的 jsonl 不动 |
 | `context/repairToolCalls.ts` | 崩溃或取消后，给没有结果的 `tool_call` 补一条合成 tool 消息，避免下次请求因不成对而失败 |
-| `store/sessionStore.ts` | 会话目录、`meta.json`、`messages.jsonl` |
+| `store/sessionStore.ts` | 会话目录、`meta.json`、`messages.jsonl`。列会话时只看 `sessions/` 下的直接子目录 |
+| `store/subagentStore.ts` | 子代理的四个文件，放在所属会话的 `subagents/` 下，不会被列成另一个会话 |
 | `store/traceStore.ts` | 只追加的 `trace.jsonl` |
-| `tools/host.ts` | 内置工具表。未知工具和参数解析错误都变成 `is_error` 的工具结果，不抛出循环 |
+| `tools/host.ts` | 内置工具表。未知工具和参数解析错误都变成 `is_error` 的工具结果，不抛出循环。`agent` 在这里不执行，由 runtime 接手 |
+| `tools/agentTool.ts` | `explore` / `worker` 的系统提示词、工具上限、回合上限和回执截断 |
+| `tools/writeScope.ts` | `output_dir` 必须是工作区内的相对目录；同一批里重叠的目录互相挡住 |
 | `tools/policy.ts` | 把一次调用分成 `read` / `write` / `blocked` |
 | `tools/fsSandbox.ts`、`pathSandbox.ts` | 文件类工具的路径必须落在工作区内 |
 | `config/loadConfig.ts` | 读写用户目录里的配置。POSIX 上目录 `0700`、文件 `0600`；Windows 上 chmod 失败会被忽略 |
@@ -96,6 +100,11 @@ flowchart LR
   images/                               用户随提示词上传的图片字节
   trace.jsonl                           审计索引，一行一条 TraceEvent。llm_request 用 context_id 指向 context.jsonl
   context.jsonl                         每次模型调用看见的上下文。图片只记路径和字节数，工具表全文只在哈希首次出现时写一行
+  subagents/{agentId}/                  一次 agent 调用的独立落盘，不是另一个会话
+    meta.json                           类型、父工具调用 id、output_dir、状态
+    messages.jsonl                      子代理自己的对话。中间阅读和搜索留在这里
+    trace.jsonl
+    context.jsonl
 ```
 
 `sessionId` 只能是一段路径名（字母、数字、下划线和连字符），避免被拼进目录时逃出 `.agent/sessions/`。
@@ -105,7 +114,7 @@ flowchart TB
   meta["SessionMeta<br/>session_id, workspace_path, title, title_source"]
   msg["Message<br/>id, turn_id, role, trace_id"]
   trace["TraceEvent<br/>id, turn_id, message_id, request_id"]
-  call["assistant.tool_calls[]"]
+  calls["assistant.tool_calls[]"]
   toolmsg["role=tool 的 Message<br/>tool_call_id"]
 
   meta -->|"1 对多"| msg
@@ -114,14 +123,14 @@ flowchart TB
   msg -->|"trace_id = TraceEvent.id"| trace
   trace -->|"message_id = Message.id"| msg
   trace -->|"request_id 指回 llm_request"| trace
-  call -->|"id = tool_call_id"| toolmsg
+  calls -->|"id = tool_call_id"| toolmsg
 ```
 
 一条用户消息打开一个 `turn_id`。这一轮里的助手文本、工具调用和工具结果都带同一个 `turn_id`。`messages` 是模型下一次能看见的历史；`trace` 是同一次动作的审计。两边用 `trace_id` / `message_id` 互指。`llm_response` 和 `llm_error` 再用 `request_id` 指回对应的 `llm_request`。每一条 `tool_result` 同样用 `request_id` 指回它的 `tool_call`。
 
 `role=tool` 的消息可以带 `tool_call_arguments`，只给界面和审计看。组装上下文时不会把它再发给模型，因为参数已经在配对的那条助手消息的 `tool_calls` 上。
 
-标识前缀：`sess`、`turn`、`msg`、`trace`、`perm`。
+标识前缀：`sess`、`turn`、`msg`、`trace`、`perm`、`agent`。
 
 配置里的 `apiKey` 不会出现在 messages、trace 或 context 里。`llm_request` 只记模型名、条数、字数、图片张数和 `context_id`。这个 id 就是 `context.jsonl` 里对应请求行的 `id`，文件字段名不改。四个文件页里，`messages.jsonl`、`trace.jsonl`、`context.jsonl` 都按条折叠：标题是序号、角色或事件类型，再加一行摘要；展开后是这一条的 JSON，超过 1600 字的字符串截断。`meta.json` 是整份 JSON。用当前页搜索 `context_id` 即可定位。`user_message` 这条 trace 只记字数，不记正文。
 
@@ -133,7 +142,7 @@ flowchart TB
    - 读出全部 messages，压缩副本，装成上下文。
    - 流式请求模型。文本增量以 `text` 事件推到界面；工具调用以 `tool_call` 事件推送。
    - 没有工具调用就 `done(completed)`，并视情况自动改标题。
-   - 有工具调用则 `steps` 加一。本批调用按顺序执行，不是并行。
+   - 有工具调用则 `steps` 加一。同一条回复里、`ask_user` 之前的多个 `agent` 一起执行。其余工具按顺序执行。
 4. 每个工具先经 `classifyToolCall`：
    - `read`：直接执行。
    - `write`：发出 `permission_request`，等界面允许或拒绝。允许一次即放行这一轮剩下的写操作和命令；拒绝只否定这一次，写成一条错误工具结果，循环可以继续。`ask_user` 不在这次放行里。
@@ -147,7 +156,8 @@ flowchart TB
 
 | 工具 | 风险 | 说明 |
 | --- | --- | --- |
-| `read_file`、`list_dir`、`keyword_search` | 自动放行 | 路径限制在工作区内。读和搜索有字符与条数上限 |
+| `read_file`、`list_dir`、`keyword_search` | 自动放行 | 路径限制在工作区内。读和搜索有字符与条数上限。`keyword_search` 可指定一个文件或目录，并一次传入多个词；不给路径时搜整个工作区。超过 1MB 的文件跳过。已请求停止时，在下一个目录或文件之前停 |
+| `agent` | explore 自动放行；worker 确认一次 | 派一个子代理。见下一节 |
 | `web_search` | 自动放行 | 一次调用向 `{llmBase}/v1/tools/search` 发一个 POST。`count` 默认 8、最大 50。`need_content` 为 false，返回的是摘要不是整页。查询最长 128 字 |
 | `ask_user` | 停下来问人 | 同一轮挂起，直到用户回答。回答写成这条工具调用的结果，然后模型继续。同一条回复里排在它后面的工具不会执行。只把问题打印出来、不调用这个工具，会结束这一轮 |
 | `write_file`、`str_replace`、`delete_file` | 这一轮确认一次 | 路径同样不能逃出工作区。点「允许这一轮」后，同一次发送里后面的写操作不再逐条询问 |
@@ -156,6 +166,34 @@ flowchart TB
 
 界面上每个工具条按 `tool_call.id` 和后来的 `tool_result.tool_call_id` 配对。同名工具不会合并：合并会藏掉不同的查询，也不能少计一次已经发出的请求。
 
+## 子代理
+
+主模型不临时编写子代理。它调用 `agent`，选定已有类型，并写一段能单独执行的任务。身份在定义时就定了：系统提示词、工具和回合上限都在 `tools/agentTool.ts`。任务正文最长 20000 字。`description` 是界面上的短标签，超过 200 字会截断。
+
+现在只有两种：
+
+| 类型 | 能做什么 | 回合上限 |
+| --- | --- | --- |
+| `explore` | 只读。工具是 `list_dir`、`read_file`、`keyword_search`、`web_search`、`read_skill`。不接受 `output_dir` | 8 |
+| `worker` | 上面这些，再加上 `write_file`、`str_replace`、`delete_file`。写入只能落在 `output_dir` 里 | 16 |
+
+这里的回合，数的是「子代理一次回复里带了工具调用」。同一回复里的多次搜索只算一回合。父会话的 `maxSteps` 若更小，子代理跟着用更小的数；父会话调大不会把子代理放宽。每条工具结果开头写着还剩几回合。用完之后，这一回复里再来的工具调用被跳过，子代理停住。
+
+两种都不能跑 shell、不能 `ask_user`、不能再调用 `agent`，也不能跑 `run_skill_script`。任务正文里再写一份工具清单不会生效。选类型就是工具限制。
+
+父会话的系统提示要求任务写清四件事：为什么做、做什么和不做什么、怎样算完成、子代理自己拿不到的路径和约束。不要把「根据你的发现去修」派出去。验证命令由父会话在回执回来之后自己跑，因为子代理没有 shell。
+
+子代理看不见父会话的对话，父会话也看不见它的中间阅读。它有自己的模型循环和自己的 `turn_id`，文件在 `{session}/subagents/agent_…/`。列会话只扫 `sessions/` 的直接子目录，所以这些目录不会变成左侧的一条会话。主区也不打开这四个文件页。
+
+回给父会话的是一条工具结果，最长 6000 字。正文是子代理最后一段话，再加上它写过的路径。超长时截断正文，尽量留下文件列表。交付物是文件本身，回执不贴文件正文。
+
+同一条助手回复里、`ask_user` 之前的多个 `agent` 用 `Promise.all` 一起跑。父模型在它们结束前不会继续生成。`explore` 自动放行。`worker` 按写操作确认一次；这一轮里点过允许之后，后面的 `worker` 不再逐个询问。同一回复里两个 `output_dir` 相同或互相包含时，后一个不启动。父会话在这一批里再往这些目录写，也会被拒绝。这一批结束之后，父会话可以改那些文件。`output_dir` 必须是工作区里的相对目录，不能是工作区根，不能含 `..`，也不能落在 `.agent` 下。
+
+界面上，子代理的工具行缩进在启动它的那一行下面，不折进那一行的详情。这些事件仍用父轮次的 `turn_id`，并带 `parent_tool_call_id`，否则进行中的事件门会把它们丢掉。重新打开会话时从子目录的 `messages.jsonl` 把这些行插回去。
+
+点停止只把这一轮的中止信号置上，按钮变成灰色的「正在停止」，直到 runtime 发出 `done` 才变回「发送」。子代理在每次模型请求之间、以及同一批工具的下一个之前看这个信号。`keyword_search` 在每个目录和每个文件之前也看。正在读的那一个文件不会被从半截拆掉。
+
+还没有：自定义类型、子代理再派子代理、父模型在子代理运行时继续思考、同一工作区里多个会话同时跑。
 
 
 *deepseek阅读工具系统代码后的亮点总结：*
@@ -250,6 +288,6 @@ npm start -w @agent/app
 
 ## 现在还不做
 
-没有跨会话记忆，没有用户自定义工具，没有子 Agent，也没有右侧检视面板。文件页就是主区里的四个标签，不是分栏。
+没有跨会话记忆，没有用户自定义工具，也没有右侧检视面板。文件页就是主区里的四个标签，不是分栏。子代理只有 `explore` 和 `worker` 两种，不能再派子代理，父模型也不会在子代理运行时继续生成。子代理的四个文件不在主区打开。
 
 旧说明里写过「不做 web」。这已经不对：`web_search` 是内置工具。
