@@ -57,7 +57,7 @@ flowchart LR
 
 | 模块 | 职责 |
 | --- | --- |
-| `runtime/agentRuntime.ts` | 一轮对话的状态机：落库、组装上下文、流式调用、执行工具、取消、自动标题。同一条回复里的多个 `agent` 一起跑，其余工具按顺序 |
+| `runtime/agentRuntime.ts` | 一轮对话的状态机：落库、组装上下文、流式调用、执行工具、取消、自动标题。同一条回复里的多个 `subagent` 一起跑，其余工具按顺序 |
 | `runtime/subagentRun.ts` | 一个子代理的独立循环。自己的上下文，回给父会话的只有一条回执 |
 | `runtime/permission.ts` | 写操作的许可门。Electron 用 `DeferredPermissionGate`，测试可用 `AutoAllowGate` |
 | `provider/openaiCompatible.ts` | 把组装好的消息打成 chat-completions 流，解析文本、工具调用和 token 用量 |
@@ -66,10 +66,13 @@ flowchart LR
 | `context/repairToolCalls.ts` | 崩溃或取消后，给没有结果的 `tool_call` 补一条合成 tool 消息，避免下次请求因不成对而失败 |
 | `store/sessionStore.ts` | 会话目录、`meta.json`、`messages.jsonl`。列会话时只看 `sessions/` 下的直接子目录 |
 | `store/subagentStore.ts` | 子代理的四个文件，放在所属会话的 `subagents/` 下，不会被列成另一个会话 |
+| `store/taskStore.ts` | 本会话的任务清单。一个任务一个 JSON。目录锁让同一次领取只有一个成功 |
+| `context/taskReminder.ts` | 连续 10 条助手回复没碰任务工具、且还有未完成任务时，给这一次请求附上清单 |
 | `store/traceStore.ts` | 只追加的 `trace.jsonl` |
-| `tools/host.ts` | 内置工具表。未知工具和参数解析错误都变成 `is_error` 的工具结果，不抛出循环。`agent` 在这里不执行，由 runtime 接手 |
-| `tools/agentTool.ts` | `explore` / `worker` 的系统提示词、工具上限、回合上限和回执截断 |
-| `tools/writeScope.ts` | `output_dir` 必须是工作区内的相对目录；同一批里重叠的目录互相挡住 |
+| `tools/host.ts` | 内置工具表。未知工具和参数解析错误都变成 `is_error` 的工具结果，不抛出循环。`subagent` 在这里不执行，由 runtime 接手 |
+| `tools/agentTool.ts` | `explore` / `worker` 的系统提示词、工具上限、回合上限、回执截断，以及可选的 `task_id` |
+| `tools/taskTools.ts` | 清单的创建、查看、修改、删除、领取和完成 |
+| `tools/writeScope.ts` | `output_dir` 必须是工作区内的相对目录；同一批里重叠的目录互相挡住。文件工具也不能写进 `.agent` |
 | `tools/policy.ts` | 把一次调用分成 `read` / `write` / `blocked` |
 | `tools/fsSandbox.ts`、`pathSandbox.ts` | 文件类工具的路径必须落在工作区内 |
 | `config/loadConfig.ts` | 读写用户目录里的配置。POSIX 上目录 `0700`、文件 `0600`；Windows 上 chmod 失败会被忽略 |
@@ -100,7 +103,10 @@ flowchart LR
   images/                               用户随提示词上传的图片字节
   trace.jsonl                           审计索引，一行一条 TraceEvent。llm_request 用 context_id 指向 context.jsonl
   context.jsonl                         每次模型调用看见的上下文。图片只记路径和字节数，工具表全文只在哈希首次出现时写一行
-  subagents/{agentId}/                  一次 agent 调用的独立落盘，不是另一个会话
+  tasks/                                本会话的任务清单，不是项目文件，也不会被列成会话
+    {id}.json                           一个任务。编号是十进制字符串，删掉也不复用
+    .highwatermark                      用过的最大编号
+  subagents/{subagentId}/              一次 subagent 调用的独立落盘，不是另一个会话
     meta.json                           类型、父工具调用 id、output_dir、状态
     messages.jsonl                      子代理自己的对话。中间阅读和搜索留在这里
     trace.jsonl
@@ -130,7 +136,7 @@ flowchart TB
 
 `role=tool` 的消息可以带 `tool_call_arguments`，只给界面和审计看。组装上下文时不会把它再发给模型，因为参数已经在配对的那条助手消息的 `tool_calls` 上。
 
-标识前缀：`sess`、`turn`、`msg`、`trace`、`perm`、`agent`。
+标识前缀：`sess`、`turn`、`msg`、`trace`、`perm`、`subagent`。早先的子代理目录是 `agent_…`，重开时仍会读。
 
 配置里的 `apiKey` 不会出现在 messages、trace 或 context 里。`llm_request` 只记模型名、条数、字数、图片张数和 `context_id`。这个 id 就是 `context.jsonl` 里对应请求行的 `id`，文件字段名不改。四个文件页里，`messages.jsonl`、`trace.jsonl`、`context.jsonl` 都按条折叠：标题是序号、角色或事件类型，再加一行摘要；展开后是这一条的 JSON，超过 1600 字的字符串截断。`meta.json` 是整份 JSON。用当前页搜索 `context_id` 即可定位。`user_message` 这条 trace 只记字数，不记正文。
 
@@ -139,10 +145,10 @@ flowchart TB
 1. 渲染进程 `submit(sessionId, text)`。主进程交给当前 runtime。
 2. 先补齐磁盘上悬空的工具调用，再追加 `turn_start`、用户 `Message` 和 `user_message` trace。
 3. 循环直到没有工具调用、被取消、出错或到达 `maxSteps`（默认 50）：
-   - 读出全部 messages，压缩副本，装成上下文。
+   - 读出全部 messages，压缩副本，装成上下文。若连续 10 条助手回复没调用任务工具、且还有未完成任务，这一次请求的 system 末尾附上这些任务。附注不写入 `messages.jsonl`。
    - 流式请求模型。文本增量以 `text` 事件推到界面；工具调用以 `tool_call` 事件推送。
    - 没有工具调用就 `done(completed)`，并视情况自动改标题。
-   - 有工具调用则 `steps` 加一。同一条回复里、`ask_user` 之前的多个 `agent` 一起执行。其余工具按顺序执行。
+   - 有工具调用则 `steps` 加一。同一条回复里、`ask_user` 之前的多个 `subagent` 一起执行。其余工具按顺序执行。
 4. 每个工具先经 `classifyToolCall`：
    - `read`：直接执行。
    - `write`：发出 `permission_request`，等界面允许或拒绝。允许一次即放行这一轮剩下的写操作和命令；拒绝只否定这一次，写成一条错误工具结果，循环可以继续。`ask_user` 不在这次放行里。
@@ -157,37 +163,63 @@ flowchart TB
 | 工具 | 风险 | 说明 |
 | --- | --- | --- |
 | `read_file`、`list_dir`、`keyword_search` | 自动放行 | 路径限制在工作区内。读和搜索有字符与条数上限。`keyword_search` 可指定一个文件或目录，并一次传入多个词；不给路径时搜整个工作区。超过 1MB 的文件跳过。已请求停止时，在下一个目录或文件之前停 |
-| `agent` | explore 自动放行；worker 确认一次 | 派一个子代理。见下一节 |
+| `subagent` | explore 自动放行；worker 确认一次 | 派一个子代理。可带 `task_id`，把清单上的一条任务交给它。见「子代理」 |
+| `task_create`、`task_list`、`task_get`、`task_update`、`task_delete`、`claim_task`、`complete_task` | 自动放行 | 只改本会话 `.agent` 里的清单，不改项目文件。见「任务清单」 |
 | `web_search` | 自动放行 | 一次调用向 `{llmBase}/v1/tools/search` 发一个 POST。`count` 默认 8、最大 50。`need_content` 为 false，返回的是摘要不是整页。查询最长 128 字 |
 | `ask_user` | 停下来问人 | 同一轮挂起，直到用户回答。回答写成这条工具调用的结果，然后模型继续。同一条回复里排在它后面的工具不会执行。只把问题打印出来、不调用这个工具，会结束这一轮 |
-| `write_file`、`str_replace`、`delete_file` | 这一轮确认一次 | 路径同样不能逃出工作区。点「允许这一轮」后，同一次发送里后面的写操作不再逐条询问 |
+| `write_file`、`str_replace`、`delete_file` | 这一轮确认一次 | 路径同样不能逃出工作区，也不能落进 `.agent`。点「允许这一轮」后，同一次发送里后面的写操作不再逐条询问 |
 | `powershell`（Windows）/ `bash`（其他系统） | 看命令 | Windows 上启动 `powershell.exe`，工作目录是 Windows 路径。只读命令，以及不落盘的 `curl` / `Invoke-WebRequest` / `Invoke-RestMethod`（不是 POST、PUT、DELETE、PATCH，也没有 `-OutFile`、`-o`）自动放行。其余需确认，允许一次覆盖这一轮剩下的命令。清空磁盘根目录仍直接拦截。超时默认 60 秒，输出会截断。旧会话里的 `bash` 调用会返回错误，不再进入 WSL |
 | 未知工具 | 需确认 | 分类上按写操作对待；宿主找不到实现时返回错误结果 |
 
 界面上每个工具条按 `tool_call.id` 和后来的 `tool_result.tool_call_id` 配对。同名工具不会合并：合并会藏掉不同的查询，也不能少计一次已经发出的请求。
 
+## 任务清单
+
+多步、且后面依赖前面的工作记在本会话的 `tasks/` 下。一个任务一个 JSON。不放在项目根，以免被 git 看见、被两个会话共用，或被 `write_file` 直接改掉。`list_dir` 和 `keyword_search` 本来就跳过 `.agent`。
+
+编号从 `1` 起。删掉的编号不复用，所以对话里说的「#2」不会在删除之后指到另一件事。
+
+状态只有三种：`pending`、`in_progress`、`completed`。被挡住不是第四种。一条 `pending` 的任务，只要 `blockedBy` 里还有没完成的编号，或者那个文件已经不在，就不能领取。`blocks` 是反向的一条边，删除时用来把对方的引用清掉。`task_list` 只把还没完成的前置标成 blocked；磁盘上仍保留已经完成的前置。
+
+| 工具 | 谁可以调用 | 做什么 |
+| --- | --- | --- |
+| `task_create` | 父会话 | 新建一条 `pending`。`blocked_by` 可以在这时写上。编号由清单分配 |
+| `task_update` | 父会话 | 改标题、说明或依赖。不改状态。依赖只能在 `pending` 时改 |
+| `task_delete` | 父会话 | 删掉这一条，并把它从其他任务的 `blocks` / `blockedBy` 里去掉。编号不复用 |
+| `task_list`、`task_get` | 父会话和子代理 | 看清单或一条的说明 |
+| `claim_task` | 父会话和子代理 | `pending` → `in_progress`，写下 `owner`。前置没完成就失败。同一次领取只有一个成功 |
+| `complete_task` | 父会话和子代理 | 只有领取它的 `owner` 能把它收成 `completed`，并在结果里列出因此可以开始的任务 |
+
+父会话省略 `owner` 时记成 `main`。子代理省略时记成它自己的 `subagent_…`，不能改成 `main`。子代理不能创建、修改或删除任务，也不能给另一个子代理发消息。它们只通过这条清单知道上一件做完了没有。
+
+把清单上的一条交给子代理时，在 `subagent` 上带 `task_id`。runtime 在它启动前用它的 id 领取。父会话不要自己先领走。这一条被挡住，或已经有主人，子代理不会启动，工具结果就是这次失败。运行结束时，这个 id 名下还停在 `in_progress` 的任务退回 `pending`，回执里写明。已经 `complete_task` 的不动。成功结束但忘了完成，同样会退回，因为这个子代理不会再调用工具。
+
+连续 10 条助手回复都没有调用任务工具，并且还有未完成任务时，下一次模型请求的 system 末尾附上这些任务。这条附注不进 `messages.jsonl`。调用过任务工具，或清单里没有未完成任务，就不再附。计数记在进程里，重启之后重新数。
+
+Shell 仍然可以写进 `.agent`。文件工具这条路已经堵住。
+
 ## 子代理
 
-主模型不临时编写子代理。它调用 `agent`，选定已有类型，并写一段能单独执行的任务。身份在定义时就定了：系统提示词、工具和回合上限都在 `tools/agentTool.ts`。任务正文最长 20000 字。`description` 是界面上的短标签，超过 200 字会截断。
+主模型不临时编写子代理。它调用 `subagent`，选定已有类型，并写一段能单独执行的任务。身份在定义时就定了：系统提示词、工具和回合上限都在 `tools/agentTool.ts`。任务正文最长 20000 字。`description` 是界面上的短标签，超过 200 字会截断。
 
 现在只有两种：
 
 | 类型 | 能做什么 | 回合上限 |
 | --- | --- | --- |
-| `explore` | 只读。工具是 `list_dir`、`read_file`、`keyword_search`、`web_search`、`read_skill`。不接受 `output_dir` | 8 |
+| `explore` | 只读。工具是 `list_dir`、`read_file`、`keyword_search`、`web_search`、`read_skill`，外加清单的查看、领取和完成。不接受 `output_dir` | 8 |
 | `worker` | 上面这些，再加上 `write_file`、`str_replace`、`delete_file`。写入只能落在 `output_dir` 里 | 16 |
 
 这里的回合，数的是「子代理一次回复里带了工具调用」。同一回复里的多次搜索只算一回合。父会话的 `maxSteps` 若更小，子代理跟着用更小的数；父会话调大不会把子代理放宽。每条工具结果开头写着还剩几回合。用完之后，这一回复里再来的工具调用被跳过，子代理停住。
 
-两种都不能跑 shell、不能 `ask_user`、不能再调用 `agent`，也不能跑 `run_skill_script`。任务正文里再写一份工具清单不会生效。选类型就是工具限制。
+两种都不能跑 shell、不能 `ask_user`、不能再调用 `subagent`，也不能跑 `run_skill_script`。它们可以 `task_list`、`task_get`、`claim_task`、`complete_task`，不能 `task_create`、`task_update`、`task_delete`。任务正文里再写一份工具清单不会生效。选类型就是工具限制。`task_id` 由 runtime 在启动前领取，不需要写进任务正文。
 
 父会话的系统提示要求任务写清四件事：为什么做、做什么和不做什么、怎样算完成、子代理自己拿不到的路径和约束。不要把「根据你的发现去修」派出去。验证命令由父会话在回执回来之后自己跑，因为子代理没有 shell。
 
-子代理看不见父会话的对话，父会话也看不见它的中间阅读。它有自己的模型循环和自己的 `turn_id`，文件在 `{session}/subagents/agent_…/`。列会话只扫 `sessions/` 的直接子目录，所以这些目录不会变成左侧的一条会话。主区也不打开这四个文件页。
+子代理看不见父会话的对话，父会话也看不见它的中间阅读。它有自己的模型循环和自己的 `turn_id`，文件在 `{session}/subagents/subagent_…/`。列会话只扫 `sessions/` 的直接子目录，所以这些目录不会变成左侧的一条会话。主区也不打开这四个文件页。
 
 回给父会话的是一条工具结果，最长 6000 字。正文是子代理最后一段话，再加上它写过的路径。超长时截断正文，尽量留下文件列表。交付物是文件本身，回执不贴文件正文。
 
-同一条助手回复里、`ask_user` 之前的多个 `agent` 用 `Promise.all` 一起跑。父模型在它们结束前不会继续生成。`explore` 自动放行。`worker` 按写操作确认一次；这一轮里点过允许之后，后面的 `worker` 不再逐个询问。同一回复里两个 `output_dir` 相同或互相包含时，后一个不启动。父会话在这一批里再往这些目录写，也会被拒绝。这一批结束之后，父会话可以改那些文件。`output_dir` 必须是工作区里的相对目录，不能是工作区根，不能含 `..`，也不能落在 `.agent` 下。
+同一条助手回复里、`ask_user` 之前的多个 `subagent` 用 `Promise.all` 一起跑。父模型在它们结束前不会继续生成。`explore` 自动放行。`worker` 按写操作确认一次；这一轮里点过允许之后，后面的 `worker` 不再逐个询问。同一回复里两个 `output_dir` 相同或互相包含时，后一个不启动。父会话在这一批里再往这些目录写，也会被拒绝。这一批结束之后，父会话可以改那些文件。`output_dir` 必须是工作区里的相对目录，不能是工作区根，不能含 `..`，也不能落在 `.agent` 下。
 
 界面上，子代理的工具行缩进在启动它的那一行下面，不折进那一行的详情。这些事件仍用父轮次的 `turn_id`，并带 `parent_tool_call_id`，否则进行中的事件门会把它们丢掉。重新打开会话时从子目录的 `messages.jsonl` 把这些行插回去。
 

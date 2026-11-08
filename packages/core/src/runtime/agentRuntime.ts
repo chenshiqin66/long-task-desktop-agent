@@ -12,6 +12,8 @@ import type {
 import { MAX_IMAGES_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
 import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
+import { TaskStore } from "../store/taskStore.js";
+import { shouldRemindTasks, taskReminderText } from "../context/taskReminder.js";
 import { ToolHost } from "../tools/host.js";
 import { classifyToolCall } from "../tools/policy.js";
 import {
@@ -70,17 +72,27 @@ Asking the user:
 
 const SUBAGENT_RULES = `
 Subagents:
-- Call agent when the next step would dump search or file text you do not need later, or when the deliverable is new files in one directory.
+- Call subagent when the next step would dump search or file text you do not need later, or when the deliverable is new files in one directory.
 - For a single known file, call read_file yourself. For a one-line edit of a file you have already read, call str_replace yourself.
 - The subagent does not see this conversation. Write the task so it can act without guessing your intent.
 - Say why the task exists and where it sits in the work, so an edge case can be judged instead of followed mechanically.
 - State what to do and what not to do. explore is read-only investigation and has ${EXPLORE_TOOL_ROUNDS} tool rounds. worker may create and edit files only inside the output_dir you pass, and has ${WORKER_TOOL_ROUNDS} tool rounds. One response full of tool calls is one round. Pick the type that matches the boundary. Do not tell a worker to stay read-only, and do not tell explore to edit.
 - Define what finished looks like: a report with file paths and line numbers, or files at named paths with named sections. "Look around" and "understand this" are not done conditions.
 - Give anchors the subagent cannot already know: paths, symbol names, constraints, and approaches already rejected. Do not leave it to rediscover them.
-- You do not pick individual tools. explore may list, read, and search. worker may also write inside output_dir. Neither can run a shell, ask the user, or call agent. Choosing the type is the tool limit. A tool allowlist written into the task is not enforced.
+- You do not pick individual tools. explore may list, read, and search. worker may also write inside output_dir. Both may list, get, claim, and complete tasks on this session's list. Neither can run a shell, ask the user, call subagent, or create, update, or delete tasks. They cannot message each other. Choosing the type is the tool limit. A tool allowlist written into the task is not enforced.
 - Do not delegate understanding. "From what you find, fix the bug" asks the subagent to decide the diagnosis. You do that first. Name the fault, the behavior you want, and how you will check it. Run any verification command yourself after the receipt comes back. The subagent cannot run a shell.
-- Several agent calls in one response run at the same time. Their output directories must not overlap.
-- Do not use agent to ask the user a question or to run a shell command.`;
+- Several subagent calls in one response run at the same time. Their output directories must not overlap.
+- Do not use subagent to ask the user a question or to run a shell command.
+- To assign a listed task, pass task_id. The runtime claims it as that subagent. Do not claim it yourself first. A blocked or already claimed task does not start. If the subagent stops before complete_task, that claim returns to pending.`;
+
+const TASK_RULES = `
+Task list:
+- When the work has several steps and a later step depends on an earlier one, call task_create for each step before you start. A single edit or a question does not need a task.
+- subject is a short imperative. description says what done looks like and what not to do. blocked_by lists the task ids that must be completed first. A new task is pending.
+- When you start a pending task, call claim_task. When that work is finished, call complete_task. Saying it is done in your reply does not complete it.
+- claim_task fails while a blocker is still open. complete_task fails unless the task is in_progress and you are its owner.
+- Use task_list to see what is open. A pending task marked blocked is not claimable yet. task_update changes words and dependencies, not status.
+- task_create does not run the step and does not start a subagent. The list belongs to this session. A subagent can claim and complete on it, and cannot create, update, or delete tasks.`;
 
 const SEARCH_RULES = `
 Search:
@@ -117,6 +129,7 @@ ${SEARCH_RULES}
 ${ASK_USER_RULES}
 ${IMAGE_RULES}
 ${SUBAGENT_RULES}
+${TASK_RULES}
 ${WEB_SEARCH_RULES}`;
   }
 
@@ -133,6 +146,7 @@ ${SEARCH_RULES}
 ${ASK_USER_RULES}
 ${IMAGE_RULES}
 ${SUBAGENT_RULES}
+${TASK_RULES}
 ${WEB_SEARCH_RULES}`;
 }
 
@@ -147,6 +161,12 @@ const ASK_UNAVAILABLE_CONTENT = "ask_user is not connected to a user.";
 const ASK_EMPTY_CONTENT = "Empty answer.";
 const ANSWER_MAX = 8_000;
 
+/** Sessions written before the tool rename still show the model the name `agent`. */
+function renameLegacySubagentCall(call: ToolCall): ToolCall {
+  if (call.function.name !== "agent") return call;
+  return { ...call, function: { ...call.function, name: AGENT_TOOL_NAME } };
+}
+
 export class AgentRuntime {
   private readonly store: SessionStore;
   private readonly traces: TraceStore;
@@ -159,6 +179,8 @@ export class AgentRuntime {
   private readonly permissions: PermissionGate;
   private readonly asks: AskGate;
   private listeners = new Set<EventListener>();
+  /** Assistant replies already stored when this session was last shown its open tasks. */
+  private taskReminderAssistants = new Map<string, number>();
   private abort: AbortController | null = null;
   private running = false;
   /** Set when the user allows one write. Covers later writes in this submit, not ask_user or blocked commands. */
@@ -343,7 +365,32 @@ export class AgentRuntime {
   }
 
   deleteSession(sessionId: string): Promise<void> {
+    this.taskReminderAssistants.delete(sessionId);
     return this.store.deleteSession(sessionId);
+  }
+
+  /** System-prompt addendum for this request. Empty when the open list was touched recently. */
+  private async taskReminder(sessionId: string, messages: Message[]): Promise<string | undefined> {
+    try {
+      const snapshot = await TaskStore.forSession(this.workspacePath, sessionId).list();
+      const openCount = snapshot.tasks.filter((task) => task.status !== "completed").length;
+      if (
+        !shouldRemindTasks({
+          messages,
+          openTaskCount: openCount,
+          assistantCountAtLastReminder: this.taskReminderAssistants.get(sessionId) ?? null,
+        })
+      ) {
+        return undefined;
+      }
+      this.taskReminderAssistants.set(
+        sessionId,
+        messages.filter((message) => message.role === "assistant").length,
+      );
+      return taskReminderText(snapshot.tasks);
+    } catch {
+      return undefined;
+    }
   }
 
   cancel(): void {
@@ -427,6 +474,7 @@ export class AgentRuntime {
         this.emit({ type: "status", turn_id, phase: "assembling" });
         const loopHistory = await this.store.readMessages(sessionId);
         const installedSkills = (await listInstalledSkills(this.skillsRoot)).filter((skill) => skill.enabled);
+        const extraSystem = await this.taskReminder(sessionId, loopHistory);
         const ctx = assembleContext({
           systemPrompt: this.systemPrompt,
           toolDefinitions: this.tools.listDefinitions(),
@@ -435,6 +483,7 @@ export class AgentRuntime {
           contextCharLimit: this.config.contextCharLimit,
           installedSkills,
           skillBodies: this.skillBodies,
+          extraSystem,
         });
 
         this.emit({ type: "status", turn_id, phase: "llm" });
@@ -501,8 +550,9 @@ export class AgentRuntime {
               assistantText += chunk.text;
               this.emit({ type: "text", turn_id, delta: chunk.text });
             } else if (chunk.type === "tool_call_delta" && chunk.tool_call) {
-              toolCalls.push(chunk.tool_call);
-              this.emit({ type: "tool_call", turn_id, tool_call: chunk.tool_call });
+              const call = renameLegacySubagentCall(chunk.tool_call);
+              toolCalls.push(call);
+              this.emit({ type: "tool_call", turn_id, tool_call: call });
             } else if (chunk.type === "usage") {
               usage = chunk.usage;
             } else if (chunk.type === "error") {
@@ -812,7 +862,7 @@ export class AgentRuntime {
       if (this.abort?.signal.aborted) return cancelUnpersisted();
       const parsed = parseAgentCall(tc.function.arguments);
       if (!parsed.ok) {
-        const stored = await persist(tc, { content: parsed.error, is_error: true }, { tool: "agent" });
+        const stored = await persist(tc, { content: parsed.error, is_error: true }, { tool: AGENT_TOOL_NAME });
         if (stored === "storage_failed") return "storage_failed";
         continue;
       }
@@ -823,10 +873,10 @@ export class AgentRuntime {
           const stored = await persist(
             tc,
             {
-              content: `output_dir ${dir} overlaps ${clash}, already used by another agent call in this response.`,
+              content: `output_dir ${dir} overlaps ${clash}, already used by another subagent call in this response.`,
               is_error: true,
             },
-            { tool: "agent" },
+            { tool: AGENT_TOOL_NAME },
           );
           if (stored === "storage_failed") return "storage_failed";
           continue;
@@ -882,6 +932,20 @@ export class AgentRuntime {
     this.emit({ type: "status", turn_id, phase: "tool" });
     const outcomes = await Promise.all(
       ready.map(async (item) => {
+        const agentId = newId("subagent");
+        const tasks = TaskStore.forSession(this.workspacePath, sessionId);
+        if (item.call.task_id) {
+          const claimed = await tasks.claim(item.call.task_id, agentId);
+          if (!claimed.ok) {
+            return { item, result: { content: claimed.error, is_error: true } };
+          }
+        }
+        const releaseClaim = async (content: string): Promise<string> => {
+          const released = await tasks.releaseInProgress(agentId);
+          if (!released.length) return content;
+          const ids = released.map((task) => `#${task.id}`).join(", ");
+          return `${content}\n\nReleased back to pending: ${ids}. complete_task was not called.`;
+        };
         try {
           const result = await runIsolatedSubagent({
             workspacePath: this.workspacePath,
@@ -916,19 +980,24 @@ export class AgentRuntime {
             task: item.call.task,
             description: item.call.description,
             outputDir: item.call.output_dir,
+            agentId,
+            taskId: item.call.task_id,
           });
-          return { item, result };
+          return { item, result: { ...result, content: await releaseClaim(result.content) } };
         } catch (err) {
           return {
             item,
-            result: { content: `Subagent failed: ${String(err)}`, is_error: true } as ToolResult,
+            result: {
+              content: await releaseClaim(`Subagent failed: ${String(err)}`),
+              is_error: true,
+            },
           };
         }
       }),
     );
     for (const outcome of outcomes) {
       const stored = await persist(outcome.item.tc, outcome.result, {
-        tool: "agent",
+        tool: AGENT_TOOL_NAME,
         subagent_type: outcome.item.call.subagent_type,
         is_error: outcome.result.is_error,
       });
@@ -1027,6 +1096,7 @@ export class AgentRuntime {
       skillsRoot: this.skillsRoot,
       attachedSkillNames: new Set(this.skillBodies.map((skill) => skill.name)),
       blockedOutputDirs: this.batchOutputDirs,
+      sessionId,
     });
     return this.persistToolOutcome(
       sessionId,

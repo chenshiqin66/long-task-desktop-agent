@@ -18,7 +18,12 @@ import {
 } from "../src/tools/agentTool.js";
 import { normalizeOutputDir, outputDirsOverlap } from "../src/tools/writeScope.js";
 import { SHELL_TOOL_NAME } from "../src/tools/host.js";
-import { listSubagentToolRows } from "../src/store/subagentStore.js";
+import {
+  assertValidAgentId,
+  listSubagentToolRows,
+  SubagentStore,
+  subagentDir,
+} from "../src/store/subagentStore.js";
 import { rmWorkspace } from "./rmWorkspace.js";
 
 function config(over: Partial<AgentConfig> = {}): AgentConfig {
@@ -75,7 +80,12 @@ describe("subagent definitions", () => {
 
   it("keeps explore inside the ceiling and gives worker the write tools", () => {
     expect(toolsForSubagent("explore")).not.toContain("write_file");
-    expect(toolsForSubagent("explore")).not.toContain("agent");
+    expect(toolsForSubagent("explore")).not.toContain("subagent");
+    expect(toolsForSubagent("worker")).toContain("claim_task");
+    expect(toolsForSubagent("explore")).toContain("complete_task");
+    expect(toolsForSubagent("explore")).not.toContain("task_create");
+    expect(toolsForSubagent("worker")).not.toContain("task_update");
+    expect(toolsForSubagent("worker")).not.toContain("task_delete");
     expect(toolsForSubagent("worker")).toContain("write_file");
     expect(toolsForSubagent("worker")).not.toContain(SHELL_TOOL_NAME);
     expect(parseAgentCall(JSON.stringify({ description: "find auth", subagent_type: "explore", task: "where is login" })).ok).toBe(
@@ -89,6 +99,20 @@ describe("subagent definitions", () => {
           task: "where",
           output_dir: "docs",
         }),
+      ).ok,
+    ).toBe(false);
+    const assigned = parseAgentCall(
+      JSON.stringify({
+        description: "write schema",
+        subagent_type: "explore",
+        task: "Describe the users table.",
+        task_id: "#1",
+      }),
+    );
+    expect(assigned.ok && assigned.call.task_id).toBe("1");
+    expect(
+      parseAgentCall(
+        JSON.stringify({ description: "write schema", subagent_type: "explore", task: "x", task_id: "nope" }),
       ).ok,
     ).toBe(false);
   });
@@ -121,6 +145,76 @@ describe("AgentRuntime subagents", () => {
     await rmWorkspace(workspace);
   });
 
+  it("reads a legacy agent_ directory and rejects an id that leaves the session", async () => {
+    expect(() => assertValidAgentId("subagent_abc")).not.toThrow();
+    expect(() => assertValidAgentId("agent_abc")).not.toThrow();
+    expect(() => assertValidAgentId("subagent_../x")).toThrow(/Invalid subagent id/);
+    const sessionId = "sess_old";
+    const base = {
+      session_id: sessionId,
+      turn_id: "turn_1",
+      parent_turn_id: "turn_parent",
+      parent_tool_call_id: "parent_call",
+      subagent_type: "explore" as const,
+      description: "old record",
+      status: "completed" as const,
+      created_at: "2026-11-08T00:00:00.000Z",
+      updated_at: "2026-11-08T00:00:00.000Z",
+    };
+    const store = await SubagentStore.create(subagentDir(workspace, sessionId, "agent_old"), {
+      ...base,
+      agent_id: "agent_old",
+    });
+    await store.appendMessage({
+      id: "msg_old",
+      session_id: sessionId,
+      turn_id: "turn_1",
+      role: "tool",
+      name: "read_file",
+      content: "from the old directory",
+      tool_call_id: "tc_old",
+      created_at: base.created_at,
+    });
+    const rows = await listSubagentToolRows(workspace, sessionId);
+    expect(rows.map((row) => row.content)).toEqual(["from the old directory"]);
+  });
+
+  it("accepts a legacy agent tool call and stores it as subagent", async () => {
+    let parentCalls = 0;
+    const provider: LlmProvider = {
+      chatStream(req) {
+        if (systemText(req).includes("You are an explore subagent")) {
+          return chunks([textChunk("nothing to report")]);
+        }
+        parentCalls += 1;
+        if (parentCalls === 1) {
+          return chunks([
+            callChunk("old", "agent", {
+              description: "legacy name",
+              subagent_type: "explore",
+              task: "Look once and stop.",
+            }),
+          ]);
+        }
+        return chunks([textChunk("done")]);
+      },
+    };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: config(), provider });
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession("legacy");
+    await rt.submit(meta.session_id, "look");
+    const calls = events.filter((event) => event.type === "tool_call" && !event.parent_tool_call_id);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.type === "tool_call" && calls[0].tool_call.function.name).toBe("subagent");
+    const messages = await rt.loadMessages(meta.session_id);
+    const assistant = messages.find((message) => message.role === "assistant");
+    expect(assistant?.tool_calls?.[0]?.function.name).toBe("subagent");
+    const result = messages.find((message) => message.role === "tool");
+    expect(result?.name).toBe("subagent");
+    expect(result?.content).toContain("nothing to report");
+  });
+
   it("runs explore subagents together and leaves their file dumps out of the parent", async () => {
     await writeFile(join(workspace, "secret.txt"), "SENTINEL_ALPHA_42\n", "utf8");
     let inflight = 0;
@@ -132,10 +226,14 @@ describe("AgentRuntime subagents", () => {
         if (system.includes("You are an explore subagent")) {
           expect(system).toContain(`${EXPLORE_TOOL_ROUNDS} tool rounds`);
           expect(toolNames(req)).toEqual([
+            "claim_task",
+            "complete_task",
             "keyword_search",
             "list_dir",
             "read_file",
             "read_skill",
+            "task_get",
+            "task_list",
             "web_search",
           ]);
           return (async function* () {
@@ -154,12 +252,12 @@ describe("AgentRuntime subagents", () => {
         parentCalls += 1;
         if (parentCalls === 1) {
           return chunks([
-            callChunk("a1", "agent", {
+            callChunk("a1", "subagent", {
               description: "read secret one",
               subagent_type: "explore",
               task: "Read secret.txt and say whether it exists. Do not quote it.",
             }),
-            callChunk("a2", "agent", {
+            callChunk("a2", "subagent", {
               description: "read secret two",
               subagent_type: "explore",
               task: "Read secret.txt again and say whether it exists.",
@@ -208,6 +306,7 @@ describe("AgentRuntime subagents", () => {
 
     const subs = await readdir(join(workspace, ".agent", "sessions", meta.session_id, "subagents"));
     expect(subs).toHaveLength(2);
+    expect(subs.every((name) => name.startsWith("subagent_"))).toBe(true);
     const child = await readFile(
       join(workspace, ".agent", "sessions", meta.session_id, "subagents", subs[0]!, "messages.jsonl"),
       "utf8",
@@ -232,9 +331,11 @@ describe("AgentRuntime subagents", () => {
         if (system.includes("You are a worker subagent")) {
           expect(system).toContain(`${WORKER_TOOL_ROUNDS} tool rounds`);
           expect(toolNames(req)).toContain("write_file");
-          expect(toolNames(req)).not.toContain("agent");
+          expect(toolNames(req)).not.toContain("subagent");
           expect(toolNames(req)).not.toContain(SHELL_TOOL_NAME);
           expect(toolNames(req)).not.toContain("ask_user");
+          expect(toolNames(req)).toContain("claim_task");
+          expect(toolNames(req)).not.toContain("task_create");
           const wrote = req.messages.some((message) => message.role === "tool");
           if (!wrote) {
             return chunks([
@@ -247,7 +348,7 @@ describe("AgentRuntime subagents", () => {
         parentCalls += 1;
         if (parentCalls === 1) {
           return chunks([
-            callChunk("agent1", "agent", {
+            callChunk("agent1", "subagent", {
               description: "write the note",
               subagent_type: "worker",
               task: "Write docs/notes/note.md. Do not write anywhere else.",
@@ -293,13 +394,13 @@ describe("AgentRuntime subagents", () => {
         parentCalls += 1;
         if (parentCalls === 1) {
           return chunks([
-            callChunk("ok", "agent", {
+            callChunk("ok", "subagent", {
               description: "write page",
               subagent_type: "worker",
               task: "Create the page.",
               output_dir: "docs/guide",
             }),
-            callChunk("bad", "agent", {
+            callChunk("bad", "subagent", {
               description: "write chapter",
               subagent_type: "worker",
               task: "Create a chapter.",
@@ -333,7 +434,7 @@ describe("AgentRuntime subagents", () => {
         parentCalls += 1;
         if (parentCalls === 1) {
           return chunks([
-            callChunk("a1", "agent", {
+            callChunk("a1", "subagent", {
               description: "list the root",
               subagent_type: "explore",
               task: "List the workspace root.",

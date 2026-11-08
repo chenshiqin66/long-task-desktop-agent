@@ -55,9 +55,14 @@ describe("tool policy", () => {
     expect(classifyToolCall("keyword_search", '{"query":"x"}').risk).toBe("read");
     expect(classifyToolCall("web_search", '{"query":"news"}').risk).toBe("read");
     expect(classifyToolCall("read_skill", '{"name":"demo"}').risk).toBe("read");
+    expect(classifyToolCall("task_create", '{"subject":"Write schema","description":"Add the table."}').risk).toBe(
+      "read",
+    );
+    expect(classifyToolCall("claim_task", '{"task_id":"1"}').risk).toBe("read");
+    expect(classifyToolCall("complete_task", '{"task_id":"1"}').risk).toBe("read");
     expect(
       classifyToolCall(
-        "agent",
+        "subagent",
         JSON.stringify({ subagent_type: "explore", task: "find auth", description: "find auth" }),
       ).risk,
     ).toBe("read");
@@ -74,7 +79,7 @@ describe("tool policy", () => {
     expect(classifyToolCall("delete_file", '{"path":"a.ts"}').risk).toBe("write");
     expect(
       classifyToolCall(
-        "agent",
+        "subagent",
         JSON.stringify({
           subagent_type: "worker",
           task: "write the note",

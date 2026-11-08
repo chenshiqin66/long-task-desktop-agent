@@ -5,10 +5,11 @@ import type { Message, TraceEvent } from "../types.js";
 import { assertValidSessionId, sessionDir } from "./sessionStore.js";
 import type { SubagentType } from "../tools/agentTool.js";
 
-const AGENT_ID_RE = /^agent_[A-Za-z0-9]+$/;
+/** New records use subagent_. agent_ stays valid so sessions written before the rename still load. */
+const SUBAGENT_ID_RE = /^(?:sub)?agent_[A-Za-z0-9]+$/;
 
 export function assertValidAgentId(agentId: string): void {
-  if (!AGENT_ID_RE.test(agentId)) throw new Error(`Invalid agent id: ${JSON.stringify(agentId)}`);
+  if (!SUBAGENT_ID_RE.test(agentId)) throw new Error(`Invalid subagent id: ${JSON.stringify(agentId)}`);
 }
 
 export function subagentDir(workspacePath: string, sessionId: string, agentId: string): string {
@@ -95,7 +96,7 @@ export async function listSubagentToolRows(
   }
   const rows: SubagentToolRow[] = [];
   for (const name of names) {
-    if (!AGENT_ID_RE.test(name)) continue;
+    if (!SUBAGENT_ID_RE.test(name)) continue;
     let meta: SubagentMeta;
     try {
       meta = JSON.parse(await readFile(join(root, name, "meta.json"), "utf8")) as SubagentMeta;

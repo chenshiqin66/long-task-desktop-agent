@@ -110,6 +110,9 @@ describe("AgentRuntime", () => {
     expect(prompt).toContain("16 tool rounds");
     expect(prompt).toContain("keyword_search takes a path and every term");
     expect(prompt).toContain("Run any verification command yourself");
+    expect(prompt).toContain("call claim_task");
+    expect(prompt).toContain("task_create does not run the step");
+    expect(prompt).toContain("pass task_id");
   });
 
   let workspace: string;

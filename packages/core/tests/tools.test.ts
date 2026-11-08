@@ -36,23 +36,30 @@ describe("tools", () => {
     await rmWorkspace(workspace);
   });
 
-  it("refuses to run ask_user and agent as local commands", async () => {
+  it("refuses to run ask_user and subagent as local commands", async () => {
     await expect(
       host.execute("ask_user", JSON.stringify({ question: "继续？" }), ctx),
     ).rejects.toThrow(/not a local command/);
     await expect(
-      host.execute("agent", JSON.stringify({ description: "x", subagent_type: "explore", task: "y" }), ctx),
+      host.execute("subagent", JSON.stringify({ description: "x", subagent_type: "explore", task: "y" }), ctx),
     ).rejects.toThrow(/not a local command/);
     expect(host.listDefinitions().some((d) => d.name === "ask_user")).toBe(true);
-    expect(host.listDefinitions().some((d) => d.name === "agent")).toBe(true);
+    expect(host.listDefinitions().some((d) => d.name === "subagent")).toBe(true);
   });
 
   it("lists builtin tool definitions", () => {
     const names = host.listDefinitions().map((d) => d.name).sort();
     expect(names).toEqual([
       SHELL_TOOL_NAME,
-      "agent",
+      "subagent",
       "ask_user",
+      "claim_task",
+      "complete_task",
+      "task_create",
+      "task_delete",
+      "task_get",
+      "task_list",
+      "task_update",
       "delete_file",
       "keyword_search",
       "list_dir",

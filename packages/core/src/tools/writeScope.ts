@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { isPathInside, resolveWithinWorkspace } from "../pathSandbox.js";
 
 /** Workspace-relative directory a worker may write. Rejects the workspace root and `.agent`. */
@@ -27,9 +27,25 @@ export function outputDirsOverlap(a: string, b: string): boolean {
   return left.startsWith(right) || right.startsWith(left);
 }
 
+/** Session state, including the task list. File tools must not bypass claim_task / complete_task. */
+function agentStateError(workspacePath: string, requested: string): string | null {
+  if (!requested.trim()) return null;
+  let abs: string;
+  try {
+    abs = resolveWithinWorkspace(workspacePath, requested);
+  } catch {
+    return null;
+  }
+  const rel = relative(resolve(workspacePath), abs).replace(/\\/g, "/");
+  if (rel === ".agent" || rel.startsWith(".agent/")) {
+    return "Path is inside .agent session state. Use the task tools to change tasks.";
+  }
+  return null;
+}
+
 /**
- * Reject a write that leaves a subagent's output_dir, or lands in a directory
- * claimed by a subagent started in the same parent tool batch.
+ * Reject a write into `.agent`, a path outside a subagent's output_dir, or a
+ * directory claimed by a subagent started in the same parent tool batch.
  * Returns null when the path is outside the workspace; the file tool reports that itself.
  */
 export function writeScopeError(opts: {
@@ -38,6 +54,8 @@ export function writeScopeError(opts: {
   writeRoot?: string;
   blockedOutputDirs?: readonly string[];
 }): string | null {
+  const hidden = agentStateError(opts.workspacePath, opts.requested);
+  if (hidden) return hidden;
   if (!opts.writeRoot && !opts.blockedOutputDirs?.length) return null;
   if (!opts.requested.trim()) return null;
   let abs: string;

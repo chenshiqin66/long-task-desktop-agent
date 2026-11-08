@@ -29,6 +29,13 @@ export interface ToolContext {
   skillsRoot?: string;
   /** Worker subagent: writes must stay inside this workspace-relative directory. */
   writeRoot?: string;
+  /** Session whose task list these tools read. Subagents use the parent session. */
+  sessionId?: string;
+  /**
+   * Owner used when claim_task or complete_task omits owner.
+   * The parent leaves this unset and is recorded as main. A subagent sets its own id.
+   */
+  taskOwner?: string;
   /**
    * Parent turn: writes into these directories fail. Set for output_dir values
    * claimed by subagents in the same assistant response.

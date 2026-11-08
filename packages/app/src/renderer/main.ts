@@ -1694,7 +1694,7 @@ async function loadCurrent(): Promise<void> {
           detail: m.content.slice(0, 4000),
           open: false,
         });
-        if (m.name === "agent" && m.tool_call_id) {
+        if ((m.name === "subagent" || m.name === "agent") && m.tool_call_id) {
           let after = stepWrap(body) ?? undefined;
           for (const step of childrenByParent.get(m.tool_call_id) ?? []) {
             const child = appendToolStep(messagesEl, {

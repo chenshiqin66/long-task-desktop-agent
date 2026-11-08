@@ -47,6 +47,8 @@ export function assembleContext(opts: {
   contextCharLimit: number;
   installedSkills?: SkillCatalogEntry[];
   skillBodies?: SkillBodyAttachment[];
+  /** Attached for this request only. Not written into the session transcript. */
+  extraSystem?: string;
 }): AssembledContext {
   const toolsBlock = opts.toolDefinitions
     .map(
@@ -58,6 +60,7 @@ export function assembleContext(opts: {
     opts.systemPrompt,
     renderInstalledSkills(opts.installedSkills ?? []),
     renderSkillBodies(opts.skillBodies ?? []),
+    opts.extraSystem ?? "",
   ].filter((part) => part.length > 0);
   const systemContent = `${preface.join("\n\n")}\n\n# Tools\n${toolsBlock}`;
   const budget = Math.max(

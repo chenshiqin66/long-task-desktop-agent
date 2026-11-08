@@ -44,10 +44,13 @@ export async function runIsolatedSubagent(opts: {
   task: string;
   description: string;
   outputDir?: string;
+  /** Set by the parent when it has already claimed taskId as this id. */
+  agentId?: string;
+  taskId?: string;
   /** Live tool rows for the parent transcript. Omit in tests that only check the receipt. */
   onTool?: (event: SubagentToolEvent) => void;
 }): Promise<ToolResult> {
-  const agentId = newId("agent");
+  const agentId = opts.agentId ?? newId("subagent");
   const turnId = newId("turn");
   const dir = subagentDir(opts.workspacePath, opts.sessionId, agentId);
   const now = nowIso();
@@ -79,7 +82,7 @@ export async function runIsolatedSubagent(opts: {
       session_id: opts.sessionId,
       turn_id: turnId,
       role: "user",
-      content: opts.task,
+      content: assignedTaskText(opts.task, opts.taskId, agentId),
       created_at: nowIso(),
     },
   ];
@@ -232,6 +235,8 @@ export async function runIsolatedSubagent(opts: {
           llmBaseUrl: opts.config.baseUrl,
           skillsRoot: opts.skillsRoot,
           attachedSkillNames: attached,
+          sessionId: opts.sessionId,
+          taskOwner: agentId,
           ...(opts.outputDir ? { writeRoot: opts.outputDir } : {}),
         });
         const result = {
@@ -274,6 +279,11 @@ export async function runIsolatedSubagent(opts: {
     content: capSubagentResult(finalText, files),
     is_error: failed,
   });
+}
+
+function assignedTaskText(task: string, taskId: string | undefined, agentId: string): string {
+  if (!taskId) return task;
+  return `Task #${taskId} is already claimed as you (${agentId}). When the work is finished, call complete_task with task_id ${taskId} and omit owner. You may list and claim other pending tasks. You cannot create, edit, or delete tasks, and you cannot message another subagent.\n\n${task}`;
 }
 
 async function trace(

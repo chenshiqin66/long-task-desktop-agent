@@ -11,6 +11,7 @@ import { readSkillTool } from "./readSkill.js";
 import { runSkillScriptTool } from "./runSkillScript.js";
 import { ASK_USER_NOT_LOCAL, ASK_USER_TOOL_NAME, askUserTool } from "./askUserTool.js";
 import { AGENT_NOT_LOCAL, AGENT_TOOL_NAME, agentTool } from "./agentTool.js";
+import { taskTools } from "./taskTools.js";
 import { isDangerousBash } from "./dangerous.js";
 
 export { truncateOutput, SHELL_TOOL_NAME, isDangerousBash };
@@ -31,6 +32,7 @@ export function createBuiltinTools(): Tool[] {
     readSkillTool,
     runSkillScriptTool,
     agentTool,
+    ...taskTools,
   ];
 }
 
