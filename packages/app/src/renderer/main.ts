@@ -14,6 +14,7 @@ import {
   setToolDetailContent,
 } from "./ui.js";
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
+import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey, skillTokensIn } from "./skills.js";
 
 type SubagentToolRow = {
@@ -99,6 +100,8 @@ declare global {
         }>
       >;
       loadSubagentSteps(sessionId: string): Promise<SubagentToolRow[]>;
+      loadTasks(sessionId: string): Promise<TaskPanelView>;
+      loadWorkspaceTasks(path: string, sessionId: string): Promise<TaskPanelView>;
       loadSessionArtifacts(sessionId: string): Promise<{
         meta: Record<string, unknown>;
         messages: unknown[];
@@ -146,6 +149,9 @@ const composerLockNote = document.getElementById("composer-lock-note") as HTMLEl
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnImage = document.getElementById("btn-image") as HTMLButtonElement;
+const btnTasks = document.getElementById("btn-tasks") as HTMLButtonElement;
+const taskCountEl = document.getElementById("task-count")!;
+const taskPanelEl = document.getElementById("task-panel")!;
 const imageInput = document.getElementById("image-input") as HTMLInputElement;
 const composerEl = document.getElementById("composer")!;
 const composerImages = document.getElementById("composer-images")!;
@@ -171,6 +177,9 @@ const pageCtxMenu = document.getElementById("page-ctx-menu")!;
 const pageCtxCopy = pageCtxMenu.querySelector('[data-ctx="copy"]') as HTMLButtonElement;
 
 let currentSessionId: string | null = null;
+let taskPanel: TaskPanelView = { rows: [], unreadable: [], attention: 0 };
+let taskPanelOpen = false;
+let taskLoad = 0;
 let currentSessionTitle = "";
 let streamingEl: HTMLElement | null = null;
 /** Raw markdown accumulated during stream — never read back from DOM after rich render. */
@@ -391,6 +400,7 @@ function setMainView(view: MainView): void {
   }
   if (!findBar.hidden) runFind(true);
   else if (!conversationEl.hidden && followTail) revealTail();
+  syncTaskChrome();
 }
 
 function coverStageWithSkills(): void {
@@ -399,6 +409,7 @@ function coverStageWithSkills(): void {
   storeDock.hidden = true;
   mainBar.classList.add("is-covered");
   if (document.activeElement === inputEl) inputEl.blur();
+  syncTaskChrome();
 }
 
 function leaveSkillsPage(): void {
@@ -911,6 +922,49 @@ function updateChrome(): void {
   btnImage.disabled = !canCompose;
   syncImageRemoveLock();
   syncLiveDock();
+  syncTaskChrome();
+}
+
+function syncTaskChrome(): void {
+  const chat = !composerDock.hidden && !skillsPageOpen;
+  const hasTasks = taskPanel.rows.length > 0 || taskPanel.unreadable.length > 0;
+  btnTasks.hidden = !chat || !hasTasks;
+  const open = chat && taskPanelOpen && hasTasks;
+  taskPanelEl.hidden = !open;
+  btnTasks.setAttribute("aria-expanded", open ? "true" : "false");
+  btnTasks.classList.toggle("is-attention", taskPanel.attention > 0);
+  taskCountEl.textContent = hasTasks ? String(taskPanel.rows.length) : "";
+}
+
+async function refreshTasks(): Promise<void> {
+  const token = ++taskLoad;
+  const sessionId = currentSessionId;
+  if (!sessionId) {
+    taskPanel = { rows: [], unreadable: [], attention: 0 };
+    taskPanelOpen = false;
+    syncTaskChrome();
+    return;
+  }
+  const other = viewWorkspace && !sameWorkspace(viewWorkspace, activeWorkspace) ? viewWorkspace : null;
+  try {
+    const next = other
+      ? await window.agent.loadWorkspaceTasks(other, sessionId)
+      : await window.agent.loadTasks(sessionId);
+    if (token !== taskLoad || sessionId !== currentSessionId) return;
+    taskPanel = next;
+    if (!next.rows.length && !next.unreadable.length) taskPanelOpen = false;
+    if (taskPanelOpen) renderTaskPanel(taskPanelEl, taskPanel);
+    syncTaskChrome();
+  } catch (err) {
+    if (token !== taskLoad) return;
+    showStatusError(err);
+  }
+}
+
+function taskEventForCurrentView(): boolean {
+  if (!currentSessionId) return false;
+  if (!isRunning) return true;
+  return currentSessionId === runGate.runSessionId && sameWorkspace(viewWorkspace, activeWorkspace);
 }
 
 function composerKey(workspace: string | null, sessionId: string | null): string {
@@ -1562,6 +1616,7 @@ async function showSession(workspace: string, sessionId: string, title: string):
   leaveSkillsPage();
   if (sameSession) {
     setMainView(activeView);
+    void refreshTasks();
     return;
   }
   rememberComposer();
@@ -1587,6 +1642,7 @@ async function showSession(workspace: string, sessionId: string, title: string):
     updateChrome();
     if (sameWorkspace(workspace, activeWorkspace)) void window.agent.watchSession(sessionId);
     else void window.agent.watchSession(null);
+    void refreshTasks();
   } catch (err) {
     showStatusError(err);
   }
@@ -1633,6 +1689,7 @@ async function showNewPage(): Promise<void> {
   setStatus("", false);
   updateChrome();
   void window.agent.watchSession(null);
+  void refreshTasks();
   if (!inputEl.disabled) inputEl.focus();
 }
 
@@ -1777,6 +1834,7 @@ async function applyWorkspace(path: string | null): Promise<void> {
   setStatus("", false);
   syncEmptyState();
   updateChrome();
+  void refreshTasks();
 }
 
 document.getElementById("btn-workspace")!.onclick = async () => {
@@ -2141,6 +2199,20 @@ function requestStop(): void {
   })();
 }
 
+btnTasks.onclick = () => {
+  if (btnTasks.hidden) return;
+  taskPanelOpen = !taskPanelOpen;
+  if (taskPanelOpen) renderTaskPanel(taskPanelEl, taskPanel);
+  syncTaskChrome();
+};
+
+taskPanelEl.addEventListener("click", (ev) => {
+  const target = ev.target;
+  if (!(target instanceof Element) || !target.closest(".task-panel-close")) return;
+  taskPanelOpen = false;
+  syncTaskChrome();
+});
+
 btnSend.onclick = () => {
   if (pendingAsk && viewingRun()) {
     void answerPending(inputEl.value);
@@ -2285,6 +2357,12 @@ window.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && !findBar.hidden) {
     ev.preventDefault();
     closeFindBar();
+    return;
+  }
+  if (ev.key === "Escape" && taskPanelOpen && !taskPanelEl.hidden) {
+    ev.preventDefault();
+    taskPanelOpen = false;
+    syncTaskChrome();
     return;
   }
   if (ev.key === "Escape" && isRunning && viewingRun()) {
@@ -2623,6 +2701,12 @@ function finishRun(reason: string, refreshStore: boolean): void {
 }
 
 window.agent.onEvent((e) => {
+  if (
+    (e.type === "tool_result" || e.type === "task_notification" || e.type === "done") &&
+    taskEventForCurrentView()
+  ) {
+    void refreshTasks();
+  }
   // Auto-title may arrive after `done` cleared the run gate — always apply.
   if (e.type === "session_title") {
     if (currentSessionId === e.session_id) {

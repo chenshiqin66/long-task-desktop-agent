@@ -109,6 +109,7 @@
         </div>
 
         <div class="float-stack">
+          <section id="task-panel" class="task-panel" hidden aria-label="本会话的任务"></section>
           <div id="permission-dock" class="permission-dock" hidden></div>
 
           <footer class="composer-dock">
@@ -125,6 +126,7 @@
                 <p id="composer-lock-note" class="composer-lock-note" hidden>另一个会话正在执行</p>
               </div>
               <div class="composer-actions">
+                <div class="composer-tools">
                 <button type="button" id="btn-image" class="btn-image" aria-label="添加图片" disabled>
                   <svg viewBox="0 0 16 16" aria-hidden="true">
                     <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
@@ -133,6 +135,10 @@
                   </svg>
                 </button>
                 <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+                <button type="button" id="btn-tasks" class="btn-tasks" hidden aria-expanded="false" aria-controls="task-panel">
+                  任务<span id="task-count" class="task-count"></span>
+                </button>
+                </div>
                 <button type="button" id="btn-send" class="btn btn-accent" disabled>发送</button>
               </div>
             </div>

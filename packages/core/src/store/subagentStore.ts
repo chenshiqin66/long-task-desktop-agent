@@ -12,6 +12,10 @@ export function assertValidAgentId(agentId: string): void {
   if (!SUBAGENT_ID_RE.test(agentId)) throw new Error(`Invalid subagent id: ${JSON.stringify(agentId)}`);
 }
 
+export function isSubagentId(id: string): boolean {
+  return SUBAGENT_ID_RE.test(id);
+}
+
 export function subagentDir(workspacePath: string, sessionId: string, agentId: string): string {
   assertValidSessionId(sessionId);
   assertValidAgentId(agentId);
@@ -128,4 +132,33 @@ export async function listSubagentToolRows(
     }
   }
   return rows;
+}
+
+const SUBAGENT_STATUSES = new Set<SubagentMeta["status"]>(["running", "completed", "error", "cancelled"]);
+
+/** agent id → status. Missing ids are not running. Unreadable meta files are skipped. */
+export async function listSubagentStatuses(
+  workspacePath: string,
+  sessionId: string,
+): Promise<Record<string, SubagentMeta["status"]>> {
+  assertValidSessionId(sessionId);
+  const root = join(sessionDir(workspacePath, sessionId), "subagents");
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw err;
+  }
+  const statuses: Record<string, SubagentMeta["status"]> = {};
+  for (const name of names) {
+    if (!SUBAGENT_ID_RE.test(name)) continue;
+    try {
+      const meta = JSON.parse(await readFile(join(root, name, "meta.json"), "utf8")) as Partial<SubagentMeta>;
+      if (meta.status && SUBAGENT_STATUSES.has(meta.status)) statuses[name] = meta.status;
+    } catch {
+      continue;
+    }
+  }
+  return statuses;
 }
