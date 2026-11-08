@@ -28,6 +28,9 @@ import {
   skillDirectory,
   uninstallSkill,
   listSubagentToolRows,
+  listSubagentStatuses,
+  TaskStore,
+  buildTaskPanel,
 } from "@agent/core";
 import type { AgentConfig, ImageMime, PermissionDecision, RuntimeEvent, StoredConfig, SubmittedImage } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
@@ -188,6 +191,12 @@ async function existingWorkspaces(paths: string[]): Promise<string[]> {
     }
   }
   return out;
+}
+
+async function readTaskPanel(workspace: string, sessionId: string) {
+  const snapshot = await TaskStore.forSession(workspace, sessionId).list();
+  const statuses = await listSubagentStatuses(workspace, sessionId);
+  return buildTaskPanel(snapshot, statuses);
 }
 
 async function assertKnownWorkspace(raw: string): Promise<string> {
@@ -563,6 +572,16 @@ app.whenReady().then(() => {
     assertValidSessionId(sessionId);
     if (!workspacePath) return [];
     return listSubagentToolRows(workspacePath, sessionId);
+  });
+  ipcMain.handle("agent:loadTasks", async (_e, sessionId: string) => {
+    assertValidSessionId(sessionId);
+    if (!workspacePath) return { rows: [], unreadable: [], attention: 0 };
+    return readTaskPanel(workspacePath, sessionId);
+  });
+  ipcMain.handle("agent:loadWorkspaceTasks", async (_e, raw: string, sessionId: string) => {
+    const path = await assertKnownWorkspace(raw);
+    assertValidSessionId(sessionId);
+    return readTaskPanel(path, sessionId);
   });
   ipcMain.handle("agent:loadSessionArtifacts", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);

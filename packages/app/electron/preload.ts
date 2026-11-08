@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld("agent", {
   listSessions: () => ipcRenderer.invoke("agent:listSessions"),
   loadMessages: (sessionId: string) => ipcRenderer.invoke("agent:loadMessages", sessionId),
   loadSubagentSteps: (sessionId: string) => ipcRenderer.invoke("agent:loadSubagentSteps", sessionId),
+  loadTasks: (sessionId: string) => ipcRenderer.invoke("agent:loadTasks", sessionId),
+  loadWorkspaceTasks: (path: string, sessionId: string) =>
+    ipcRenderer.invoke("agent:loadWorkspaceTasks", path, sessionId),
   loadWorkspaceSubagentSteps: (path: string, sessionId: string) =>
     ipcRenderer.invoke("agent:loadWorkspaceSubagentSteps", path, sessionId),
   loadSessionArtifacts: (sessionId: string) =>
