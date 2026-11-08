@@ -66,6 +66,7 @@
               </button>
             </div>
           </div>
+          <button type="button" id="explain-toggle" class="explain-toggle" hidden>&lt;-解释</button>
         </header>
 
         <div class="main-stage">
@@ -139,10 +140,64 @@
           </footer>
         </div>
       </main>
+      <aside id="explain-pane" hidden aria-label="解释">
+        <header class="explain-bar">
+          <span class="explain-title">解释</span>
+          <button type="button" id="explain-collapse" class="explain-toggle">收起-&gt;</button>
+        </header>
+        <div class="main-stage explain-stage">
+          <div id="explain-find-bar" class="find-bar" hidden>
+            <svg class="find-glyph" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.25" fill="none" stroke="currentColor" stroke-width="1.4" />
+              <path d="M10.2 10.2 L13.2 13.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
+            <label class="sr-only" for="explain-find-input">搜索解释</label>
+            <input id="explain-find-input" type="text" placeholder="搜索对话内容" autocomplete="off" spellcheck="false" />
+            <span id="explain-find-count" class="find-count"></span>
+            <button type="button" id="explain-find-prev" class="find-nav" aria-label="上一处">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10 L8 6 L12 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button type="button" id="explain-find-next" class="find-nav" aria-label="下一处">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6 L8 10 L12 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button type="button" id="explain-find-close" class="find-nav" aria-label="关闭搜索">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 5 L11 11 M11 5 L5 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
+            </button>
+          </div>
+          <div id="explain-conversation" class="conversation">
+            <div id="explain-messages" class="messages" aria-live="polite"></div>
+            <div id="explain-status" class="run-status" hidden></div>
+          </div>
+          <div id="explain-float" class="float-stack">
+            <footer class="composer-dock">
+              <div id="explain-composer">
+                <div id="explain-images" class="composer-images" hidden></div>
+                <label class="sr-only" for="explain-input">解释</label>
+                <div class="composer-input">
+                  <textarea id="explain-input" rows="2" placeholder="简答"></textarea>
+                  <p id="explain-lock" class="composer-lock-note" hidden>另一个会话的解释正在进行</p>
+                </div>
+                <div class="composer-actions">
+                  <button type="button" id="explain-image" class="btn-image" aria-label="添加图片">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
+                      <circle cx="5.5" cy="6" r="1.1" fill="currentColor" />
+                      <path d="M2.5 11.5 L6 8.2 L8.2 10.2 L10.4 7.4 L13.5 11.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                    </svg>
+                  </button>
+                  <input id="explain-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+                  <button type="button" id="explain-send" class="btn btn-accent">发送</button>
+                </div>
+              </div>
+            </footer>
+          </div>
+        </div>
+      </aside>
     </div>
 
     <div id="page-ctx-menu" class="page-ctx-menu" hidden role="menu">
       <button type="button" class="page-ctx-item" role="menuitem" data-ctx="copy">复制</button>
+      <button type="button" class="page-ctx-item" role="menuitem" data-ctx="explain" hidden>解释</button>
     </div>
 
     <dialog id="config-dialog" class="config-dialog">

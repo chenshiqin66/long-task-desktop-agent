@@ -110,6 +110,21 @@ describe("subagent definitions", () => {
       }),
     );
     expect(assigned.ok && assigned.call.task_id).toBe("1");
+    expect(assigned.ok && assigned.call.delivery).toBe("joined");
+    const deferred = parseAgentCall(
+      JSON.stringify({
+        description: "read later",
+        subagent_type: "explore",
+        task: "Find the login check.",
+        delivery: "deferred",
+      }),
+    );
+    expect(deferred.ok && deferred.call.delivery).toBe("deferred");
+    expect(
+      parseAgentCall(
+        JSON.stringify({ description: "read later", subagent_type: "explore", task: "x", delivery: "later" }),
+      ).ok,
+    ).toBe(false);
     expect(
       parseAgentCall(
         JSON.stringify({ description: "write schema", subagent_type: "explore", task: "x", task_id: "nope" }),

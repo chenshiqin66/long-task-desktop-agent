@@ -370,14 +370,59 @@ export function appendReaskButton(messageBody: HTMLElement, onClick: () => void)
   msg.append(btn);
 }
 
+const noticeHosts = new WeakSet<HTMLElement>();
+const noticeHostObserver = new ResizeObserver((entries) => {
+  for (const entry of entries) {
+    entry.target.querySelectorAll(".msg.notice").forEach((node) => {
+      if (node instanceof HTMLElement) fitTaskNotice(node);
+    });
+  }
+});
+
+/** Collapsed receipts stay at 4 lines. A wider pane can change how many lines the text wraps to. */
+function watchNoticeHost(container: HTMLElement): void {
+  if (noticeHosts.has(container)) return;
+  noticeHosts.add(container);
+  noticeHostObserver.observe(container);
+}
+
+function fitTaskNotice(card: HTMLElement): void {
+  if (card.classList.contains("is-open")) return;
+  const body = card.querySelector(".notice-body");
+  const toggle = card.querySelector(".notice-toggle");
+  if (!(body instanceof HTMLElement) || !(toggle instanceof HTMLButtonElement)) return;
+  if (body.clientHeight === 0) return;
+  card.classList.remove("is-short");
+  const overflow = body.scrollHeight > body.clientHeight + 1;
+  card.classList.toggle("is-short", !overflow);
+  toggle.hidden = !overflow;
+}
+
 /** Background receipt. Not a user bubble, so it does not get a re-ask control. */
 export function appendTaskNotice(container: HTMLElement, content: string): HTMLElement {
   const div = el("div", { class: "msg notice" });
-  div.append(el("span", { class: "msg-role" }, "后台完成"));
-  const body = el("div", { class: "msg-body" });
+  const head = el("div", { class: "notice-head" });
+  head.append(el("span", { class: "notice-title" }, "后台完成"));
+  const toggle = el("button", { type: "button", class: "notice-toggle" }, "展开↓");
+  toggle.hidden = true;
+  toggle.setAttribute("aria-expanded", "false");
+  head.append(toggle);
+  const body = el("div", { class: "notice-body msg-body" });
   body.textContent = content;
-  div.append(body);
+  div.append(head, body);
+  toggle.addEventListener("click", () => {
+    const open = div.classList.toggle("is-open");
+    toggle.textContent = open ? "收起↑" : "展开↓";
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (!open) {
+      body.scrollTop = 0;
+      fitTaskNotice(div);
+    }
+  });
   container.appendChild(div);
+  watchNoticeHost(container);
+  fitTaskNotice(div);
+  if (body.clientHeight === 0) requestAnimationFrame(() => fitTaskNotice(div));
   return body;
 }
 
@@ -386,9 +431,10 @@ export function appendMessage(
   container: HTMLElement,
   role: string,
   content: string,
-  opts?: { rich?: boolean; images?: string[] },
+  opts?: { rich?: boolean; images?: string[]; messageId?: string },
 ) {
   const div = el("div", { class: `msg ${role}` });
+  if (opts?.messageId) div.dataset.messageId = opts.messageId;
   if (opts?.images?.length) {
     const row = el("div", { class: "msg-images" });
     for (const src of opts.images) {
@@ -417,11 +463,23 @@ export function setToolDetailContent(node: HTMLElement, detail: string): void {
 
 export function appendToolStep(
   container: HTMLElement,
-  opts: { title: string; detail?: string; open?: boolean; nested?: boolean; after?: HTMLElement },
+  opts: {
+    title: string;
+    detail?: string;
+    open?: boolean;
+    nested?: boolean;
+    after?: HTMLElement;
+    toolCallId?: string;
+    parentToolCallId?: string;
+    messageId?: string;
+  },
 ): HTMLElement {
   const wrap = el("div", {
     class: opts.nested ? "msg tool-step tool-step-nested" : "msg tool-step",
   });
+  if (opts.messageId) wrap.dataset.messageId = opts.messageId;
+  if (opts.toolCallId) wrap.dataset.toolCallId = opts.toolCallId;
+  if (opts.parentToolCallId) wrap.dataset.parentToolCallId = opts.parentToolCallId;
   const details = document.createElement("details");
   if (opts.open) details.open = true;
   const summary = el("summary", { class: "tool-summary" }, opts.title);
@@ -556,15 +614,10 @@ export function renderEmptyState(container: HTMLElement, kind: "no-workspace" | 
         <li><strong>发送指令</strong> — 写文件走 write_file；命令 / 搜索 / 联网按需调用</li>
       </ol>
       <p class="empty-hint">写删类命令会弹出确认；危险命令会被拦截。</p>`;
-  } else if (kind === "no-session") {
+  } else {
     box.innerHTML = `
       <h2 class="empty-title">提出好问题，才是真智慧</h2>
       <p class="empty-hint">人迷茫，不是因为不知道答案，而是不知道问题。</p>`;
-  } else {
-    box.innerHTML = `
-      <p class="empty-kicker">会话已打开</p>
-      <h2 class="empty-title">输入任务，Enter 发送</h2>
-      <p class="empty-hint">Shift+Enter 换行。运行中发送按钮会变成「停止」。需要你做决定时，这一轮会停下来等回答。</p>`;
   }
   container.appendChild(box);
 }

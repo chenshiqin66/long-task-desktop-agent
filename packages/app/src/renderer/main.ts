@@ -15,6 +15,7 @@ import {
 } from "./ui.js";
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey, skillTokensIn } from "./skills.js";
+import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 
 type SubagentToolRow = {
   parent_tool_call_id: string;
@@ -48,6 +49,7 @@ declare global {
         sessionId: string,
       ): Promise<
         Array<{
+          id?: string;
           role: string;
           content: string;
           name?: string;
@@ -89,6 +91,7 @@ declare global {
       listSessions(): Promise<Array<{ session_id: string; title?: string; updated_at?: string }>>;
       loadMessages(sessionId: string): Promise<
         Array<{
+          id?: string;
           role: string;
           content: string;
           name?: string;
@@ -124,6 +127,21 @@ declare global {
       openSkillFolder(name: string): Promise<void>;
       readSessionImage(sessionId: string, relativePath: string): Promise<string>;
       cancel(): Promise<void>;
+      explainLoad(
+        workspace: string,
+        sessionId: string,
+      ): Promise<{ open: boolean; messages: Array<{ id?: string; role: string; content: string; name?: string; is_error?: boolean; tool_call_id?: string; tool_call_arguments?: string; images?: Array<{ path: string }> }> }>;
+      explainSetOpen(workspace: string, sessionId: string, open: boolean): Promise<void>;
+      explainSubmit(
+        workspace: string,
+        sessionId: string,
+        text: string,
+        images?: Array<{ mime: string; base64: string }>,
+        sourceMessageIds?: string[] | null,
+      ): Promise<void>;
+      explainCancel(): Promise<void>;
+      explainReadImage(workspace: string, sessionId: string, relativePath: string): Promise<string>;
+      onExplainEvent(cb: (e: any) => void): () => void;
       respondPermission(requestId: string, decision: "allow" | "deny"): Promise<boolean>;
       answerAsk(requestId: string, text: string): Promise<boolean>;
       getConfig(): Promise<any>;
@@ -169,6 +187,9 @@ const btnSkills = document.getElementById("btn-skills") as HTMLButtonElement;
 const skillMenu = document.getElementById("skill-menu") as HTMLElement;
 const pageCtxMenu = document.getElementById("page-ctx-menu")!;
 const pageCtxCopy = pageCtxMenu.querySelector('[data-ctx="copy"]') as HTMLButtonElement;
+const pageCtxExplain = pageCtxMenu.querySelector('[data-ctx="explain"]') as HTMLButtonElement;
+let explainApi: ExplainPane | null = null;
+let ctxSource: "main" | "explain" | "file" = "main";
 
 let currentSessionId: string | null = null;
 let currentSessionTitle = "";
@@ -686,11 +707,29 @@ function selectionTextIn(root: HTMLElement): string {
 }
 
 function pageCopyText(): string {
-  const root = activeView === "chat" ? messagesEl : storeView;
+  const root =
+    ctxSource === "explain" && explainApi?.searchRoot()
+      ? explainApi.searchRoot()!
+      : activeView === "chat"
+        ? messagesEl
+        : storeView;
   const selected = selectionTextIn(root);
   if (selected) return selected;
-  if (activeView !== "chat") return (storeView.textContent || "").trim();
+  if (ctxSource === "file") return (storeView.textContent || "").trim();
   return (root.innerText || root.textContent || "").trim();
+}
+
+function selectedMessageIds(root: HTMLElement): string[] {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return [];
+  const range = sel.getRangeAt(0);
+  const ids: string[] = [];
+  root.querySelectorAll<HTMLElement>(".msg[data-message-id]").forEach((node) => {
+    if (!range.intersectsNode(node)) return;
+    const id = node.dataset.messageId;
+    if (id) ids.push(id);
+  });
+  return ids;
 }
 
 async function copyPageContent(): Promise<void> {
@@ -721,11 +760,32 @@ function showPageCtxMenu(clientX: number, clientY: number): void {
 }
 
 function onPageContextMenu(ev: MouseEvent): void {
+  const target = ev.target;
+  if (!(target instanceof Node)) return;
+  if (explainApi?.contains(target)) {
+    if (target instanceof Element && target.closest("#explain-composer")) return;
+    ctxSource = "explain";
+  } else if (messagesEl.contains(target)) {
+    ctxSource = "main";
+  } else {
+    ctxSource = "file";
+  }
   ev.preventDefault();
+  const root =
+    ctxSource === "explain" && explainApi?.searchRoot()
+      ? explainApi.searchRoot()!
+      : ctxSource === "main"
+        ? messagesEl
+        : storeView;
+  const selected = selectionTextIn(root).trim();
+  const showExplain = ctxSource === "main" || ctxSource === "explain";
+  pageCtxExplain.hidden = !showExplain;
+  pageCtxExplain.disabled = !selected;
   showPageCtxMenu(ev.clientX, ev.clientY);
 }
 
 messagesEl.addEventListener("contextmenu", onPageContextMenu);
+document.getElementById("explain-conversation")?.addEventListener("contextmenu", onPageContextMenu);
 messagesEl.addEventListener(
   "scroll",
   () => {
@@ -746,6 +806,19 @@ pageCtxCopy.addEventListener("click", (ev) => {
   ev.preventDefault();
   hidePageCtxMenu();
   void copyPageContent();
+});
+pageCtxExplain.addEventListener("click", (ev) => {
+  ev.preventDefault();
+  const source = ctxSource;
+  const root =
+    source === "explain" && explainApi?.searchRoot()
+      ? explainApi.searchRoot()!
+      : messagesEl;
+  const text = selectionTextIn(root);
+  const ids = source === "main" ? selectedMessageIds(messagesEl) : null;
+  hidePageCtxMenu();
+  if (!text.trim() || !explainApi) return;
+  explainApi.ask(text, source === "main" ? ids : null);
 });
 document.addEventListener("click", (ev) => {
   if (pageCtxMenu.hidden) return;
@@ -823,6 +896,33 @@ function stepWrap(body: HTMLElement): HTMLElement | null {
   return wrap instanceof HTMLElement ? wrap : null;
 }
 
+function rowByToolCall(host: HTMLElement, callId: string, parentId?: string): HTMLElement | null {
+  const nodes = host.querySelectorAll<HTMLElement>("[data-tool-call-id]");
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!;
+    if (node.dataset.toolCallId !== callId) continue;
+    if ((node.dataset.parentToolCallId ?? "") !== (parentId ?? "")) continue;
+    return node;
+  }
+  return null;
+}
+
+/** Where the next nested row goes. Maps are cleared when the parent turn ends; the DOM row stays. */
+function anchorForParent(host: HTMLElement, parentId: string): HTMLElement | undefined {
+  const fromTail = nestedTails.get(parentId);
+  if (fromTail?.isConnected) return fromTail;
+  const fromMap = toolStepNodes.get(parentId);
+  if (fromMap?.isConnected) return fromMap;
+  let last: HTMLElement | undefined;
+  const nested = host.querySelectorAll<HTMLElement>("[data-parent-tool-call-id]");
+  for (let i = 0; i < nested.length; i++) {
+    const node = nested[i]!;
+    if (node.dataset.parentToolCallId === parentId) last = node;
+  }
+  if (last) return last;
+  return rowByToolCall(host, parentId) ?? undefined;
+}
+
 function toolCallTitle(name: string, argsJson: string): string {
   let hint = "";
   try {
@@ -881,17 +981,18 @@ function updateChrome(): void {
   const wakeHere = wakeAcceptsInput && onRun && !asking;
   const wakeDraft = wakeHere && (inputEl.value.trim().length > 0 || pendingImages.length > 0);
   const canCompose = hasWorkspace && onRun && !asking && !creatingSession && (!isRunning || wakeHere);
+  const hasDraft = inputEl.value.trim().length > 0 || pendingImages.length > 0;
   // Stop belongs to the running session's composer, not to every page.
   // During a continuation, text in the box sends; an empty box still stops.
   const stopHere = isRunning && onRun && !asking && !wakeDraft;
   const stopping = stopHere && stopRequested;
-  btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose;
+  btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose || !hasDraft;
   btnSend.textContent = asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : "发送";
   btnSend.classList.toggle("is-stop", stopHere && !stopping);
   btnSend.classList.toggle("is-stopping", stopping);
   btnSend.setAttribute(
     "aria-label",
-    asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : canCompose ? "发送" : "发送已禁用",
+    asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : canCompose && hasDraft ? "发送" : "发送已禁用",
   );
   btnNew.disabled = !hasWorkspace || creatingSession;
   inputEl.disabled = lockedOut || creatingSession || (isRunning && !asking && !wakeHere);
@@ -911,6 +1012,7 @@ function updateChrome(): void {
   btnImage.disabled = !canCompose;
   syncImageRemoveLock();
   syncLiveDock();
+  explainApi?.sync(currentSessionId, viewWorkspace ?? activeWorkspace);
 }
 
 function composerKey(workspace: string | null, sessionId: string | null): string {
@@ -1707,6 +1809,8 @@ async function loadCurrent(): Promise<void> {
           title: `工具结果${m.name ? ` · ${m.name}` : ""}`,
           detail: m.content.slice(0, 4000),
           open: false,
+          toolCallId: m.tool_call_id,
+          messageId: m.id,
         });
         if ((m.name === "subagent" || m.name === "agent") && m.tool_call_id) {
           let after = stepWrap(body) ?? undefined;
@@ -1717,6 +1821,7 @@ async function loadCurrent(): Promise<void> {
               open: false,
               nested: true,
               after,
+              parentToolCallId: m.tool_call_id,
             });
             after = stepWrap(child) ?? after;
           }
@@ -1727,11 +1832,11 @@ async function loadCurrent(): Promise<void> {
             ensureReask(openQuestion.body, openQuestion.text);
             openQuestion = null;
           }
-          const body = appendMessage(messagesEl, "assistant", m.content, { rich: true });
+          const body = appendMessage(messagesEl, "assistant", m.content, { rich: true, messageId: m.id });
           body.closest(".msg")?.classList.add("is-cancelled");
         } else {
           openQuestion = null;
-          appendMessage(messagesEl, "assistant", m.content, { rich: true });
+          appendMessage(messagesEl, "assistant", m.content, { rich: true, messageId: m.id });
         }
       } else if (m.role === "user" && m.name === "task-notification") {
         if (openQuestion) closeUnanswered();
@@ -1740,7 +1845,7 @@ async function loadCurrent(): Promise<void> {
       } else if (m.role === "user") {
         if (openQuestion) closeUnanswered();
         const urls = await imageDataUrls(viewWorkspace, currentSessionId, m.images);
-        openQuestion = { body: appendUserQuestion(m.content, urls), text: m.content };
+        openQuestion = { body: appendUserQuestion(m.content, urls, m.id), text: m.content };
       } else {
         openQuestion = null;
         const urls = await imageDataUrls(viewWorkspace, currentSessionId, m.images);
@@ -1902,6 +2007,7 @@ function renderPendingImages(): void {
       pendingImages.splice(index, 1);
       renderPendingImages();
       rememberComposer();
+      updateChrome();
     };
     thumb.append(img, remove);
     composerImages.append(thumb);
@@ -2042,8 +2148,11 @@ function ensureReask(body: HTMLElement, text: string): void {
   });
 }
 
-function appendUserQuestion(text: string, images: string[]): HTMLElement {
-  return appendMessage(messagesEl, "user", text, images.length ? { images } : undefined);
+function appendUserQuestion(text: string, images: string[], messageId?: string): HTMLElement {
+  return appendMessage(messagesEl, "user", text, {
+    ...(images.length ? { images } : {}),
+    ...(messageId ? { messageId } : {}),
+  });
 }
 
 async function reask(text: string): Promise<void> {
@@ -2167,7 +2276,7 @@ inputEl.addEventListener("keydown", (ev) => {
 });
 inputEl.addEventListener("input", () => {
   rememberComposer();
-  if (wakeAcceptsInput) updateChrome();
+  updateChrome();
 });
 
 btnImage.onclick = () => imageInput.click();
@@ -2279,6 +2388,7 @@ messagesEl.addEventListener("click", (ev) => {
 window.addEventListener("keydown", (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f") {
     ev.preventDefault();
+    findScope = explainApi?.focusInside() ? "explain" : "main";
     openFindBar();
     return;
   }
@@ -2307,8 +2417,18 @@ const findCurrent = new Highlight() as unknown as FindHighlight;
 let findRanges: Range[] = [];
 let findIndex = 0;
 let findTimer = 0;
+let findScope: "main" | "explain" = "main";
+
+function findUi(): { bar: HTMLElement; input: HTMLInputElement; count: HTMLElement } {
+  if (findScope === "explain" && explainApi) {
+    return { bar: explainApi.findBar, input: explainApi.findInput, count: explainApi.findCount };
+  }
+  return { bar: findBar, input: findInput, count: findCount };
+}
 
 function findRoot(): HTMLElement {
+  if (findScope === "explain" && explainApi?.searchRoot()) return explainApi.searchRoot()!;
+  if (skillsPageOpen) return skillsPage;
   return activeView === "chat" ? messagesEl : storeView;
 }
 
@@ -2317,6 +2437,7 @@ function clearFindPaint(): void {
   findCurrent.clear();
   findRanges = [];
   findCount.textContent = "";
+  if (explainApi) explainApi.findCount.textContent = "";
 }
 
 function collectFindRanges(root: HTMLElement, query: string): Range[] {
@@ -2365,10 +2486,11 @@ function scrollFindRange(container: HTMLElement, range: Range): void {
 function paintFind(scroll: boolean): void {
   findHits.clear();
   findCurrent.clear();
-  const query = findInput.value;
+  const ui = findUi();
+  const query = ui.input.value;
   if (!query) {
     findRanges = [];
-    findCount.textContent = "";
+    ui.count.textContent = "";
     return;
   }
   if (findIndex >= findRanges.length) findIndex = 0;
@@ -2377,16 +2499,18 @@ function paintFind(scroll: boolean): void {
     else findHits.add(range);
   });
   if (!findRanges.length) {
-    findCount.textContent = "无匹配";
+    ui.count.textContent = "无匹配";
     return;
   }
-  findCount.textContent = `${findIndex + 1}/${findRanges.length}`;
+  ui.count.textContent = `${findIndex + 1}/${findRanges.length}`;
   if (scroll) scrollFindRange(findRoot(), findRanges[findIndex]!);
 }
 
 function runFind(resetIndex: boolean, scroll = true): void {
-  const query = findInput.value;
-  findInput.placeholder = activeView === "chat" ? "搜索对话内容" : "搜索当前页";
+  const ui = findUi();
+  const query = ui.input.value;
+  ui.input.placeholder =
+    findScope === "explain" || activeView === "chat" && !skillsPageOpen ? "搜索对话内容" : "搜索当前页";
   if (!query) {
     clearFindPaint();
     return;
@@ -2406,15 +2530,20 @@ function stepFind(delta: number): void {
 }
 
 function openFindBar(): void {
-  findBar.hidden = false;
-  findInput.placeholder = activeView === "chat" ? "搜索对话内容" : "搜索当前页";
-  findInput.focus();
-  findInput.select();
-  if (findInput.value) runFind(false);
+  findBar.hidden = findScope === "explain";
+  if (explainApi) explainApi.findBar.hidden = findScope !== "explain";
+  const ui = findUi();
+  ui.bar.hidden = false;
+  ui.input.placeholder =
+    findScope === "explain" || (activeView === "chat" && !skillsPageOpen) ? "搜索对话内容" : "搜索当前页";
+  ui.input.focus();
+  ui.input.select();
+  if (ui.input.value) runFind(false);
 }
 
 function closeFindBar(): void {
   findBar.hidden = true;
+  if (explainApi) explainApi.findBar.hidden = true;
   clearFindPaint();
   findIndex = 0;
 }
@@ -2431,7 +2560,8 @@ document.getElementById("find-prev")!.addEventListener("click", () => stepFind(-
 document.getElementById("find-close")!.addEventListener("click", () => closeFindBar());
 
 const findObserver = new MutationObserver(() => {
-  if (findBar.hidden || !findInput.value) return;
+  const ui = findUi();
+  if (ui.bar.hidden || !ui.input.value) return;
   if (findTimer) cancelAnimationFrame(findTimer);
   findTimer = requestAnimationFrame(() => {
     findTimer = 0;
@@ -2440,6 +2570,11 @@ const findObserver = new MutationObserver(() => {
 });
 findObserver.observe(messagesEl, { childList: true, subtree: true, characterData: true });
 findObserver.observe(storeView, { childList: true, subtree: true, characterData: true });
+findObserver.observe(document.getElementById("explain-conversation")!, {
+  childList: true,
+  subtree: true,
+  characterData: true,
+});
 
 function recordLivePrompt(e: {
   type: string;
@@ -2508,6 +2643,7 @@ function applyTranscript(host: HTMLElement, e: {
   tool_call?: { id: string; function: { name: string; arguments: string } };
   tool_call_id?: string;
   parent_tool_call_id?: string;
+  session_id?: string;
 }): boolean {
   const place = (mutate: () => void) => {
     if (host === messagesEl) keepTail(mutate);
@@ -2536,15 +2672,15 @@ function applyTranscript(host: HTMLElement, e: {
     if (!parentId && streamingEl && streamBuffer) paintStreamRich(true);
     if (!parentId) resetStreamTarget(null);
     place(() => {
-      const after = parentId
-        ? nestedTails.get(parentId) ?? toolStepNodes.get(parentId)
-        : undefined;
+      const after = parentId ? anchorForParent(host, parentId) : undefined;
       const body = appendToolStep(host, {
         title: toolCallTitle(call.function.name, call.function.arguments),
         detail: "等待结果…",
         open: true,
         nested: Boolean(parentId),
         after,
+        toolCallId: call.id,
+        parentToolCallId: parentId,
       });
       const key = toolRowKey(call.id, parentId);
       openTools.set(key, body);
@@ -2562,32 +2698,39 @@ function applyTranscript(host: HTMLElement, e: {
     const detail = (e.content ?? "").slice(0, 4000);
     const key = e.tool_call_id ? toolRowKey(e.tool_call_id, e.parent_tool_call_id) : "";
     const node = key ? openTools.get(key) : undefined;
+    const fill = (body: HTMLElement) => {
+      setToolDetailContent(body, detail);
+      const details = body.closest("details");
+      const summary = details?.querySelector(".tool-summary")?.textContent ?? "";
+      const isAsk = summary.includes("ask_user");
+      if (details) details.open = false;
+      if (key) openTools.delete(key);
+      if (openToolDetail === body) openToolDetail = null;
+      if (isAsk && !e.is_error && !e.parent_tool_call_id) appendMessage(host, "user", e.content ?? "");
+    };
     if (node) {
-      place(() => {
-        setToolDetailContent(node, detail);
-        const details = node.closest("details");
-        const summary = details?.querySelector(".tool-summary")?.textContent ?? "";
-        const isAsk = summary.includes("ask_user");
-        if (details) details.open = false;
-        if (key) openTools.delete(key);
-        if (openToolDetail === node) openToolDetail = null;
-        if (isAsk && !e.is_error && !e.parent_tool_call_id) appendMessage(host, "user", e.content ?? "");
-      });
+      place(() => fill(node));
     } else {
-      place(() => {
-        const after = e.parent_tool_call_id
-          ? nestedTails.get(e.parent_tool_call_id) ?? toolStepNodes.get(e.parent_tool_call_id)
-          : undefined;
-        const body = appendToolStep(host, {
-          title: "工具结果",
-          detail,
-          open: false,
-          nested: Boolean(e.parent_tool_call_id),
-          after,
+      const existing = e.tool_call_id ? rowByToolCall(host, e.tool_call_id, e.parent_tool_call_id) : null;
+      const existingBody = existing?.querySelector(".tool-detail");
+      if (existingBody instanceof HTMLElement) {
+        place(() => fill(existingBody));
+      } else {
+        place(() => {
+          const after = e.parent_tool_call_id ? anchorForParent(host, e.parent_tool_call_id) : undefined;
+          const body = appendToolStep(host, {
+            title: "工具结果",
+            detail,
+            open: false,
+            nested: Boolean(e.parent_tool_call_id),
+            after,
+            toolCallId: e.tool_call_id,
+            parentToolCallId: e.parent_tool_call_id,
+          });
+          const wrap = stepWrap(body);
+          if (wrap && e.parent_tool_call_id) nestedTails.set(e.parent_tool_call_id, wrap);
         });
-        const wrap = stepWrap(body);
-        if (wrap && e.parent_tool_call_id) nestedTails.set(e.parent_tool_call_id, wrap);
-      });
+      }
     }
     return true;
   }
@@ -2644,6 +2787,17 @@ window.agent.onEvent((e) => {
 
   const decision = decideEvent(runGate, currentSessionId, e);
   runGate = decision.next;
+  if (
+    (e.type === "tool_call" || e.type === "tool_result") &&
+    e.parent_tool_call_id &&
+    e.session_id &&
+    runParked &&
+    parkedSessionId === e.session_id &&
+    currentSessionId !== e.session_id
+  ) {
+    applyTranscript(runBoard, e);
+    return;
+  }
   if (!decision.paint) {
     if (!decision.keep) return;
     if (e.type === "status") {
@@ -2729,5 +2883,29 @@ document.addEventListener("click", (ev) => {
 
 treesEl.addEventListener("scroll", () => closeSessionMenus(), { passive: true });
 window.addEventListener("resize", () => closeSessionMenus());
+
+explainApi = mountExplainPane();
+explainApi.findInput.addEventListener("input", () => {
+  findScope = "explain";
+  runFind(true);
+});
+explainApi.findInput.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter") return;
+  ev.preventDefault();
+  findScope = "explain";
+  stepFind(ev.shiftKey ? -1 : 1);
+});
+explainApi.findNext.addEventListener("click", () => {
+  findScope = "explain";
+  stepFind(1);
+});
+explainApi.findPrev.addEventListener("click", () => {
+  findScope = "explain";
+  stepFind(-1);
+});
+explainApi.findClose.addEventListener("click", () => closeFindBar());
+window.addEventListener("resize", () => {
+  if (explainApi && !explainApi.pane.hidden) explainApi.sync(currentSessionId, viewWorkspace ?? activeWorkspace);
+});
 
 void boot();

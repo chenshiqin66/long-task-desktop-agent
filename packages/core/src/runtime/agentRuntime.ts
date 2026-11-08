@@ -25,6 +25,7 @@ import { classifyToolCall } from "../tools/policy.js";
 import {
   AGENT_TOOL_NAME,
   EXPLORE_TOOL_ROUNDS,
+  deferredAcceptance,
   parseAgentCall,
   toolsForSubagent,
   WORKER_TOOL_ROUNDS,
@@ -89,7 +90,8 @@ Subagents:
 - Do not delegate understanding. "From what you find, fix the bug" asks the subagent to decide the diagnosis. You do that first. Name the fault, the behavior you want, and how you will check it. Run any verification command yourself after the receipt comes back. The subagent cannot run a shell.
 - Several subagent calls in one response run at the same time. Their output directories must not overlap.
 - Do not use subagent to ask the user a question or to run a shell command.
-- To assign a listed task, pass task_id. The runtime claims it as that subagent. Do not claim it yourself first. A blocked or already claimed task does not start. If the subagent stops before complete_task, that claim returns to pending.`;
+- To assign a listed task, pass task_id. The runtime claims it as that subagent. Do not claim it yourself first. A blocked or already claimed task does not start. If the subagent stops before complete_task, that claim returns to pending.
+- delivery defaults to joined. This turn waits, and the tool result is the receipt. Pass deferred only when you can continue without that receipt. Deferred returns an acceptance at once and keeps running after this turn. The receipt arrives later as a task-notification. Do not edit files or use a deferred explore as evidence until that notification arrives. A deferred worker's output_dir stays locked until then.`;
 
 const TASK_RULES = `
 Task list:
@@ -192,12 +194,18 @@ export class AgentRuntime {
   private running = false;
   /** Set when the user allows one write. Covers later writes in this submit, not ask_user or blocked commands. */
   private turnWritesAllowed = false;
-  /**
-   * output_dir values accepted in the current tool batch. Parent writes into
-   * them fail until the next model call, including after the subagent returns,
-   * because that write was planned before the receipt existed.
-   */
+  /** output_dir values accepted in the current tool batch. Cleared when that batch ends. */
   private batchOutputDirs: string[] = [];
+  /** Deferred worker dirs. Held until the receipt is in the transcript. */
+  private deferredOutputDirs: string[] = [];
+  private deferredRuns = new Map<
+    string,
+    { abort: AbortController; outputDir?: string; sessionId: string; notify: boolean }
+  >();
+  /** output_dir stays locked until the receipt is written into the session, not merely until the run returns. */
+  private noteDirs = new Map<string, { sessionId: string; outputDir: string }>();
+  /** Sessions already deleted. A deferred finish must not write a receipt into them. */
+  private closedSessions = new Set<string>();
   /** Serializes parent jsonl appends while several subagents finish together. */
   private parentWriteChain: Promise<void> = Promise.resolve();
   /** Serializes inbox enqueue with the decision to end a turn or start a continuation. */
@@ -395,6 +403,18 @@ export class AgentRuntime {
   deleteSession(sessionId: string): Promise<void> {
     this.taskReminderAssistants.delete(sessionId);
     if (this.watchedSessionId === sessionId) this.watchedSessionId = null;
+    this.closedSessions.add(sessionId);
+    for (const [noteId, held] of this.noteDirs) {
+      if (held.sessionId !== sessionId) continue;
+      this.noteDirs.delete(noteId);
+      this.releaseDeferredDir(held.outputDir);
+    }
+    for (const [agentId, run] of this.deferredRuns) {
+      if (run.sessionId !== sessionId) continue;
+      run.abort.abort();
+      this.deferredRuns.delete(agentId);
+      this.releaseDeferredDir(run.outputDir);
+    }
     return this.store.deleteSession(sessionId);
   }
 
@@ -616,12 +636,14 @@ export class AgentRuntime {
       await this.withInbox(async () => {
         await this.inbox.append(sessionId, { op: "consumed", message_id: plan.message.id });
       });
+      await this.releaseCoveredDirs(sessionId);
       return (await this.flushHeld(sessionId, turnId)) === "failed" ? "failed" : "wrote";
     }
     if (plan.action === "consume_only") {
       await this.withInbox(async () => {
         await this.inbox.append(sessionId, { op: "consumed", message_id: plan.messageId });
       });
+      await this.releaseCoveredDirs(sessionId);
       const held = await this.flushHeld(sessionId, turnId);
       if (held === "failed") return "failed";
       if (plan.callModel || held === "wrote") return "wrote";
@@ -1050,9 +1072,10 @@ export class AgentRuntime {
       const parsed = parseAgentCall(tc.function.arguments);
       if (!parsed.ok || parsed.call.subagent_type !== "worker" || !parsed.call.output_dir) continue;
       if (claimed.some((dir) => outputDirsOverlap(dir, parsed.call.output_dir!))) continue;
+      if (this.deferredOutputDirs.some((dir) => outputDirsOverlap(dir, parsed.call.output_dir!))) continue;
       claimed.push(parsed.call.output_dir);
     }
-    this.batchOutputDirs = claimed;
+    this.batchOutputDirs = [...claimed, ...this.deferredOutputDirs];
     try {
       for (let i = 0; i < toolCalls.length; i++) {
         const tc = toolCalls[i]!;
@@ -1183,12 +1206,15 @@ export class AgentRuntime {
       }
       if (parsed.call.subagent_type === "worker") {
         const dir = parsed.call.output_dir!;
-        const clash = dirs.find((existing) => outputDirsOverlap(existing, dir));
+        const clash = [...dirs, ...this.deferredOutputDirs].find((existing) => outputDirsOverlap(existing, dir));
         if (clash) {
+          const stillHeld = this.deferredOutputDirs.some((existing) => outputDirsOverlap(existing, dir));
           const stored = await persist(
             tc,
             {
-              content: `output_dir ${dir} overlaps ${clash}, already used by another subagent call in this response.`,
+              content: stillHeld
+                ? `output_dir ${dir} overlaps ${clash}, still held by a deferred subagent.`
+                : `output_dir ${dir} overlaps ${clash}, already used by another subagent call in this response.`,
               is_error: true,
             },
             { tool: AGENT_TOOL_NAME },
@@ -1252,7 +1278,7 @@ export class AgentRuntime {
         if (item.call.task_id) {
           const claimed = await tasks.claim(item.call.task_id, agentId);
           if (!claimed.ok) {
-            return { item, result: { content: claimed.error, is_error: true } };
+            return { item, agentId, deferred: false, result: { content: claimed.error, is_error: true } };
           }
         }
         const releaseClaim = async (content: string): Promise<string> => {
@@ -1261,6 +1287,29 @@ export class AgentRuntime {
           const ids = released.map((task) => `#${task.id}`).join(", ");
           return `${content}\n\nReleased back to pending: ${ids}. complete_task was not called.`;
         };
+        if (item.call.delivery === "deferred") {
+          if (this.abort?.signal.aborted) {
+            return { item, agentId, deferred: false, result: { content: await releaseClaim(CANCELLED_TOOL_CONTENT), is_error: true } };
+          }
+          const abort = new AbortController();
+          this.deferredRuns.set(agentId, {
+            abort,
+            outputDir: item.call.output_dir,
+            sessionId,
+            notify: true,
+          });
+          if (item.call.output_dir) this.deferredOutputDirs.push(item.call.output_dir);
+          void this.finishDeferred({
+            abort,
+            agentId,
+            sessionId,
+            turn_id,
+            parentToolCallId: item.tc.id,
+            call: item.call,
+            releaseClaim,
+          });
+          return { item, agentId, deferred: true, result: { content: deferredAcceptance(agentId, item.call), is_error: false } };
+        }
         try {
           const result = await runIsolatedSubagent({
             workspacePath: this.workspacePath,
@@ -1272,25 +1321,7 @@ export class AgentRuntime {
             skillsRoot: this.skillsRoot,
             tools: this.tools.subset(toolsForSubagent(item.call.subagent_type)),
             signal: this.abort!.signal,
-            onTool: (event) => {
-              if (event.type === "tool_call") {
-                this.emit({
-                  type: "tool_call",
-                  turn_id,
-                  tool_call: event.tool_call,
-                  parent_tool_call_id: item.tc.id,
-                });
-                return;
-              }
-              this.emit({
-                type: "tool_result",
-                turn_id,
-                tool_call_id: event.tool_call_id,
-                content: event.content,
-                is_error: event.is_error,
-                parent_tool_call_id: item.tc.id,
-              });
-            },
+            onTool: (event) => this.emitSubagentTool(sessionId, turn_id, item.tc.id, event),
             subagentType: item.call.subagent_type,
             task: item.call.task,
             description: item.call.description,
@@ -1298,10 +1329,12 @@ export class AgentRuntime {
             agentId,
             taskId: item.call.task_id,
           });
-          return { item, result: { ...result, content: await releaseClaim(result.content) } };
+          return { item, agentId, deferred: false, result: { ...result, content: await releaseClaim(result.content) } };
         } catch (err) {
           return {
             item,
+            agentId,
+            deferred: false,
             result: {
               content: await releaseClaim(`Subagent failed: ${String(err)}`),
               is_error: true,
@@ -1316,10 +1349,127 @@ export class AgentRuntime {
         subagent_type: outcome.item.call.subagent_type,
         is_error: outcome.result.is_error,
       });
-      if (stored === "storage_failed") return "storage_failed";
+      if (stored === "storage_failed") {
+        if (outcome.deferred) {
+          const run = this.deferredRuns.get(outcome.agentId);
+          if (run) run.notify = false;
+          run?.abort.abort();
+        }
+        return "storage_failed";
+      }
     }
     if (this.abort?.signal.aborted) return "stop";
     return "ok";
+  }
+
+  private emitSubagentTool(
+    sessionId: string,
+    turn_id: string,
+    parentToolCallId: string,
+    event:
+      | { type: "tool_call"; tool_call: ToolCall }
+      | { type: "tool_result"; tool_call_id: string; content: string; is_error: boolean },
+  ): void {
+    if (event.type === "tool_call") {
+      this.emit({
+        type: "tool_call",
+        turn_id,
+        session_id: sessionId,
+        tool_call: event.tool_call,
+        parent_tool_call_id: parentToolCallId,
+      });
+      return;
+    }
+    this.emit({
+      type: "tool_result",
+      turn_id,
+      session_id: sessionId,
+      tool_call_id: event.tool_call_id,
+      content: event.content,
+      is_error: event.is_error,
+      parent_tool_call_id: parentToolCallId,
+    });
+  }
+
+  /** Deferred run. Its abort is not the parent turn's, so stop does not cancel it after acceptance. */
+  private async finishDeferred(opts: {
+    abort: AbortController;
+    agentId: string;
+    sessionId: string;
+    turn_id: string;
+    parentToolCallId: string;
+    call: AgentCall;
+    releaseClaim: (content: string) => Promise<string>;
+  }): Promise<void> {
+    const run = this.deferredRuns.get(opts.agentId);
+    let content = "";
+    let ok = false;
+    try {
+      const result = await runIsolatedSubagent({
+        workspacePath: this.workspacePath,
+        sessionId: opts.sessionId,
+        parentTurnId: opts.turn_id,
+        parentToolCallId: opts.parentToolCallId,
+        config: this.config,
+        provider: this.provider,
+        skillsRoot: this.skillsRoot,
+        tools: this.tools.subset(toolsForSubagent(opts.call.subagent_type)),
+        signal: opts.abort.signal,
+        onTool: (event) => this.emitSubagentTool(opts.sessionId, opts.turn_id, opts.parentToolCallId, event),
+        subagentType: opts.call.subagent_type,
+        task: opts.call.task,
+        description: opts.call.description,
+        outputDir: opts.call.output_dir,
+        agentId: opts.agentId,
+        taskId: opts.call.task_id,
+      });
+      content = await opts.releaseClaim(result.content);
+      ok = !result.is_error;
+    } catch (err) {
+      content = await opts.releaseClaim(`Subagent failed: ${String(err)}`);
+      ok = false;
+    } finally {
+      this.deferredRuns.delete(opts.agentId);
+    }
+    const noteId = `note_${opts.agentId}`;
+    if (this.closedSessions.has(opts.sessionId) || run?.notify === false || !content.trim()) {
+      this.noteDirs.delete(noteId);
+      this.releaseDeferredDir(opts.call.output_dir);
+      return;
+    }
+    if (opts.call.output_dir) this.noteDirs.set(noteId, { sessionId: opts.sessionId, outputDir: opts.call.output_dir });
+    await this.postTaskNotification(opts.sessionId, {
+      id: noteId,
+      subagentId: opts.agentId,
+      ...(opts.call.task_id ? { taskId: opts.call.task_id } : {}),
+      content,
+      ok,
+    });
+  }
+
+  /** Drop output_dir locks whose receipt is now in the transcript. */
+  private async releaseCoveredDirs(sessionId: string): Promise<void> {
+    if (!this.noteDirs.size) return;
+    const lines = await this.inbox.read(sessionId);
+    const consumed = new Set<string>();
+    for (const line of lines) {
+      if (line.op === "consumed") consumed.add(line.message_id);
+    }
+    for (const line of lines) {
+      if (line.op !== "claim" || !consumed.has(line.message_id)) continue;
+      for (const id of line.ids) {
+        const held = this.noteDirs.get(id);
+        if (!held || held.sessionId !== sessionId) continue;
+        this.noteDirs.delete(id);
+        this.releaseDeferredDir(held.outputDir);
+      }
+    }
+  }
+
+  private releaseDeferredDir(outputDir: string | undefined): void {
+    if (!outputDir) return;
+    const index = this.deferredOutputDirs.indexOf(outputDir);
+    if (index >= 0) this.deferredOutputDirs.splice(index, 1);
   }
 
   private enqueueParentWrite<T>(fn: () => Promise<T>): Promise<T> {
@@ -1410,7 +1560,7 @@ export class AgentRuntime {
       llmBaseUrl: this.config.baseUrl,
       skillsRoot: this.skillsRoot,
       attachedSkillNames: new Set(this.skillBodies.map((skill) => skill.name)),
-      blockedOutputDirs: this.batchOutputDirs,
+      blockedOutputDirs: [...this.batchOutputDirs, ...this.deferredOutputDirs],
       sessionId,
     });
     return this.persistToolOutcome(

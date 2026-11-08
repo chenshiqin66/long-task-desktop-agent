@@ -62,4 +62,62 @@ import { beginRun, decideEvent, idleGate } from "../dist/src/renderer/runEventGa
   assert.equal(d.paint, true, "returning to run session should paint");
 }
 
+// a deferred child's tools are not a new turn: paint after the parent gate is idle
+{
+  const d = decideEvent(idleGate(), "sess-a", {
+    type: "tool_call",
+    turn_id: "t-old",
+    parent_tool_call_id: "call_parent",
+    session_id: "sess-a",
+  });
+  assert.equal(d.paint, true);
+  assert.equal(d.keep, false);
+  assert.equal(d.next.isRunning, false);
+}
+
+// the same late row must not paint onto another session
+{
+  const d = decideEvent(idleGate(), "sess-b", {
+    type: "tool_result",
+    turn_id: "t-old",
+    parent_tool_call_id: "call_parent",
+    session_id: "sess-a",
+  });
+  assert.equal(d.paint, false);
+  assert.equal(d.keep, false);
+  assert.equal(d.next.isRunning, false);
+}
+
+// a continuation latches a new turn and still paints the child's old turn id
+{
+  let gate = beginRun("sess-a");
+  let d = decideEvent(gate, "sess-a", { type: "text", turn_id: "t2" });
+  gate = d.next;
+  d = decideEvent(gate, "sess-a", {
+    type: "tool_call",
+    turn_id: "t1",
+    parent_tool_call_id: "call_parent",
+    session_id: "sess-a",
+  });
+  assert.equal(d.paint, true);
+  assert.equal(d.next.isRunning, true);
+  assert.equal(d.next.activeTurnId, "t2");
+}
+
+// while the parent turn is still running, a switched-away view keeps the row for the parked board
+{
+  let gate = beginRun("sess-a");
+  let d = decideEvent(gate, "sess-a", { type: "text", turn_id: "t1" });
+  gate = d.next;
+  d = decideEvent(gate, "sess-b", {
+    type: "tool_call",
+    turn_id: "t1",
+    parent_tool_call_id: "call_parent",
+    session_id: "sess-a",
+  });
+  assert.equal(d.paint, false);
+  assert.equal(d.keep, true);
+  assert.equal(d.next.isRunning, true);
+}
+
 console.log("runEventGate tests ok");

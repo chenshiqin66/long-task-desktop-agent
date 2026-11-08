@@ -13,7 +13,7 @@ const IMAGE_MIME_EXT: Record<ImageMime, string> = {
   "image/gif": "gif",
 };
 
-const IMAGE_REL_RE = /^images\/img_[a-f0-9]+\.(png|jpg|webp|gif)$/;
+const IMAGE_REL_RE = /^images\/(?:explain-)?img_[a-f0-9]+\.(png|jpg|webp|gif)$/;
 
 /** Largest decoded image accepted from the renderer after it has resized. */
 export const MAX_IMAGE_BYTES = 1_500_000;
@@ -93,19 +93,23 @@ export class SessionStore {
     sessionId: string,
     mime: ImageMime,
     base64: string,
+    opts?: { prefix?: string },
   ): Promise<ImageAttachment> {
     const ext = extForImageMime(mime);
     if (!ext) throw new Error(`Unsupported image type: ${mime}`);
+    const prefix = opts?.prefix ?? "";
+    if (prefix && !/^[a-z0-9-]+$/i.test(prefix)) throw new Error("Invalid image prefix");
     const cleaned = base64.replace(/\s/g, "");
     const bytes = Buffer.from(cleaned, "base64");
     if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) {
       throw new Error(`Image is empty or larger than ${MAX_IMAGE_BYTES} bytes`);
     }
     const id = newId("img");
-    const path = `images/${id}.${ext}`;
+    const fileName = `${prefix}${id}.${ext}`;
+    const path = `images/${fileName}`;
     const dir = sessionDir(this.workspacePath, sessionId);
     await mkdir(join(dir, "images"), { recursive: true });
-    await writeFile(join(dir, "images", `${id}.${ext}`), bytes);
+    await writeFile(join(dir, "images", fileName), bytes);
     return { id, mime, path };
   }
 

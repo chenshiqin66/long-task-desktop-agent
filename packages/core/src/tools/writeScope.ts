@@ -73,7 +73,7 @@ export function writeScopeError(opts: {
   for (const dir of opts.blockedOutputDirs ?? []) {
     const root = resolve(opts.workspacePath, dir);
     if (isPathInside(root, abs)) {
-      return `Path is inside a subagent output_dir from this response (${dir}): ${opts.requested}`;
+      return `Path is inside a subagent output_dir that is still in use (${dir}): ${opts.requested}`;
     }
   }
   return null;

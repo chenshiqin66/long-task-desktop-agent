@@ -677,6 +677,62 @@ body {
   animation: main-in 560ms 100ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+#explain-pane {
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper-elev) 78%, transparent);
+}
+
+#explain-pane[hidden] {
+  display: none !important;
+}
+
+.explain-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 42px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.explain-title {
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  font-weight: 650;
+}
+
+.explain-toggle {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.2;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.explain-toggle:hover {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--teal-soft) 55%, #fff);
+}
+
+.main-bar.is-covered .view-tabs {
+  display: none;
+}
+
 @keyframes main-in {
   from {
     opacity: 0;
@@ -691,6 +747,7 @@ body {
   align-items: stretch;
   justify-content: space-between;
   gap: 12px;
+  height: 42px;
   padding: 0 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   flex-shrink: 0;
@@ -698,7 +755,7 @@ body {
 }
 
 .main-bar.is-covered {
-  display: none;
+  justify-content: flex-end;
 }
 
 .view-tabs {
@@ -722,6 +779,8 @@ body {
 .view-tab {
   appearance: none;
   position: relative;
+  display: flex;
+  align-items: center;
   font-family: var(--font-ui);
   font-size: var(--text);
   font-weight: 500;
@@ -1018,6 +1077,15 @@ body {
   background: var(--teal-soft);
 }
 
+.page-ctx-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.page-ctx-item:disabled:hover {
+  background: transparent;
+}
+
 .run-status {
   position: absolute;
   left: 24px;
@@ -1113,17 +1181,85 @@ body {
 }
 
 .msg.notice {
+  position: relative;
   align-self: stretch;
+  width: 100%;
   max-width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: 10px;
-  background: var(--paper-elev);
+  background:
+    linear-gradient(90deg, var(--teal-soft), transparent 88px),
+    var(--paper-elev);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
 }
 
-.msg.notice .msg-role {
-  color: var(--ink-muted);
+.msg.notice::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+.notice-head,
+.msg.notice .notice-body {
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  line-height: 1.45;
+}
+
+.notice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 1lh;
+  padding: 0 10px 0 14px;
+}
+
+.notice-title {
+  font-weight: 650;
+  color: var(--accent-ink);
+}
+
+.notice-toggle {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--accent-ink);
+  font: inherit;
   font-size: var(--text-sm);
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.notice-toggle:hover,
+.notice-toggle:focus-visible {
+  color: var(--ink);
+}
+
+.msg.notice .notice-body {
+  margin: 0;
+  padding: 0 12px 0 14px;
+  color: var(--ink);
+  /* Title is line 1. Three more lines keep the closed card at 4. */
+  max-height: calc(3 * 1lh);
+  overflow: hidden;
+}
+
+.msg.notice.is-open .notice-body {
+  /* Title plus this cap is 12 lines. Taller receipts scroll inside the card. */
+  max-height: calc(11 * 1lh);
+  overflow-y: auto;
+}
+
+.msg.notice.is-short .notice-body {
+  max-height: none;
 }
 
 .reask {
@@ -1691,16 +1827,16 @@ body {
   pointer-events: auto;
 }
 
-#composer.is-locked {
+:is(#composer, #explain-composer).is-locked {
   background: #f3f5f7;
 }
 
-#input:disabled {
+:is(#input, #explain-input):disabled {
   color: #8b939f;
   cursor: not-allowed;
 }
 
-#btn-send:disabled {
+:is(#btn-send, #explain-send):disabled {
   opacity: 1;
   color: #7d8694;
   background: #e6ebf1;
@@ -1708,7 +1844,7 @@ body {
   filter: none;
 }
 
-#composer {
+:is(#composer, #explain-composer) {
   position: relative;
   width: 100%;
   display: grid;
@@ -1743,12 +1879,12 @@ body {
   pointer-events: none;
 }
 
-#composer.is-locked.has-draft .composer-lock-note {
+:is(#composer, #explain-composer).is-locked.has-draft .composer-lock-note {
   position: static;
   margin-bottom: 2px;
 }
 
-#input {
+:is(#input, #explain-input) {
   width: 100%;
   resize: vertical;
   min-height: 43px;
@@ -1762,7 +1898,7 @@ body {
   line-height: 1.45;
 }
 
-#input::placeholder {
+:is(#input, #explain-input)::placeholder {
   color: color-mix(in srgb, var(--ink-muted) 80%, transparent);
 }
 
@@ -1860,25 +1996,25 @@ body {
   background: #fff;
 }
 
-#btn-send {
+:is(#btn-send, #explain-send) {
   padding: 4px 18px;
   line-height: 1.2;
   min-width: 4.75rem;
 }
 
-#btn-send.is-stop {
+:is(#btn-send, #explain-send).is-stop {
   color: var(--danger);
   background: #fff;
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
 }
 
-#btn-send.is-stop:hover:not(:disabled) {
+:is(#btn-send, #explain-send).is-stop:hover:not(:disabled) {
   background: var(--danger-soft);
   filter: none;
 }
 
-#btn-send.is-stopping,
-#btn-send.is-stopping:disabled {
+:is(#btn-send, #explain-send).is-stopping,
+:is(#btn-send, #explain-send).is-stopping:disabled {
   color: #7d8694;
   background: #e6ebf1;
   border-color: #d5dbe3;

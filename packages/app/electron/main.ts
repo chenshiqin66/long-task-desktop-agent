@@ -4,8 +4,12 @@ import { access, mkdir, realpath } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  AgentError,
   AgentRuntime,
+  ExplainRuntime,
+  ExplainStore,
   SessionStore,
+  sourceTurnContext,
   TraceStore,
   ContextStore,
   OpenAICompatibleProvider,
@@ -37,6 +41,8 @@ let appMenu: Menu | null = null;
 let runtime: AgentRuntime | null = null;
 /** AgentConfig snapshot used to build `runtime`. Compared on the next submit. */
 let runtimeConfigKey: string | null = null;
+let explainRt: ExplainRuntime | null = null;
+let explainKey = "";
 let permissionGate: DeferredPermissionGate | null = null;
 let askGate: DeferredAskGate | null = null;
 let workspacePath: string | null = null;
@@ -261,6 +267,28 @@ function normalizeSubmittedImages(raw: unknown): SubmittedImage[] | undefined {
     if (typeof base64 !== "string" || !base64.length) throw new Error("Invalid image");
     return { mime: mime as ImageMime, base64 };
   });
+}
+
+async function ensureExplainRuntime(workspace: string): Promise<ExplainRuntime> {
+  const config = await readAgentConfig();
+  const key = `${workspace}\0${agentConfigKey(config)}`;
+  if (explainRt?.isRunning) {
+    if (!samePath(explainRt.workspacePath, workspace)) {
+      throw new AgentError("解释还在进行", "busy");
+    }
+    return explainRt;
+  }
+  if (explainRt && explainKey === key) return explainRt;
+  const provider = new OpenAICompatibleProvider({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+  });
+  explainRt = new ExplainRuntime({ workspacePath: workspace, config, provider });
+  explainKey = key;
+  explainRt.onEvent((event) => {
+    win?.webContents.send("agent:explain-event", event);
+  });
+  return explainRt;
 }
 
 function resetRuntime(): void {
@@ -584,6 +612,60 @@ app.whenReady().then(() => {
     askGate?.cancelAll();
     runtime?.cancel();
   });
+  ipcMain.handle("agent:explainLoad", async (_e, rawWorkspace: string, sessionId: string) => {
+    assertValidSessionId(sessionId);
+    const path = await assertKnownWorkspace(rawWorkspace);
+    const store = new ExplainStore(path);
+    const [open, messages] = await Promise.all([
+      store.getOpen(sessionId),
+      store.readMessages(sessionId),
+    ]);
+    return { open, messages };
+  });
+  ipcMain.handle(
+    "agent:explainSetOpen",
+    async (_e, rawWorkspace: string, sessionId: string, open: unknown) => {
+      assertValidSessionId(sessionId);
+      if (typeof open !== "boolean") throw new Error("Invalid explain state");
+      const path = await assertKnownWorkspace(rawWorkspace);
+      await new ExplainStore(path).setOpen(sessionId, open);
+    },
+  );
+  ipcMain.handle(
+    "agent:explainSubmit",
+    async (
+      _e,
+      rawWorkspace: string,
+      sessionId: string,
+      text: unknown,
+      images?: unknown,
+      sourceMessageIds?: unknown,
+    ) => {
+      assertValidSessionId(sessionId);
+      if (typeof text !== "string") throw new Error("Invalid message");
+      const path = await assertKnownWorkspace(rawWorkspace);
+      const rt = await ensureExplainRuntime(path);
+      let context: { user: string; assistant: string } | null = null;
+      if (Array.isArray(sourceMessageIds)) {
+        const ids = sourceMessageIds.filter((id): id is string => typeof id === "string");
+        const main = await new SessionStore(path).readMessages(sessionId);
+        context = sourceTurnContext(main, ids, text);
+      }
+      await rt.submit(sessionId, text, normalizeSubmittedImages(images), context);
+    },
+  );
+  ipcMain.handle("agent:explainCancel", async () => {
+    explainRt?.cancel();
+  });
+  ipcMain.handle(
+    "agent:explainReadImage",
+    async (_e, rawWorkspace: string, sessionId: string, relativePath: string) => {
+      assertValidSessionId(sessionId);
+      if (typeof relativePath !== "string") throw new Error("Invalid image path");
+      const path = await assertKnownWorkspace(rawWorkspace);
+      return new SessionStore(path).readImageDataUrl(sessionId, relativePath);
+    },
+  );
   ipcMain.handle("agent:answerAsk", async (_e, requestId: string, text: string) => {
     if (typeof requestId !== "string" || typeof text !== "string") return false;
     return askGate?.answer(requestId, text) ?? false;

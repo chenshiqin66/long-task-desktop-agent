@@ -56,10 +56,14 @@ export function toolsForSubagent(type: SubagentType): readonly string[] {
   return [...files, ...SUBAGENT_TASK_TOOLS];
 }
 
+export type SubagentDelivery = "joined" | "deferred";
+
 export interface AgentCall {
   description: string;
   subagent_type: SubagentType;
   task: string;
+  /** joined waits for the receipt. deferred returns an acceptance and finishes later. */
+  delivery: SubagentDelivery;
   output_dir?: string;
   /** When set, the runtime claims this task as the subagent before the run. */
   task_id?: string;
@@ -77,6 +81,7 @@ export function parseAgentCall(
     task?: unknown;
     output_dir?: unknown;
     task_id?: unknown;
+    delivery?: unknown;
   };
   try {
     args = argsJson ? (JSON.parse(argsJson) as typeof args) : {};
@@ -96,6 +101,8 @@ export function parseAgentCall(
   }
   const taskId = optionalTaskId(args.task_id);
   if (!taskId.ok) return taskId;
+  const delivery = parseDelivery(args.delivery);
+  if (!delivery.ok) return delivery;
   const outputRaw = typeof args.output_dir === "string" ? args.output_dir.trim() : "";
   if (subagent_type === "explore") {
     if (outputRaw) return { ok: false, error: "explore is read-only and does not take output_dir" };
@@ -105,6 +112,7 @@ export function parseAgentCall(
         description: description.slice(0, DESCRIPTION_MAX),
         subagent_type,
         task,
+        delivery: delivery.delivery,
         ...(taskId.task_id ? { task_id: taskId.task_id } : {}),
       },
     };
@@ -117,10 +125,26 @@ export function parseAgentCall(
       description: description.slice(0, DESCRIPTION_MAX),
       subagent_type,
       task,
+      delivery: delivery.delivery,
       output_dir: output.dir,
       ...(taskId.task_id ? { task_id: taskId.task_id } : {}),
     },
   };
+}
+
+function parseDelivery(raw: unknown): { ok: true; delivery: SubagentDelivery } | { ok: false; error: string } {
+  if (raw == null || raw === "") return { ok: true, delivery: "joined" };
+  if (raw === "joined" || raw === "deferred") return { ok: true, delivery: raw };
+  return { ok: false, error: "delivery must be joined or deferred" };
+}
+
+/** Immediate tool result for delivery=deferred. The receipt is a later task-notification. */
+export function deferredAcceptance(agentId: string, call: AgentCall): string {
+  const task = call.task_id ? ` Task #${call.task_id} is claimed as ${agentId}.` : "";
+  const dir = call.output_dir
+    ? ` output_dir ${call.output_dir} stays locked until the receipt.`
+    : "";
+  return `Accepted ${agentId} (${call.subagent_type}, deferred). This is not the receipt.${task}${dir} Do not edit files or act on this work until the task-notification arrives.`;
 }
 
 function optionalTaskId(raw: unknown): { ok: true; task_id?: string } | { ok: false; error: string } {
@@ -191,6 +215,7 @@ export const agentTool: Tool = {
       "Do not use subagent to ask the user a question. Do not use it to run a shell command. Do not put a tool allowlist in the task: explore and worker already fix the tools.",
       "Subagents can list, get, claim, and complete tasks on this session's list. They cannot create, update, or delete tasks, and they cannot message each other.",
       "To assign a listed task, pass task_id. The runtime claims it as that subagent before the run. Do not claim it yourself first. If it is blocked or already claimed, the subagent does not start.",
+      "delivery defaults to joined: this turn waits, and the tool result is the receipt. Pass deferred only when you can continue without that receipt. Deferred returns an acceptance at once. The receipt arrives later as a task-notification, including after this turn ends. Do not edit files or use a deferred explore as evidence until that notification arrives. A deferred worker's output_dir stays locked until then.",
     ].join(" "),
     parameters: {
       type: "object",
@@ -218,6 +243,12 @@ export const agentTool: Tool = {
           type: "string",
           description:
             "Optional id of a listed task to assign. The runtime claims it as this subagent. Do not claim it yourself. Omit when the work is not on the list.",
+        },
+        delivery: {
+          type: "string",
+          enum: ["joined", "deferred"],
+          description:
+            "joined (default) waits for the receipt in this turn. deferred returns an acceptance now; the receipt arrives later as a task-notification.",
         },
       },
       required: ["description", "subagent_type", "task"],

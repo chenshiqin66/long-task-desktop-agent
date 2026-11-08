@@ -60,6 +60,25 @@ contextBridge.exposeInMainWorld("agent", {
   readSessionImage: (sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readSessionImage", sessionId, relativePath),
   cancel: () => ipcRenderer.invoke("agent:cancel"),
+  explainLoad: (workspace: string, sessionId: string) =>
+    ipcRenderer.invoke("agent:explainLoad", workspace, sessionId),
+  explainSetOpen: (workspace: string, sessionId: string, open: boolean) =>
+    ipcRenderer.invoke("agent:explainSetOpen", workspace, sessionId, open),
+  explainSubmit: (
+    workspace: string,
+    sessionId: string,
+    text: string,
+    images?: Array<{ mime: string; base64: string }>,
+    sourceMessageIds?: string[] | null,
+  ) => ipcRenderer.invoke("agent:explainSubmit", workspace, sessionId, text, images, sourceMessageIds),
+  explainCancel: () => ipcRenderer.invoke("agent:explainCancel"),
+  explainReadImage: (workspace: string, sessionId: string, relativePath: string) =>
+    ipcRenderer.invoke("agent:explainReadImage", workspace, sessionId, relativePath),
+  onExplainEvent: (cb: (e: RuntimeEvent) => void) => {
+    const listener = (_: unknown, e: RuntimeEvent) => cb(e);
+    ipcRenderer.on("agent:explain-event", listener);
+    return () => ipcRenderer.removeListener("agent:explain-event", listener);
+  },
   respondPermission: (requestId: string, decision: "allow" | "deny") =>
     ipcRenderer.invoke("agent:permissionRespond", requestId, decision),
   answerAsk: (requestId: string, text: string) =>

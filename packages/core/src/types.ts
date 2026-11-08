@@ -57,7 +57,7 @@ export interface SessionMeta {
 
 export type RuntimeEvent =
   | { type: "text"; turn_id: string; delta: string }
-  | { type: "tool_call"; turn_id: string; tool_call: ToolCall; parent_tool_call_id?: string }
+  | { type: "tool_call"; turn_id: string; tool_call: ToolCall; parent_tool_call_id?: string; session_id?: string }
   | {
       type: "tool_result";
       turn_id: string;
@@ -66,6 +66,8 @@ export type RuntimeEvent =
       is_error: boolean;
       /** Set when this call belongs to a subagent. The row sits under that parent tool, not inside it. */
       parent_tool_call_id?: string;
+      /** Which session the subagent belongs to. Late rows must not paint onto another session. */
+      session_id?: string;
     }
   | {
       type: "ask_user";
