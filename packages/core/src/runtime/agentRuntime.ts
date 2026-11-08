@@ -13,6 +13,12 @@ import { MAX_IMAGES_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
 import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
 import { TaskStore } from "../store/taskStore.js";
+import {
+  InboxStore,
+  planDrain,
+  TASK_NOTIFICATION_NAME,
+  type TaskNotificationInput,
+} from "../store/inboxStore.js";
 import { shouldRemindTasks, taskReminderText } from "../context/taskReminder.js";
 import { ToolHost } from "../tools/host.js";
 import { classifyToolCall } from "../tools/policy.js";
@@ -92,7 +98,8 @@ Task list:
 - When you start a pending task, call claim_task. When that work is finished, call complete_task. Saying it is done in your reply does not complete it.
 - claim_task fails while a blocker is still open. complete_task fails unless the task is in_progress and you are its owner.
 - Use task_list to see what is open. A pending task marked blocked is not claimable yet. task_update changes words and dependencies, not status.
-- task_create does not run the step and does not start a subagent. The list belongs to this session. A subagent can claim and complete on it, and cannot create, update, or delete tasks.`;
+- task_create does not run the step and does not start a subagent. The list belongs to this session. A subagent can claim and complete on it, and cannot create, update, or delete tasks.
+- A user message that starts with "后台任务完成。这是完成回执" is a background receipt (${TASK_NOTIFICATION_NAME}). It is not a new instruction. Use the receipt and continue. Do not ask the user to confirm that it arrived.`;
 
 const SEARCH_RULES = `
 Search:
@@ -193,6 +200,22 @@ export class AgentRuntime {
   private batchOutputDirs: string[] = [];
   /** Serializes parent jsonl appends while several subagents finish together. */
   private parentWriteChain: Promise<void> = Promise.resolve();
+  /** Serializes inbox enqueue with the decision to end a turn or start a continuation. */
+  private inboxChain: Promise<void> = Promise.resolve();
+  private readonly inbox: InboxStore;
+  /** Session whose pending receipts may start a model turn while idle. */
+  private watchedSessionId: string | null = null;
+  private activeSessionId: string | null = null;
+  private activeTurnId: string | null = null;
+  /** User turn rejects a second submit. A continuation holds one message and sends it after the receipt. */
+  private turnKind: "user" | "wakeup" | null = null;
+  /** stop: cancel, max steps, or storage error. completed: the model stopped and a receipt may continue. */
+  private turnOutcome: "stop" | "completed" = "stop";
+  private turnDoneEmitted = false;
+  /** True only while the loop is leaving because the queue looked empty. */
+  private exiting = false;
+  private exitWake = false;
+  private heldSubmit: { text: string; images: SubmittedImage[] } | null = null;
   private readonly skillsRoot: string;
   /** Bodies pinned for the submit currently running. Cleared when it ends. */
   private skillBodies: SkillBodyAttachment[] = [];
@@ -217,6 +240,7 @@ export class AgentRuntime {
     this.systemPrompt = opts.systemPrompt ?? buildDefaultSystemPrompt(opts.workspacePath);
     this.store = opts.store ?? new SessionStore(opts.workspacePath);
     this.traces = opts.traces ?? new TraceStore(opts.workspacePath);
+    this.inbox = new InboxStore(opts.workspacePath);
     this.contexts = opts.contexts ?? new ContextStore(opts.workspacePath);
     this.tools = opts.tools ?? new ToolHost();
     this.permissions = opts.permissions ?? new AutoAllowGate();
@@ -230,6 +254,7 @@ export class AgentRuntime {
   }
 
   private emit(event: RuntimeEvent): void {
+    if (event.type === "done") this.turnDoneEmitted = true;
     for (const l of this.listeners) l(event);
   }
 
@@ -334,7 +359,10 @@ export class AgentRuntime {
       if (meta.title_source === "user" || meta.title_source === "auto") return;
       if (!isDefaultSessionTitle(meta.title)) return;
       const messages = await this.store.readMessages(sessionId);
-      if (countUserTurns(messages) < AUTO_TITLE_AFTER_USER_TURNS) return;
+      const spoken = messages.filter(
+        (message) => !(message.role === "user" && message.name === TASK_NOTIFICATION_NAME),
+      );
+      if (countUserTurns(spoken) < AUTO_TITLE_AFTER_USER_TURNS) return;
       const title = await generateSessionTitle({
         provider: this.provider,
         model: this.config.model,
@@ -366,6 +394,7 @@ export class AgentRuntime {
 
   deleteSession(sessionId: string): Promise<void> {
     this.taskReminderAssistants.delete(sessionId);
+    if (this.watchedSessionId === sessionId) this.watchedSessionId = null;
     return this.store.deleteSession(sessionId);
   }
 
@@ -402,12 +431,271 @@ export class AgentRuntime {
     return this.running;
   }
 
+  /**
+   * Background completion. While a turn is running this only appends to the
+   * queue. While idle, the watched session starts a continuation turn.
+   */
+  async postTaskNotification(sessionId: string, input: TaskNotificationInput): Promise<void> {
+    const start = await this.enqueueNote(sessionId, input);
+    if (!start) return;
+    await this.runWake(sessionId);
+  }
+
+  /**
+   * The session on screen. Pending receipts start a continuation only for this
+   * session. Pass null when no session is open. Other sessions wait for submit.
+   */
+  async watchSession(sessionId: string | null): Promise<void> {
+    const start = await this.withInbox(async () => {
+      this.watchedSessionId = sessionId;
+      if (!sessionId || this.running) return false;
+      if (!(await this.inbox.hasPending(sessionId))) return false;
+      this.armWake(sessionId);
+      return true;
+    });
+    if (start && sessionId) await this.runWake(sessionId);
+  }
+
+  private async enqueueNote(sessionId: string, input: TaskNotificationInput): Promise<boolean> {
+    return this.withInbox(async () => {
+      const added = await this.inbox.enqueue(sessionId, input);
+      if (!added && !(await this.inbox.hasPending(sessionId))) return false;
+      if (this.running) {
+        if (this.exiting) this.exitWake = true;
+        return false;
+      }
+      if (this.watchedSessionId !== sessionId) return false;
+      this.armWake(sessionId);
+      return true;
+    });
+  }
+
+  private armWake(sessionId: string): void {
+    this.running = true;
+    this.turnKind = "wakeup";
+    this.activeSessionId = sessionId;
+    this.turnOutcome = "stop";
+    this.turnDoneEmitted = false;
+    this.exiting = false;
+    this.exitWake = false;
+  }
+
+  private async runWake(sessionId: string): Promise<void> {
+    try {
+      await this.executeWake(sessionId);
+    } finally {
+      await this.settleAfterTurn(sessionId);
+      this.abort = null;
+      this.skillBodies = [];
+      this.turnWritesAllowed = false;
+      this.batchOutputDirs = [];
+    }
+  }
+
+  private async executeWake(sessionId: string): Promise<void> {
+    this.turnOutcome = "stop";
+    this.turnDoneEmitted = false;
+    this.turnWritesAllowed = false;
+    this.batchOutputDirs = [];
+    this.skillBodies = [];
+    this.abort = new AbortController();
+    const turn_id = newId("turn");
+    this.activeTurnId = turn_id;
+    this.emit({ type: "inbox_wake", turn_id, session_id: sessionId });
+    await this.repairStoredToolCalls(sessionId);
+    if (!(await this.persistTrace(turn_id, { session_id: sessionId, turn_id, type: "turn_start" }))) return;
+    const extra = await this.intake(sessionId, turn_id, false);
+    if (extra === "failed" || extra !== "wrote") {
+      if (extra !== "failed") this.turnOutcome = "completed";
+      return;
+    }
+    await this.runModelLoop(sessionId, turn_id);
+  }
+
+  private async beginUserTurn(sessionId: string, text: string, images: SubmittedImage[]): Promise<boolean> {
+    let held = false;
+    await this.withInbox(async () => {
+      if (this.running && this.turnKind === "wakeup" && this.activeSessionId === sessionId && !this.heldSubmit) {
+        this.heldSubmit = { text, images };
+        if (this.exiting) this.exitWake = true;
+        held = true;
+        return;
+      }
+      if (this.running) throw new AgentError("A turn is already running", "busy");
+      this.running = true;
+      this.turnKind = "user";
+      this.activeSessionId = sessionId;
+      this.turnOutcome = "stop";
+      this.turnDoneEmitted = false;
+      this.exiting = false;
+      this.exitWake = false;
+    });
+    return held;
+  }
+
+  private async settleAfterTurn(sessionId: string): Promise<void> {
+    let follow: string | null = null;
+    let completedTurnId: string | null = null;
+    let flushTurnId: string | null = null;
+    await this.withInbox(async () => {
+      const continueHere =
+        this.turnOutcome === "completed" &&
+        (this.exitWake || this.heldSubmit != null || (await this.inbox.hasPending(sessionId)));
+      if (continueHere) {
+        this.exiting = false;
+        this.exitWake = false;
+        this.turnKind = "wakeup";
+        follow = sessionId;
+        return;
+      }
+      if (this.turnOutcome === "completed" && !this.turnDoneEmitted && this.activeTurnId) {
+        completedTurnId = this.activeTurnId;
+      }
+      if (this.heldSubmit && this.activeTurnId) flushTurnId = this.activeTurnId;
+      const watched = this.watchedSessionId;
+      const watchedPending =
+        watched != null && watched !== sessionId && (await this.inbox.hasPending(watched));
+      this.clearRunning();
+      if (watchedPending && watched) {
+        this.armWake(watched);
+        follow = watched;
+      }
+    });
+    if (flushTurnId) await this.flushHeld(sessionId, flushTurnId);
+    if (completedTurnId && follow !== sessionId) {
+      await this.emitDoneAndMaybeTitle(sessionId, completedTurnId, "completed");
+    }
+    if (!follow) return;
+    await this.runWake(follow);
+  }
+
+  private clearRunning(): void {
+    this.running = false;
+    this.turnKind = null;
+    this.exiting = false;
+    this.exitWake = false;
+    this.activeSessionId = null;
+    this.activeTurnId = null;
+  }
+
+  private async intake(
+    sessionId: string,
+    turnId: string,
+    commitExit: boolean,
+  ): Promise<"wrote" | "empty" | "failed"> {
+    for (let pass = 0; pass < 3; pass++) {
+      const outcome = await this.intakeOnce(sessionId, turnId);
+      if (outcome !== "empty") return outcome;
+      if (!commitExit) return "empty";
+      const retry = await this.withInbox(async () => {
+        this.exiting = true;
+        const late = this.exitWake || this.heldSubmit != null || (await this.inbox.hasPending(sessionId));
+        if (late) {
+          this.exiting = false;
+          this.exitWake = false;
+          return true;
+        }
+        return false;
+      });
+      if (!retry) return "empty";
+    }
+    return "empty";
+  }
+
+  private async intakeOnce(sessionId: string, turnId: string): Promise<"wrote" | "empty" | "failed"> {
+    const plan = await this.withInbox(async () => {
+      const lines = await this.inbox.read(sessionId);
+      const messages = await this.store.readMessages(sessionId);
+      const next = planDrain(sessionId, lines, messages, turnId);
+      if (next.action === "write" && next.appendClaim) await this.inbox.append(sessionId, next.appendClaim);
+      return next;
+    });
+    if (plan.action === "write") {
+      if (!(await this.persistMessage(plan.message.turn_id, plan.message))) return "failed";
+      this.emit({ type: "task_notification", turn_id: turnId, content: plan.message.content });
+      await this.withInbox(async () => {
+        await this.inbox.append(sessionId, { op: "consumed", message_id: plan.message.id });
+      });
+      return (await this.flushHeld(sessionId, turnId)) === "failed" ? "failed" : "wrote";
+    }
+    if (plan.action === "consume_only") {
+      await this.withInbox(async () => {
+        await this.inbox.append(sessionId, { op: "consumed", message_id: plan.messageId });
+      });
+      const held = await this.flushHeld(sessionId, turnId);
+      if (held === "failed") return "failed";
+      if (plan.callModel || held === "wrote") return "wrote";
+      return "empty";
+    }
+    const held = await this.flushHeld(sessionId, turnId);
+    if (held === "failed") return "failed";
+    return held === "wrote" ? "wrote" : "empty";
+  }
+
+  private async flushHeld(sessionId: string, turnId: string): Promise<"wrote" | "none" | "failed"> {
+    const held = await this.withInbox(async () => {
+      const next = this.heldSubmit;
+      this.heldSubmit = null;
+      return next;
+    });
+    if (!held) return "none";
+    const storedImages = [];
+    for (const image of held.images) {
+      storedImages.push(await this.store.saveImage(sessionId, image.mime as ImageMime, image.base64));
+    }
+    const userMsgId = newId("msg");
+    const userTraceId = newId("trace");
+    const ok = await this.persistMessage(turnId, {
+      id: userMsgId,
+      session_id: sessionId,
+      turn_id: turnId,
+      role: "user",
+      content: held.text,
+      ...(storedImages.length ? { images: storedImages } : {}),
+      trace_id: userTraceId,
+      created_at: nowIso(),
+    });
+    if (!ok) {
+      await this.withInbox(async () => {
+        if (!this.heldSubmit) this.heldSubmit = held;
+      });
+      return "failed";
+    }
+    if (
+      !(await this.persistTrace(turnId, {
+        id: userTraceId,
+        session_id: sessionId,
+        turn_id: turnId,
+        type: "user_message",
+        message_id: userMsgId,
+        detail: { content_chars: held.text.length, image_count: storedImages.length, held: true },
+      }))
+    ) {
+      return "failed";
+    }
+    this.emit({ type: "held_user", turn_id: turnId, session_id: sessionId });
+    return "wrote";
+  }
+
+  private async withInbox<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.inboxChain;
+    let release!: () => void;
+    this.inboxChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   readSessionImage(sessionId: string, relativePath: string): Promise<string> {
     return this.store.readImageDataUrl(sessionId, relativePath);
   }
 
   async submit(sessionId: string, text: string, images?: SubmittedImage[]): Promise<void> {
-    if (this.running) throw new AgentError("A turn is already running", "busy");
     const trimmed = text.trim();
     const incoming = images ?? [];
     if (!trimmed && incoming.length === 0) {
@@ -416,11 +704,25 @@ export class AgentRuntime {
     if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
       throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
     }
-    this.running = true;
+    const held = await this.beginUserTurn(sessionId, trimmed, incoming);
+    if (held) return;
+    try {
+      await this.executeUserTurn(sessionId, trimmed, incoming);
+    } finally {
+      await this.settleAfterTurn(sessionId);
+      this.abort = null;
+      this.skillBodies = [];
+      this.turnWritesAllowed = false;
+      this.batchOutputDirs = [];
+    }
+  }
+
+  private async executeUserTurn(sessionId: string, trimmed: string, incoming: SubmittedImage[]): Promise<void> {
     this.turnWritesAllowed = false;
     this.batchOutputDirs = [];
     this.abort = new AbortController();
     const turn_id = newId("turn");
+    this.activeTurnId = turn_id;
     try {
       this.skillBodies = await this.loadSkillBodies(trimmed);
       // Close any orphaned tool_calls from a prior crash/storage failure before
@@ -437,6 +739,7 @@ export class AgentRuntime {
       if (!(await this.persistTrace(turn_id, { session_id: sessionId, turn_id, type: "turn_start" }))) {
         return;
       }
+      if ((await this.intake(sessionId, turn_id, false)) === "failed") return;
       const userMsgId = newId("msg");
       const userTraceId = newId("trace");
       const userMsg: Message = {
@@ -463,9 +766,18 @@ export class AgentRuntime {
         return;
       }
 
-      let steps = 0;
+      await this.runModelLoop(sessionId, turn_id);
+    } finally {
+      this.turnWritesAllowed = false;
+      this.batchOutputDirs = [];
+    }
+  }
 
-      while (true) {
+  /** One model loop. The caller has already appended the user message this request should answer. */
+  private async runModelLoop(sessionId: string, turn_id: string): Promise<void> {
+    let steps = 0;
+    while (true) {
+        if (!this.abort) return;
         if (this.abort.signal.aborted) {
           await this.handleCancel(sessionId, turn_id, "");
           return;
@@ -629,7 +941,16 @@ export class AgentRuntime {
         }
 
         if (toolCalls.length === 0) {
-          await this.emitDoneAndMaybeTitle(sessionId, turn_id, "completed");
+          const extra = await this.intake(sessionId, turn_id, true);
+          if (extra === "failed") return;
+          if (extra === "wrote") {
+            // The model had finished. This extra request is a continuation, so a
+            // typed message can wait and go out after the receipt.
+            this.turnKind = "wakeup";
+            this.emit({ type: "inbox_wake", turn_id, session_id: sessionId });
+            continue;
+          }
+          this.turnOutcome = "completed";
           return;
         }
 
@@ -682,13 +1003,7 @@ export class AgentRuntime {
         steps += 1;
         const stop = await this.runToolBatch(sessionId, turn_id, toolCalls);
         if (stop) return;
-      }
-    } finally {
-      this.running = false;
-      this.turnWritesAllowed = false;
-      this.batchOutputDirs = [];
-      this.abort = null;
-      this.skillBodies = [];
+        if ((await this.intake(sessionId, turn_id, false)) === "failed") return;
     }
   }
 

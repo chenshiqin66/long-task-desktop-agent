@@ -1112,6 +1112,20 @@ body {
   text-align: right;
 }
 
+.msg.notice {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-elev);
+}
+
+.msg.notice .msg-role {
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+}
+
 .reask {
   margin-top: 4px;
   padding: 0 2px;

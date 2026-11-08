@@ -67,6 +67,7 @@ flowchart LR
 | `store/sessionStore.ts` | 会话目录、`meta.json`、`messages.jsonl`。列会话时只看 `sessions/` 下的直接子目录 |
 | `store/subagentStore.ts` | 子代理的四个文件，放在所属会话的 `subagents/` 下，不会被列成另一个会话 |
 | `store/taskStore.ts` | 本会话的任务清单。一个任务一个 JSON。目录锁让同一次领取只有一个成功 |
+| `store/inboxStore.ts` | 本会话的完成通知队列。只追加的 `inbox.jsonl`。先认领再写入消息，崩溃后用同一条消息 id 补写 |
 | `context/taskReminder.ts` | 连续 10 条助手回复没碰任务工具、且还有未完成任务时，给这一次请求附上清单 |
 | `store/traceStore.ts` | 只追加的 `trace.jsonl` |
 | `tools/host.ts` | 内置工具表。未知工具和参数解析错误都变成 `is_error` 的工具结果，不抛出循环。`subagent` 在这里不执行，由 runtime 接手 |
@@ -103,6 +104,7 @@ flowchart LR
   images/                               用户随提示词上传的图片字节
   trace.jsonl                           审计索引，一行一条 TraceEvent。llm_request 用 context_id 指向 context.jsonl
   context.jsonl                         每次模型调用看见的上下文。图片只记路径和字节数，工具表全文只在哈希首次出现时写一行
+  inbox.jsonl                           完成通知队列。一行一次入队、认领或标已写入。模型看不见这个文件，排空后才进入 messages.jsonl
   tasks/                                本会话的任务清单，不是项目文件，也不会被列成会话
     {id}.json                           一个任务。编号是十进制字符串，删掉也不复用
     .highwatermark                      用过的最大编号
@@ -136,24 +138,24 @@ flowchart TB
 
 `role=tool` 的消息可以带 `tool_call_arguments`，只给界面和审计看。组装上下文时不会把它再发给模型，因为参数已经在配对的那条助手消息的 `tool_calls` 上。
 
-标识前缀：`sess`、`turn`、`msg`、`trace`、`perm`、`subagent`。早先的子代理目录是 `agent_…`，重开时仍会读。
+标识前缀：`sess`、`turn`、`msg`、`trace`、`perm`、`subagent`、`note`。早先的子代理目录是 `agent_…`，重开时仍会读。`inbox.jsonl` 不在四个文件页里。
 
 配置里的 `apiKey` 不会出现在 messages、trace 或 context 里。`llm_request` 只记模型名、条数、字数、图片张数和 `context_id`。这个 id 就是 `context.jsonl` 里对应请求行的 `id`，文件字段名不改。四个文件页里，`messages.jsonl`、`trace.jsonl`、`context.jsonl` 都按条折叠：标题是序号、角色或事件类型，再加一行摘要；展开后是这一条的 JSON，超过 1600 字的字符串截断。`meta.json` 是整份 JSON。用当前页搜索 `context_id` 即可定位。`user_message` 这条 trace 只记字数，不记正文。
 
 ## 一轮提问
 
 1. 渲染进程 `submit(sessionId, text)`。主进程交给当前 runtime。
-2. 先补齐磁盘上悬空的工具调用，再追加 `turn_start`、用户 `Message` 和 `user_message` trace。
+2. 先补齐磁盘上悬空的工具调用，再追加 `turn_start`。若 `inbox.jsonl` 里还有没写进对话的完成回执，先收成一条 `task-notification` 用户消息，再追加你的用户 `Message` 和 `user_message` trace。回执因此排在你这句话前面。
 3. 循环直到没有工具调用、被取消、出错或到达 `maxSteps`（默认 50）：
    - 读出全部 messages，压缩副本，装成上下文。若连续 10 条助手回复没调用任务工具、且还有未完成任务，这一次请求的 system 末尾附上这些任务。附注不写入 `messages.jsonl`。
    - 流式请求模型。文本增量以 `text` 事件推到界面；工具调用以 `tool_call` 事件推送。
-   - 没有工具调用就 `done(completed)`，并视情况自动改标题。
+   - 没有工具调用时先排空 inbox。写出了回执就再请求一次模型，不结束这一轮。队列空了才 `done(completed)`，并视情况自动改标题。只有回执、没有人说话的轮次不计入自动标题。
    - 有工具调用则 `steps` 加一。同一条回复里、`ask_user` 之前的多个 `subagent` 一起执行。其余工具按顺序执行。
 4. 每个工具先经 `classifyToolCall`：
    - `read`：直接执行。
    - `write`：发出 `permission_request`，等界面允许或拒绝。允许一次即放行这一轮剩下的写操作和命令；拒绝只否定这一次，写成一条错误工具结果，循环可以继续。`ask_user` 不在这次放行里。
    - `blocked`：不执行，写成错误工具结果。上一轮的允许也不会把这类命令放出来。
-5. 每条工具调用先写一条 `tool_call` trace（工具名、参数）。真正执行的记在开跑之前；拒绝、停止、未执行而收口的记在结果前面，两条时间会贴在一起。然后追加 `role=tool` 的消息和 `tool_result`。`tool_result.request_id` 指回这条 `tool_call`。拒绝、停止写在结果的 `denied` / `cancelled` 上，不写进开始记录。`duration_ms` 只出现在真正执行过的结果上，不算等你点允许的时间。然后回到第 3 步，让模型看见结果。
+5. 每条工具调用先写一条 `tool_call` trace（工具名、参数）。真正执行的记在开跑之前；拒绝、停止、未执行而收口的记在结果前面，两条时间会贴在一起。然后追加 `role=tool` 的消息和 `tool_result`。`tool_result.request_id` 指回这条 `tool_call`。拒绝、停止写在结果的 `denied` / `cancelled` 上，不写进开始记录。`duration_ms` 只出现在真正执行过的结果上，不算等你点允许的时间。这一批工具结果都写完之后先排空 inbox，再回到第 3 步。完成回执是排在这些 `tool` 消息后面的另一条用户消息，不是同一次工具调用的第二条结果。
 6. 取消会留下已经流出的文本（标成 interrupted），停掉正在跑的 shell，尚未执行的工具调用用合成结果收口，并写 cancel trace。
 
 `maxSteps` 数的是「模型返回了一批工具调用」的次数，不是单次 HTTP。一批里有三次 `web_search`，这一轮只把 `steps` 加一，但会打出三次搜索请求，外加这一轮的对话补全请求。搜索和 token 是两笔用量。
@@ -198,6 +200,26 @@ flowchart TB
 
 Shell 仍然可以写进 `.agent`。文件工具这条路已经堵住。
 
+## 完成通知
+
+后台结束的结果先进入 `{session}/inbox.jsonl`，不直接改 `messages.jsonl`。同一条完成的 id 只保留第一次。文件只追加，不整份重写：一行 `enqueue`，排空时再追加 `claim` 和 `consumed`。
+
+模型下一次能看见的仍是 `messages.jsonl`。runtime 把还没写入的行收成一条 `user` 消息，`name` 是 `task-notification`。一次排空合成一条，正文写明这是完成回执，不是用户的新指令。单条最长 6000 字，整条通知最长 24000 字。`claim` 先落盘，上面带着将要使用的消息 id；消息写入之后才追加 `consumed`。两步之间崩溃，下次排空补的是同一条，不会再写一条。这条回执沿用当前轮的 `turn_id`，避免把这一轮已经读过的技能收成一行。
+
+三个写入点：
+
+- 这一批工具结果全部写完之后、下一次模型请求之前。
+- 模型这一步没有工具调用、本要结束时。写出了回执就再请求一次，不发 `done`。
+- 没有回合在跑，并且界面正打开这个会话。入队的一方自己开一轮续跑。没被打开的会话只留在队列里，等被打开，或等下一次发送。
+
+取消和到达 `maxSteps` 不再开一轮。队列留着，下一次你自己的发送会在你的那句话之前把它们写入。
+
+续跑占用现在这一把 `running`。输入框仍可打字：空着时按钮是停止，有字时是发送。这句话先留着，排在回执后面，跟下一次模型请求一起送出。普通用户回合里再发送，仍会被告知这一轮还在跑。
+
+界面把这条画成「后台完成」，不画成用户气泡，也没有「重新问」。进程重启后队列还在；只有当前打开的会话会自动续跑。
+
+`postTaskNotification` 是入队的入口。现在的 `subagent` 仍是随轮的：父模型要等它的工具结果才继续生成，结束时也不会调用这个入口。队列在，这一步还没有从子代理进来的生产者。
+
 ## 子代理
 
 主模型不临时编写子代理。它调用 `subagent`，选定已有类型，并写一段能单独执行的任务。身份在定义时就定了：系统提示词、工具和回合上限都在 `tools/agentTool.ts`。任务正文最长 20000 字。`description` 是界面上的短标签，超过 200 字会截断。
@@ -225,7 +247,7 @@ Shell 仍然可以写进 `.agent`。文件工具这条路已经堵住。
 
 点停止只把这一轮的中止信号置上，按钮变成灰色的「正在停止」，直到 runtime 发出 `done` 才变回「发送」。子代理在每次模型请求之间、以及同一批工具的下一个之前看这个信号。`keyword_search` 在每个目录和每个文件之前也看。正在读的那一个文件不会被从半截拆掉。
 
-还没有：自定义类型、子代理再派子代理、父模型在子代理运行时继续思考、同一工作区里多个会话同时跑。
+还没有：自定义类型、子代理再派子代理、父模型在子代理运行时继续思考、同一工作区里多个会话同时跑。完成通知的队列已经接上，但现在的子代理结束时不会往里写。
 
 
 *deepseek阅读工具系统代码后的亮点总结：*
@@ -320,6 +342,6 @@ npm start -w @agent/app
 
 ## 现在还不做
 
-没有跨会话记忆，没有用户自定义工具，也没有右侧检视面板。文件页就是主区里的四个标签，不是分栏。子代理只有 `explore` 和 `worker` 两种，不能再派子代理，父模型也不会在子代理运行时继续生成。子代理的四个文件不在主区打开。
+没有跨会话记忆，没有用户自定义工具，也没有右侧检视面板。文件页就是主区里的四个标签，不是分栏。子代理只有 `explore` 和 `worker` 两种，不能再派子代理，父模型也不会在子代理运行时继续生成。子代理的四个文件不在主区打开。完成通知可以在没有人打字时续跑当前打开的会话；随轮的子代理还不会产生这种通知。
 
 旧说明里写过「不做 web」。这已经不对：`web_search` 是内置工具。

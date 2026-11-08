@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld("agent", {
     text: string,
     images?: Array<{ mime: string; base64: string }>,
   ) => ipcRenderer.invoke("agent:submit", sessionId, text, images),
+  watchSession: (sessionId: string | null) => ipcRenderer.invoke("agent:watchSession", sessionId),
   listSkills: () => ipcRenderer.invoke("agent:listSkills"),
   installSkill: () => ipcRenderer.invoke("agent:installSkill"),
   setSkillEnabled: (name: string, enabled: boolean) =>

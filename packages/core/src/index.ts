@@ -5,6 +5,7 @@ export * from "./store/traceStore.js";
 export * from "./store/contextStore.js";
 export * from "./store/subagentStore.js";
 export * from "./store/taskStore.js";
+export * from "./store/inboxStore.js";
 export * from "./context/auditContext.js";
 export * from "./session/autoTitle.js";
 

@@ -370,6 +370,17 @@ export function appendReaskButton(messageBody: HTMLElement, onClick: () => void)
   msg.append(btn);
 }
 
+/** Background receipt. Not a user bubble, so it does not get a re-ask control. */
+export function appendTaskNotice(container: HTMLElement, content: string): HTMLElement {
+  const div = el("div", { class: "msg notice" });
+  div.append(el("span", { class: "msg-role" }, "后台完成"));
+  const body = el("div", { class: "msg-body" });
+  body.textContent = content;
+  div.append(body);
+  container.appendChild(div);
+  return body;
+}
+
 /** Returns the `.msg-body` element (streaming appends here). */
 export function appendMessage(
   container: HTMLElement,

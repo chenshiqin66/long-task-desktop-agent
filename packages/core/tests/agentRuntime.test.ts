@@ -113,6 +113,7 @@ describe("AgentRuntime", () => {
     expect(prompt).toContain("call claim_task");
     expect(prompt).toContain("task_create does not run the step");
     expect(prompt).toContain("pass task_id");
+    expect(prompt).toContain("后台任务完成。这是完成回执");
   });
 
   let workspace: string;

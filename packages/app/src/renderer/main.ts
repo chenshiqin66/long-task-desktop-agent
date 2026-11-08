@@ -1,6 +1,7 @@
 import {
   appendAskCard,
   appendMessage,
+  appendTaskNotice,
   appendReaskButton,
   CANCELLED_TURN_NOTICE,
   isCancelledNotice,
@@ -115,6 +116,7 @@ declare global {
         text: string,
         images?: Array<{ mime: string; base64: string }>,
       ): Promise<void>;
+      watchSession(sessionId: string | null): Promise<void>;
       listSkills(): Promise<Array<{ name: string; description: string; enabled: boolean }>>;
       installSkill(): Promise<{ name: string; description: string; enabled: boolean } | null>;
       setSkillEnabled(name: string, enabled: boolean): Promise<void>;
@@ -201,6 +203,8 @@ const runBoard = document.createElement("div");
 let runParked = false;
 let parkedSessionId: string | null = null;
 let isRunning = false;
+/** Continuation turn: the composer stays open and a typed message is sent ahead of the next request. */
+let wakeAcceptsInput = false;
 /** Stop was asked; the turn has not emitted done yet. Composer stays locked. */
 let stopRequested = false;
 /** Latest phase of the in-flight submit. Shown only on that session's page. */
@@ -485,7 +489,8 @@ function messageRecordSummary(row: Record<string, unknown>, index: number): stri
 
 function renderMessageEntry(item: unknown, index: number): { summary: string; className: string } {
   if (!isRecord(item)) return { summary: `${index + 1} · 无法解析`, className: "" };
-  const className = item.role === "user" ? "is-user" : item.is_error === true ? "is-error" : "";
+  const className =
+    item.name === "task-notification" ? "is-notice" : item.role === "user" ? "is-user" : item.is_error === true ? "is-error" : "";
   return { summary: messageRecordSummary(item, index), className };
 }
 
@@ -873,9 +878,12 @@ function updateChrome(): void {
   const asking = Boolean(pendingAsk) && viewingRun();
   const onRun = viewingRun();
   const lockedOut = isRunning && !onRun;
-  const canCompose = hasWorkspace && onRun && !asking && !isRunning && !creatingSession;
+  const wakeHere = wakeAcceptsInput && onRun && !asking;
+  const wakeDraft = wakeHere && (inputEl.value.trim().length > 0 || pendingImages.length > 0);
+  const canCompose = hasWorkspace && onRun && !asking && !creatingSession && (!isRunning || wakeHere);
   // Stop belongs to the running session's composer, not to every page.
-  const stopHere = isRunning && onRun && !asking;
+  // During a continuation, text in the box sends; an empty box still stops.
+  const stopHere = isRunning && onRun && !asking && !wakeDraft;
   const stopping = stopHere && stopRequested;
   btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose;
   btnSend.textContent = asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : "发送";
@@ -886,7 +894,7 @@ function updateChrome(): void {
     asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : canCompose ? "发送" : "发送已禁用",
   );
   btnNew.disabled = !hasWorkspace || creatingSession;
-  inputEl.disabled = lockedOut || creatingSession || (isRunning && !asking);
+  inputEl.disabled = lockedOut || creatingSession || (isRunning && !asking && !wakeHere);
   composerEl.classList.toggle("is-locked", lockedOut);
   composerEl.classList.toggle("has-draft", lockedOut && inputEl.value.length > 0);
   composerLockNote.hidden = !lockedOut;
@@ -984,7 +992,10 @@ function discardParkedRun(): void {
 
 function setRunning(v: boolean): void {
   isRunning = v;
-  if (!v) stopRequested = false;
+  if (!v) {
+    stopRequested = false;
+    wakeAcceptsInput = false;
+  }
   updateChrome();
 }
 
@@ -1574,6 +1585,8 @@ async function showSession(workspace: string, sessionId: string, title: string):
     else await loadCurrent();
     await refreshSessions();
     updateChrome();
+    if (sameWorkspace(workspace, activeWorkspace)) void window.agent.watchSession(sessionId);
+    else void window.agent.watchSession(null);
   } catch (err) {
     showStatusError(err);
   }
@@ -1619,6 +1632,7 @@ async function showNewPage(): Promise<void> {
   syncEmptyState();
   setStatus("", false);
   updateChrome();
+  void window.agent.watchSession(null);
   if (!inputEl.disabled) inputEl.focus();
 }
 
@@ -1719,6 +1733,10 @@ async function loadCurrent(): Promise<void> {
           openQuestion = null;
           appendMessage(messagesEl, "assistant", m.content, { rich: true });
         }
+      } else if (m.role === "user" && m.name === "task-notification") {
+        if (openQuestion) closeUnanswered();
+        openQuestion = null;
+        appendTaskNotice(messagesEl, m.content);
       } else if (m.role === "user") {
         if (openQuestion) closeUnanswered();
         const urls = await imageDataUrls(viewWorkspace, currentSessionId, m.images);
@@ -1747,6 +1765,7 @@ async function applyWorkspace(path: string | null): Promise<void> {
   currentSessionId = null;
   viewWorkspace = null;
   currentSessionTitle = "";
+  void window.agent.watchSession(null);
   resetStreamTarget(null);
   clearOpenTools();
   runGate = idleGate();
@@ -2042,7 +2061,8 @@ async function sendMessage(): Promise<void> {
     await answerPending(inputEl.value);
     return;
   }
-  if (isRunning || creatingSession) return;
+  if (creatingSession) return;
+  if (isRunning && !wakeAcceptsInput) return;
   const text = inputEl.value.trim();
   const images = pendingImages.slice();
   if (!text && images.length === 0) return;
@@ -2068,14 +2088,17 @@ async function sendMessage(): Promise<void> {
   discardParkedRun();
   if (messagesEl.querySelector(".empty-state")) messagesEl.innerHTML = "";
   followTail = true;
+  const joiningWake = isRunning && wakeAcceptsInput;
   appendUserQuestion(text, images.map((image) => image.previewUrl));
-  resetStreamTarget(appendMessage(messagesEl, "assistant", ""));
-  clearOpenTools();
-  runLiveStatus = "运行中…";
-  // Record the run before painting. updateChrome treats a running flag with an
-  // empty run session as "some other session", which locks this page for the whole turn.
-  runGate = beginRun(sessionId);
-  setRunning(true);
+  if (!joiningWake) {
+    resetStreamTarget(appendMessage(messagesEl, "assistant", ""));
+    clearOpenTools();
+    runLiveStatus = "运行中…";
+    // Record the run before painting. updateChrome treats a running flag with an
+    // empty run session as "some other session", which locks this page for the whole turn.
+    runGate = beginRun(sessionId);
+    setRunning(true);
+  }
   try {
     await window.agent.submit(
       sessionId,
@@ -2124,6 +2147,10 @@ btnSend.onclick = () => {
     return;
   }
   if (isRunning && viewingRun()) {
+    if (wakeAcceptsInput && (inputEl.value.trim() || pendingImages.length > 0)) {
+      void sendMessage();
+      return;
+    }
     requestStop();
     return;
   }
@@ -2138,7 +2165,10 @@ inputEl.addEventListener("keydown", (ev) => {
     void sendMessage();
   }
 });
-inputEl.addEventListener("input", () => rememberComposer());
+inputEl.addEventListener("input", () => {
+  rememberComposer();
+  if (wakeAcceptsInput) updateChrome();
+});
 
 btnImage.onclick = () => imageInput.click();
 imageInput.onchange = () => {
@@ -2483,6 +2513,17 @@ function applyTranscript(host: HTMLElement, e: {
     if (host === messagesEl) keepTail(mutate);
     else mutate();
   };
+  if (e.type === "task_notification") {
+    if (streamingEl && streamBuffer) paintStreamRich(true);
+    resetStreamTarget(null);
+    place(() => appendTaskNotice(host, e.content ?? ""));
+    return true;
+  }
+  if (e.type === "held_user") {
+    if (streamingEl && streamBuffer) paintStreamRich(true);
+    resetStreamTarget(null);
+    return true;
+  }
   if (e.type === "text") {
     if (!streamingEl) place(() => resetStreamTarget(appendMessage(host, "assistant", "")));
     streamBuffer += e.delta ?? "";
@@ -2589,6 +2630,15 @@ window.agent.onEvent((e) => {
       updateChrome();
     }
     void refreshSessions();
+    return;
+  }
+  if (e.type === "inbox_wake") {
+    wakeAcceptsInput = e.session_id === currentSessionId;
+    runGate = beginRun(e.session_id);
+    if (streamingEl && streamBuffer) paintStreamRich(true);
+    resetStreamTarget(null);
+    setRunning(true);
+    if (wakeAcceptsInput) showRunStatus("正在把后台结果交给模型");
     return;
   }
 

@@ -563,6 +563,14 @@ app.whenReady().then(() => {
       await (await ensureRuntime()).submit(sessionId, text, normalizeSubmittedImages(images));
     },
   );
+  ipcMain.handle("agent:watchSession", async (_e, sessionId: unknown) => {
+    if (sessionId != null && typeof sessionId !== "string") throw new Error("Invalid session id");
+    const watched: string | null = typeof sessionId === "string" ? sessionId : null;
+    if (watched) assertValidSessionId(watched);
+    if (!workspacePath) return;
+    const rt = await ensureRuntime();
+    void rt.watchSession(watched).catch(() => undefined);
+  });
   ipcMain.handle(
     "agent:readSessionImage",
     async (_e, sessionId: string, relativePath: string) => {

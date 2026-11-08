@@ -101,7 +101,13 @@ export type RuntimeEvent =
       session_id: string;
       title: string;
       source: "auto";
-    };
+    }
+  /** A continuation turn is about to call the model for a background receipt. */
+  | { type: "inbox_wake"; turn_id: string; session_id: string }
+  /** A task-notification user message was just appended. */
+  | { type: "task_notification"; turn_id: string; content: string }
+  /** A message typed during a continuation was appended. The bubble is already on screen. */
+  | { type: "held_user"; turn_id: string; session_id: string };
 
 export interface TraceEvent {
   id: string;
