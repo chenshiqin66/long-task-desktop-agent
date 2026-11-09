@@ -61,6 +61,86 @@ body {
   overflow: hidden;
 }
 
+/* Chromium ignores `*::-webkit-scrollbar`, so the bar never leaves the native square style.
+   Width is the vertical bar; height is the horizontal bar. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-track:vertical {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink-muted) 18%, transparent);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ink-muted) 36%, transparent);
+}
+
+pre.md-code::-webkit-scrollbar-thumb,
+.store-view::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, #e8eef4 26%, transparent);
+}
+
+pre.md-code::-webkit-scrollbar-thumb:hover,
+.store-view::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, #e8eef4 48%, transparent);
+}
+
+/* Keep the 6px gutter. Zeroing the width reflows the pane. The page behind the bar is a gradient, so a flat background color would show. */
+#main.is-scrollbar-off .messages::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .store-view::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .notice-body::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .md-table-wrap::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .tool-detail::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off pre::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .permission-dock::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .permission-body::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .task-panel::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .skills-page::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off textarea::-webkit-scrollbar-thumb,
+#explain-pane.is-scrollbar-off .messages::-webkit-scrollbar-thumb,
+#explain-pane.is-scrollbar-off .notice-body::-webkit-scrollbar-thumb,
+#explain-pane.is-scrollbar-off .md-table-wrap::-webkit-scrollbar-thumb,
+#explain-pane.is-scrollbar-off .tool-detail::-webkit-scrollbar-thumb,
+#explain-pane.is-scrollbar-off pre::-webkit-scrollbar-thumb,
+#explain-pane.is-scrollbar-off textarea::-webkit-scrollbar-thumb,
+#main.is-scrollbar-off .messages::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .store-view::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .notice-body::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .md-table-wrap::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .tool-detail::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off pre::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .permission-dock::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .permission-body::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .task-panel::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off .skills-page::-webkit-scrollbar-thumb:hover,
+#main.is-scrollbar-off textarea::-webkit-scrollbar-thumb:hover,
+#explain-pane.is-scrollbar-off .messages::-webkit-scrollbar-thumb:hover,
+#explain-pane.is-scrollbar-off .notice-body::-webkit-scrollbar-thumb:hover,
+#explain-pane.is-scrollbar-off .md-table-wrap::-webkit-scrollbar-thumb:hover,
+#explain-pane.is-scrollbar-off .tool-detail::-webkit-scrollbar-thumb:hover,
+#explain-pane.is-scrollbar-off pre::-webkit-scrollbar-thumb:hover,
+#explain-pane.is-scrollbar-off textarea::-webkit-scrollbar-thumb:hover {
+  background: transparent;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -691,6 +771,10 @@ body {
   display: none !important;
 }
 
+#explain-pane.is-explain-drop {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 .explain-bar {
   flex-shrink: 0;
   display: flex;
@@ -806,23 +890,40 @@ body {
 }
 
 .view-tabs.has-files #main-title {
-  flex: 0 1 auto;
-  max-width: 18rem;
+  /* Shrink factor 0: a narrow bar ellipsizes file tabs before it clips the session name. */
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: 0;
+  max-width: min(22rem, 62%);
   margin-right: 18px;
   padding: 4px 2px;
   font-size: var(--text);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--ink);
   cursor: pointer;
   pointer-events: auto;
 }
 
+.view-tab-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .view-tabs.has-files .store-tab {
-  flex: 0 0 auto;
-  max-width: none;
-  padding: 4px 12px;
+  flex: 0 1 auto;
+  align-self: center;
+  height: 26px;
+  min-width: 2.75rem;
+  max-width: max-content;
+  margin: 0 3px;
+  padding: 0 10px;
+  border-radius: 4px;
+  background: #d3dbd8;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
   color: var(--ink-muted);
@@ -845,18 +946,29 @@ body {
   background: transparent;
 }
 
+.view-tabs.has-files .store-tab:hover {
+  color: var(--ink);
+  background: #c5d0cb;
+}
+
 .view-tabs.has-files #main-title.active {
   color: var(--ink);
 }
 
-.view-tabs.has-files .store-tab.active {
-  color: var(--accent);
+.view-tabs.has-files .store-tab.active,
+.view-tabs.has-files .store-tab.active:hover {
+  color: #f5f5f5;
+  background: #111;
   font-weight: 600;
 }
 
 .view-tabs.has-files .view-tab.active::after {
   height: 3px;
   background: var(--accent);
+}
+
+.view-tabs.has-files .store-tab.active::after {
+  background: transparent;
 }
 
 .main-stage {
@@ -956,6 +1068,7 @@ body {
 
 .conversation,
 .store-dock {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -964,15 +1077,16 @@ body {
 }
 
 .store-dock {
-  background: color-mix(in srgb, #fff 62%, var(--paper-elev));
+  background: #111;
+  color: #d6d6d6;
 }
 
 .store-hint {
   flex-shrink: 0;
   padding: 8px 12px 0;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--ink-muted);
+  font-size: 12px;
+  color: #8d8d8d;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -991,13 +1105,13 @@ body {
   overflow-x: hidden;
   overflow-y: auto;
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  line-height: 1.4;
-  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d6d6d6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 2;
-  background: transparent;
+  background: #111;
 }
 
 /* messages.jsonl: user role + content — same green as Send */
@@ -1008,23 +1122,27 @@ body {
 }
 
 .context-entry {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  background: #161616;
 }
 
 .context-entry summary {
   cursor: pointer;
   padding: 6px 8px;
-  color: var(--ink);
+  color: #d6d6d6;
+}
+
+.context-entry summary::marker {
+  color: #8d8d8d;
 }
 
 .context-entry.is-user > summary {
-  color: var(--accent-ink);
+  color: #f5f5f5;
 }
 
 .context-entry.is-error > summary {
-  color: var(--danger);
+  color: #f0a8a2;
 }
 
 .context-entry-body {
@@ -1035,11 +1153,8 @@ body {
 }
 
 .store-view .store-user-line {
-  color: var(--accent-ink);
-  background: color-mix(in srgb, var(--teal-bright) 28%, transparent);
-  border-radius: 3px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+  color: inherit;
+  background: none;
 }
 
 /* Right-click copy on chat and the four file tabs */
@@ -1116,6 +1231,73 @@ body {
   margin-top: -10px;
 }
 
+.msg.is-blank {
+  display: none;
+}
+
+.tool-group {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+}
+
+.tool-group:not([open]) {
+  background: color-mix(in srgb, var(--paper-elev) 42%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+
+.tool-group:not([open])::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--line);
+  border-radius: 1px;
+}
+
+.tool-group.is-error:not([open])::before {
+  background: var(--danger);
+}
+
+.tool-group-summary {
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.16;
+  color: var(--ink-muted);
+  padding: 2px 10px 2px 12px;
+  list-style: none;
+  word-break: break-word;
+}
+
+.tool-group-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-group-summary::before {
+  content: "▸ ";
+  color: var(--ink-muted);
+}
+
+.tool-group[open] > .tool-group-summary::before {
+  content: "▾ ";
+}
+
+.tool-group.is-error > .tool-group-summary {
+  color: var(--danger);
+}
+
+.tool-group-body {
+  margin: 1px 0 0 10px;
+}
+
+.tool-group-body > .msg.tool-step + .msg.tool-step {
+  margin-top: 0;
+}
+
 /* Subagent tools sit under the row that started them, not inside its disclosure. */
 .msg.tool-step.tool-step-nested {
   margin-left: 22px;
@@ -1128,6 +1310,161 @@ body {
 
 .messages.is-restoring .msg {
   animation: none;
+}
+
+/* Question rail sits in the right gutter, just left of the scrollbar. */
+#conversation {
+  position: relative;
+}
+
+.transcript-seam {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: 0;
+  background: #eaf3f0;
+  pointer-events: none;
+}
+
+#conversation:has(#question-nav:not([hidden])) .messages {
+  padding-right: 40px;
+}
+
+.msg.user {
+  scroll-margin-top: 12px;
+}
+
+.question-nav {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: 26px;
+  pointer-events: auto;
+}
+
+.question-nav-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.question-nav.is-open .question-nav-hit {
+  pointer-events: none;
+}
+
+.question-nav-card {
+  --question-nav-radius: 16px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  width: 26px;
+  height: auto;
+  max-height: 100%;
+  margin: 0;
+  /* Vertical padding stays put across hover, so the first tick does not jump. */
+  padding: 8px 2px;
+  border: 1px solid transparent;
+  border-radius: var(--question-nav-radius);
+  pointer-events: none;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.question-nav.is-open .question-nav-card {
+  width: min(268px, 46vw);
+  padding-left: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  border-color: color-mix(in srgb, var(--line) 72%, #fff);
+  filter: drop-shadow(0 10px 18px rgba(26, 35, 50, 0.14));
+  pointer-events: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.question-nav-card::-webkit-scrollbar-track:vertical {
+  margin-top: calc(var(--question-nav-radius) + 2px);
+  margin-bottom: calc(var(--question-nav-radius) + 2px);
+}
+
+.question-nav-card::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink-muted) 10%, transparent);
+}
+
+.question-nav-card::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ink-muted) 22%, transparent);
+}
+
+.question-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  height: calc(1.45em + 10px);
+  margin: 0;
+  padding: 5px 2px;
+  border: none;
+  background: transparent;
+  /* Neutral and close to the paper, so a full column of ticks does not read as rungs. */
+  color: #c2c6c3;
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.question-nav-label {
+  display: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-nav.is-open .question-nav-label {
+  display: block;
+}
+
+.question-nav.is-open .question-nav-item {
+  color: #8d938f;
+}
+
+.question-nav-tick {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.question-nav-item.is-current,
+.question-nav.is-open .question-nav-item.is-current {
+  color: var(--accent);
+}
+
+.question-nav-item.is-current .question-nav-tick {
+  width: 9px;
+  height: 3px;
+}
+
+.question-nav-item:hover:not(.is-current),
+.question-nav-item:focus-visible:not(.is-current),
+.question-nav.is-open .question-nav-item:hover:not(.is-current),
+.question-nav.is-open .question-nav-item:focus-visible:not(.is-current) {
+  color: var(--ink);
 }
 
 .msg {
@@ -1172,6 +1509,36 @@ body {
   font-size: var(--text);
 }
 
+.turn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.turn > .msg.user {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* msg-in ends on a transform. Chromium then treats this as relative, so the bubble scrolls away from the seam. */
+  animation: none;
+}
+
+.turn > .msg.user.is-stuck .msg-body {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.turn > .msg.user.is-stuck:has(.msg-body) .msg-images {
+  display: none;
+}
+
 .msg.user {
   align-self: flex-end;
   display: flex;
@@ -1183,6 +1550,7 @@ body {
 .msg.notice {
   position: relative;
   align-self: stretch;
+  flex-shrink: 0;
   width: 100%;
   max-width: 100%;
   padding: 0;
@@ -1217,8 +1585,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  height: 1lh;
-  padding: 0 10px 0 14px;
+  padding: 6px 10px 2px 14px;
 }
 
 .notice-title {
@@ -1245,16 +1612,16 @@ body {
 
 .msg.notice .notice-body {
   margin: 0;
-  padding: 0 12px 0 14px;
+  padding: 0 12px 6px 14px;
   color: var(--ink);
-  /* Title is line 1. Three more lines keep the closed card at 4. */
-  max-height: calc(3 * 1lh);
+  /* Title is its own row. Three more lines keep the closed card short. rem, not lh: Electron 33 treats lh as 0. */
+  max-height: 3.54rem;
   overflow: hidden;
 }
 
 .msg.notice.is-open .notice-body {
-  /* Title plus this cap is 12 lines. Taller receipts scroll inside the card. */
-  max-height: calc(11 * 1lh);
+  /* About eleven lines. Taller receipts scroll inside the card. */
+  max-height: 12.96rem;
   overflow-y: auto;
 }
 
@@ -1361,7 +1728,9 @@ body {
   max-width: 100%;
   margin: 0.5em 0;
   overflow: auto;
-  border: 1px solid var(--line);
+  /* One 1px stroke. A cell border on the same edge doubles the straight sides
+     and leaves the radius looking like a missing corner. */
+  border: 1px solid #80958d;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.55);
 }
@@ -1377,13 +1746,24 @@ body {
 .msg.assistant .msg-body .md-table th,
 .msg.assistant .msg-body .md-table td {
   padding: 6px 8px;
-  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  border: none;
+  border-right: 1px solid #80958d;
+  border-bottom: 1px solid #80958d;
   text-align: left;
   vertical-align: top;
   /* Override .msg { word-break: break-word } so digits/short cells don't split. */
   word-break: normal;
   overflow-wrap: normal;
   white-space: nowrap;
+}
+
+.msg.assistant .msg-body .md-table th:last-child,
+.msg.assistant .msg-body .md-table td:last-child {
+  border-right: none;
+}
+
+.msg.assistant .msg-body .md-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .msg.assistant .msg-body .md-table th {
@@ -1486,6 +1866,10 @@ body {
 
 .tool-step details[open] .tool-summary::before {
   content: "▾ ";
+}
+
+.tool-step.is-error > details > .tool-summary {
+  color: var(--danger);
 }
 
 .tool-detail {
@@ -1614,6 +1998,18 @@ body {
   font-family: var(--font-ui);
   color: var(--ink-muted);
   font-size: var(--text);
+}
+
+.explain-empty {
+  max-width: none;
+  padding: 0 16px;
+  text-align: center;
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--ink-muted);
+  pointer-events: none;
 }
 
 .msg.error .msg-role {
@@ -2182,9 +2578,11 @@ body {
 }
 
 :is(#btn-send, #explain-send) {
-  padding: 4px 18px;
-  line-height: 1.2;
-  min-width: 4.75rem;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 12px;
+  line-height: 24px;
+  min-width: 0;
 }
 
 :is(#btn-send, #explain-send).is-stop {
@@ -2206,6 +2604,59 @@ body {
   cursor: default;
   filter: none;
   opacity: 1;
+}
+
+/* One row: placeholder and the buttons. The other pane stays like this until it is clicked. */
+:is(#composer, #explain-composer).is-compact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 50%;
+  padding: 3px 6px 3px 12px;
+  box-shadow: var(--shadow-soft);
+}
+
+:is(#composer, #explain-composer).is-compact .composer-images,
+:is(#composer, #explain-composer).is-compact .btn-image {
+  display: none;
+}
+
+:is(#composer, #explain-composer).is-compact .composer-input {
+  flex: 1 1 auto;
+  grid-column: auto;
+}
+
+:is(#composer, #explain-composer).is-compact :is(#input, #explain-input) {
+  display: block;
+  box-sizing: border-box;
+  height: 26px;
+  min-height: 0;
+  max-height: 26px;
+  margin: 0;
+  padding: 0;
+  line-height: 26px;
+  resize: none;
+  overflow: hidden;
+}
+
+:is(#composer, #explain-composer).is-compact :is(#input, #explain-input)::placeholder {
+  line-height: 26px;
+}
+
+:is(#composer, #explain-composer).is-compact .composer-actions {
+  flex: none;
+  grid-column: auto;
+  gap: 2px;
+  justify-content: flex-end;
+}
+
+:is(#composer, #explain-composer).is-compact.is-locked.has-draft .composer-lock-note {
+  position: absolute;
+  margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .config-dialog {

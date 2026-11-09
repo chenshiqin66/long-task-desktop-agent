@@ -419,7 +419,7 @@ export function appendTaskNotice(container: HTMLElement, content: string): HTMLE
       fitTaskNotice(div);
     }
   });
-  container.appendChild(div);
+  placeTranscript(container, div, false);
   watchNoticeHost(container);
   fitTaskNotice(div);
   if (body.clientHeight === 0) requestAnimationFrame(() => fitTaskNotice(div));
@@ -453,12 +453,218 @@ export function appendMessage(
     div.append(el("span", { class: "msg-role" }, ROLE_LABEL[role] ?? role));
   }
   if (content || role !== "user") div.append(body);
-  container.appendChild(div);
+  placeTranscript(container, div, role === "user");
   return body;
+}
+
+const stickyFrames = new WeakMap<HTMLElement, number>();
+
+/** Pin detection. The bubble only collapses once it is actually stuck, so the full prompt stays readable at the turn start. */
+function syncStickyTurns(container: HTMLElement): void {
+  if (stickyFrames.get(container)) return;
+  stickyFrames.set(
+    container,
+    requestAnimationFrame(() => {
+      stickyFrames.delete(container);
+      const padTop = parseFloat(getComputedStyle(container).paddingTop) || 0;
+      const scrollTop = container.getBoundingClientRect().top;
+      const edge = scrollTop + padTop + 4;
+      let pinned: HTMLElement | null = null;
+      for (const node of Array.from(container.querySelectorAll(":scope > .turn > .msg.user"))) {
+        if (!(node instanceof HTMLElement)) continue;
+        const turn = node.parentElement;
+        if (!(turn instanceof HTMLElement)) continue;
+        const top = node.getBoundingClientRect().top;
+        // An earlier turn leaves its bubble parked at the turn bottom, above the viewport. That is not pinned.
+        const stuck = top <= edge && top >= scrollTop - 1 && turn.getBoundingClientRect().top < top - 1;
+        node.classList.toggle("is-stuck", stuck);
+        if (stuck) pinned = node;
+      }
+      placeSeam(container, pinned);
+    }),
+  );
+}
+
+/** History is built in a detached holder and moved into `.messages` later, so watch the live scrollers, not the append target. */
+document.addEventListener(
+  "scroll",
+  (event) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.classList.contains("messages")) syncStickyTurns(target);
+  },
+  { capture: true, passive: true },
+);
+window.addEventListener("resize", () => {
+  for (const node of Array.from(document.querySelectorAll(".messages"))) {
+    if (node instanceof HTMLElement) syncStickyTurns(node);
+  }
+});
+
+function titleBar(container: HTMLElement): HTMLElement | null {
+  const pane = container.closest("#main, #explain-pane");
+  const bar = pane?.querySelector(":scope > .main-bar, :scope > .explain-bar");
+  return bar instanceof HTMLElement ? bar : null;
+}
+
+/** Rectangle from the title-bar bottom (y1) to the stuck bubble top (y2). */
+function placeSeam(container: HTMLElement, pinned: HTMLElement | null): void {
+  const host = container.parentElement;
+  if (!(host instanceof HTMLElement)) return;
+  const found = host.querySelector(":scope > .transcript-seam");
+  const seam = found instanceof HTMLElement ? found : document.createElement("div");
+  if (seam !== found) {
+    seam.className = "transcript-seam";
+    host.append(seam);
+  }
+  const bar = titleBar(container);
+  if (!pinned || !bar) {
+    seam.style.height = "0px";
+    return;
+  }
+  const y1 = bar.getBoundingClientRect().bottom;
+  const y2 = pinned.getBoundingClientRect().top;
+  seam.style.top = `${y1 - host.getBoundingClientRect().top}px`;
+  seam.style.height = `${Math.max(0, y2 - y1)}px`;
+}
+
+/** A user message starts a section. Later siblings stay in it, so the bubble can stick until the next user message. */
+function placeTranscript(container: HTMLElement, node: HTMLElement, startsTurn: boolean): void {
+  if (startsTurn) {
+    const turn = el("div", { class: "turn" });
+    turn.append(node);
+    container.append(turn);
+    return;
+  }
+  const last = container.lastElementChild;
+  if (last instanceof HTMLElement && last.classList.contains("turn")) {
+    last.append(node);
+    return;
+  }
+  container.append(node);
+}
+
+export function removeLastTranscriptNodes(container: HTMLElement, count: number): void {
+  for (let i = 0; i < count; i++) {
+    const nodes = container.querySelectorAll(".msg");
+    const last = nodes[nodes.length - 1];
+    if (!(last instanceof HTMLElement)) return;
+    const turn = last.closest(".turn");
+    last.remove();
+    if (turn instanceof HTMLElement && turn.parentElement === container && !turn.querySelector(".msg, .tool-group")) {
+      turn.remove();
+    }
+  }
 }
 
 export function setToolDetailContent(node: HTMLElement, detail: string): void {
   node.innerHTML = linkifyPlainText(detail);
+}
+
+function isAskToolTitle(title: string): boolean {
+  return title.startsWith("提问") || title.includes("ask_user");
+}
+
+/** A tool-only turn still leaves an assistant bubble. Visually that is a blank line, not a paragraph. */
+function isBlankGap(node: Element | null): boolean {
+  if (!(node instanceof HTMLElement)) return false;
+  if (node.classList.contains("tool-step") || node.classList.contains("tool-group")) return false;
+  if (node.querySelector("img")) return false;
+  const body = node.querySelector(".msg-body");
+  const text = (body ? body.textContent : node.textContent) ?? "";
+  return text.trim().length === 0;
+}
+
+function hideGaps(nodes: HTMLElement[]): void {
+  for (const node of nodes) node.classList.add("is-blank");
+}
+
+/** A grouped row stays a title. The body opens only when that row is clicked. */
+function foldGroupedStep(step: HTMLElement): void {
+  const details = step.querySelector(":scope > details");
+  if (details instanceof HTMLDetailsElement) details.open = false;
+}
+
+/**
+ * Fold tool rows that sit together. Blank bubbles between them do not split the run.
+ * A message with text does.
+ */
+function adoptToolGroup(wrap: HTMLElement): void {
+  const parent = wrap.parentElement;
+  if (!parent || wrap.classList.contains("tool-step-ask")) return;
+
+  const hostGroup = parent.closest(".tool-group");
+  if (hostGroup instanceof HTMLElement && hostGroup.contains(wrap)) {
+    foldGroupedStep(wrap);
+    refreshToolGroup(hostGroup);
+    return;
+  }
+
+  const gaps: HTMLElement[] = [];
+  const run: HTMLElement[] = [];
+  let cursor: Element | null = wrap;
+  let groupBefore: HTMLElement | null = null;
+  while (cursor instanceof HTMLElement) {
+    if (cursor.classList.contains("tool-step") && !cursor.classList.contains("tool-step-ask")) {
+      run.push(cursor);
+      cursor = cursor.previousElementSibling;
+      continue;
+    }
+    if (isBlankGap(cursor)) {
+      gaps.push(cursor);
+      cursor = cursor.previousElementSibling;
+      continue;
+    }
+    if (cursor.classList.contains("tool-group") && !wrap.classList.contains("tool-step-nested")) {
+      groupBefore = cursor;
+    }
+    break;
+  }
+
+  if (groupBefore) {
+    const body = groupBefore.querySelector(":scope > .tool-group-body");
+    if (body) {
+      run.reverse();
+      for (const node of run) {
+        body.appendChild(node);
+        foldGroupedStep(node);
+      }
+      hideGaps(gaps);
+      refreshToolGroup(groupBefore);
+    }
+    return;
+  }
+
+  hideGaps(gaps);
+  if (run.length < 2) return;
+  run.reverse();
+  const group = document.createElement("details");
+  group.className = "tool-group";
+  const summary = el("summary", { class: "tool-group-summary" });
+  const body = el("div", { class: "tool-group-body" });
+  group.append(summary, body);
+  parent.insertBefore(group, run[0]!);
+  for (const node of run) {
+    body.appendChild(node);
+    foldGroupedStep(node);
+  }
+  refreshToolGroup(group);
+}
+
+export function refreshToolGroup(group: Element | null): void {
+  if (!(group instanceof HTMLElement) || !group.classList.contains("tool-group")) return;
+  const count = group.querySelectorAll(":scope > .tool-group-body > .tool-step").length;
+  const errors = group.querySelectorAll(":scope > .tool-group-body > .tool-step.is-error").length;
+  const pending = group.querySelectorAll(
+    ":scope > .tool-group-body > .tool-step.is-pending > details > .tool-summary",
+  );
+  const running = pending[pending.length - 1]?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  const summary = group.querySelector(":scope > .tool-group-summary");
+  if (!summary) return;
+  let text = `${count} 个工具`;
+  if (running) text = count > 1 ? `${running} · 共 ${count} 个` : running;
+  if (errors > 0) text += ` · ${errors} 个失败`;
+  summary.textContent = text;
+  group.classList.toggle("is-error", errors > 0);
 }
 
 export function appendToolStep(
@@ -472,11 +678,15 @@ export function appendToolStep(
     toolCallId?: string;
     parentToolCallId?: string;
     messageId?: string;
+    error?: boolean;
   },
 ): HTMLElement {
   const wrap = el("div", {
     class: opts.nested ? "msg tool-step tool-step-nested" : "msg tool-step",
   });
+  if (isAskToolTitle(opts.title)) wrap.classList.add("tool-step-ask");
+  if (opts.error) wrap.classList.add("is-error");
+  if (opts.open && opts.detail === "等待结果…") wrap.classList.add("is-pending");
   if (opts.messageId) wrap.dataset.messageId = opts.messageId;
   if (opts.toolCallId) wrap.dataset.toolCallId = opts.toolCallId;
   if (opts.parentToolCallId) wrap.dataset.parentToolCallId = opts.parentToolCallId;
@@ -488,7 +698,8 @@ export function appendToolStep(
   details.append(summary, body);
   wrap.append(details);
   if (opts.after?.parentNode) opts.after.after(wrap);
-  else container.appendChild(wrap);
+  else placeTranscript(container, wrap, false);
+  if (!wrap.classList.contains("tool-step-ask")) adoptToolGroup(wrap);
   return body;
 }
 

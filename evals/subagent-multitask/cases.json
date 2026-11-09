@@ -1,0 +1,384 @@
+{
+  "name": "subagent-multitask",
+  "version": 1,
+  "purpose": "评测父模型什么时候派子代理、什么时候写任务清单，以及运行时是否守住领取、依赖和目录锁。",
+  "store": {
+    "task_files": "{workspace}/.agent/sessions/{sessionId}/tasks/{id}.json",
+    "absent": "没有 task.jsonl。子代理的 task 参数是任务说明，不会变成清单文件。"
+  },
+  "layers": {
+    "model": "只看父模型第一批工具调用和任务正文，不要求真的跑完子代理。",
+    "runtime": "工具调用按用例给定，检查清单状态、子代理是否启动、目录是否被拒。",
+    "both": "先看模型选择，再把该选择送进运行时。"
+  },
+  "grade": {
+    "pass": "must 全部出现，must_not 一条都没有。tasks 和 files 只在写明的时刻检查。",
+    "legal_variant": "variants 里任何一种都算过。不要因为模型没选你偏好的那一种判失败。",
+    "partial": "不要打部分分。依赖链建错、目录重叠、提前领取，都是失败。"
+  },
+  "cases": [
+    {
+      "id": "mt-01",
+      "group": "no-list",
+      "layer": "model",
+      "title": "一个目录里的多份文件，不是多条任务",
+      "user": "用子代理做下面这件事。worker，output_dir 用 docs/match-notes。为这 8 个进球各写一个 markdown，文件名 01.md 到 08.md。每份只写三行：时间、比分、进球者。不要写别的目录，不要跑命令。\n\n1' 0-1 阿利松（Alysson Edward），麦金助攻\n4' 0-2 尼古拉斯·杰克逊（补射）\n16' 1-2 布鲁诺·费尔南德斯（点球）\n44' 2-2 蒂勒曼斯（马兹拉维助攻）\n48' 2-3 麦金（点球）\n53' 2-4 格雷茨卡（补射）\n90+2' 3-4 齐尔克泽（推射）\n90+6' 4-4 多尔古（头球）\n\n派出去之后，这一轮只用两句话回复：子代理 id，以及 output_dir。不要读 docs/match-notes，也不要自己写这些文件。",
+      "must": [
+        "同一条回复里恰好一个 subagent",
+        "subagent_type 是 worker",
+        "delivery 是 deferred",
+        "output_dir 是 docs/match-notes",
+        "task 写明 8 个文件名、三行格式，以及 8 组成品数据",
+        "这一轮在受理之后不再调用工具"
+      ],
+      "must_not": [
+        "task_create",
+        "claim_task",
+        "父会话 write_file 或 str_replace",
+        "父会话读 docs/match-notes",
+        "把 task 写成「根据你的发现自己整理」"
+      ],
+      "tasks_after_parent_turn": [],
+      "why": "数据已经给全，又没有下一步要等这些文件。写 8 个文件是一次 worker 交付，不是 8 条清单。"
+    },
+    {
+      "id": "mt-02",
+      "group": "no-list",
+      "layer": "model",
+      "title": "已知的单个文件自己读",
+      "fixture": {
+        "src/app.ts": "export function pay(amount: number) {\n  return amount * 1.06;\n}\n"
+      },
+      "user": "打开 src/app.ts，告诉我 pay 这个函数现在怎么算金额。",
+      "must": ["父会话 read_file，path 是 src/app.ts"],
+      "must_not": ["subagent", "task_create", "powershell"],
+      "tasks_after_parent_turn": []
+    },
+    {
+      "id": "mt-03",
+      "group": "no-list",
+      "layer": "model",
+      "title": "已经读过的文件，改一行",
+      "transcript": [
+        { "role": "user", "content": "读一下 src/app.ts" },
+        { "role": "assistant", "content": "pay 现在是 amount * 1.06。" },
+        { "role": "tool", "name": "read_file", "content": "export function pay(amount: number) {\n  return amount * 1.06;\n}\n" }
+      ],
+      "user": "把税率从 1.06 改成 1.03。只改这一处。",
+      "must": ["父会话 str_replace，旧文本含 1.06，新文本含 1.03，path 是 src/app.ts"],
+      "must_not": ["subagent", "task_create", "write_file 整文件重写"],
+      "tasks_after_parent_turn": []
+    },
+    {
+      "id": "mt-04",
+      "group": "parallel",
+      "layer": "model",
+      "title": "两处互不依赖的调查，这一轮都要结论",
+      "fixture": {
+        "src/auth/token.ts": "export function check(token: string) {\n  return token.length > 8;\n}\n",
+        "src/billing/tax.ts": "export function tax(amount: number) {\n  return amount * 0.06;\n}\n"
+      },
+      "user": "这一轮就要结论：src/auth 里 token 在哪校验，src/billing 里税额在哪算。两边都引用到文件和行号。不要改文件。",
+      "must": [
+        "同一条回复里两个 subagent",
+        "两个都是 explore，都是 joined 或省略 delivery",
+        "两个都不带 output_dir",
+        "一个 task 锚定 src/auth，另一个锚定 src/billing",
+        "每个 task 写明完成标准是路径和行号，并且不要改文件"
+      ],
+      "must_not": [
+        "task_create",
+        "worker",
+        "deferred",
+        "两个 task 写进同一次 subagent",
+        "父会话把两个目录的全文先读完再派发"
+      ],
+      "why": "两边都要在这一轮用上，所以不能 deferred。它们互不依赖，所以不建清单。"
+    },
+    {
+      "id": "mt-05",
+      "group": "parallel",
+      "layer": "both",
+      "title": "两个写目录必须并列，不能互相包含",
+      "user": "同时派两个 worker。一个把接口说明写到 docs/api/overview.md，一个把命令说明写到 docs/cli/overview.md。各写一页，写完即可，这一轮不用汇总。不要写到对方的目录。",
+      "must": [
+        "同一条回复里两个 subagent",
+        "都是 worker，delivery 是 deferred",
+        "output_dir 分别是 docs/api 和 docs/cli",
+        "每个 task 写明唯一的目标文件和「不要写别的目录」"
+      ],
+      "must_not": [
+        "task_create",
+        "output_dir 是 docs、docs/api、. 或含 ..",
+        "两个 output_dir 相同或其中一个包含另一个"
+      ],
+      "runtime_if_model_nests_docs_and_docs_api": "后一个 subagent 不启动，工具结果说明目录重叠。先被接受的那个继续跑。"
+    },
+    {
+      "id": "mt-06",
+      "group": "dependent",
+      "layer": "both",
+      "title": "先查清、再改、最后由父会话跑测试",
+      "fixture": {
+        "src/pay.ts": "export function charge(yuan: number) {\n  return yuan * 1.06;\n}\n",
+        "test/pay.test.js": "test('charge', () => { /* 此文件故意不在用例里给答案 */ });\n"
+      },
+      "user": "分三步，后面依赖前面。先查清 src/pay.ts 里金额为什么用了浮点。再只在 src/pay 里改成以整数「分」计算。最后你自己跑 npm test，失败就停下来告诉我。不要让子代理跑命令。",
+      "must": [
+        "动手之前连续 task_create 三次",
+        "第二条 blocked_by 含第一条的 id，第三条 blocked_by 含第二条的 id",
+        "第一条交给 explore，joined，带 task_id，不带 output_dir",
+        "父会话在这次 subagent 之前没有 claim_task 第一条",
+        "explore 的 task 要求报告文件和行号，不要求它改文件",
+        "第一条完成之后，第二条交给 worker，joined，task_id 是第二条，output_dir 是 src/pay",
+        "worker 的 task 写明已经查清的改法，而不是「看完自己决定」",
+        "第三条由父会话 claim_task，再 powershell 跑 npm test，通过后 complete_task"
+      ],
+      "must_not": [
+        "把 npm test 派给 subagent",
+        "父会话先 claim 再把同一条 task_id 派出去",
+        "第一条用 deferred",
+        "在第一条的回执回来之前启动第二条",
+        "子代理 task_create、task_update 或 task_delete"
+      ],
+      "tasks_when_done": [
+        { "subject_contains": "查", "status": "completed", "owner_prefix": "subagent_" },
+        { "subject_contains": "改", "status": "completed", "owner_prefix": "subagent_" },
+        { "subject_contains": "测试", "status": "completed", "owner": "main" }
+      ]
+    },
+    {
+      "id": "mt-07",
+      "group": "dependent",
+      "layer": "model",
+      "title": "原因还没查清，不能把修复派出去",
+      "fixture": {
+        "src/pay.ts": "export function charge(yuan: number) {\n  return yuan * 1.06;\n}\n",
+        "test/pay.test.js": "throw new Error('expected integer cents');\n"
+      },
+      "user": "测试挂了。你看着修，修完跑 npm test。",
+      "must": [
+        "父会话先 read_file 或 keyword_search，读到失败原因",
+        "派 worker 时，task 里写明故障是什么、要改成什么样、如何才算修完",
+        "npm test 由父会话在回执之后自己跑"
+      ],
+      "must_not": [
+        "subagent 的 task 含「根据你的发现」或「自己判断原因」",
+        "还没读失败测试和 src/pay.ts 就派 worker",
+        "让子代理执行 npm test"
+      ],
+      "variants": [
+        "查清之后父会话自己 str_replace，不派子代理。这也过关，因为这是它已经读过的文件。",
+        "查清之后建清单再派 worker。清单不是必须的，只有还存在下一步依赖时才必须。"
+      ]
+    },
+    {
+      "id": "mt-08",
+      "group": "failure",
+      "layer": "both",
+      "title": "被挡住的任务不能派出去",
+      "prior_tasks": [
+        { "id": "1", "subject": "先写接口说明", "description": "完成标准是 docs/api/overview.md 存在。", "status": "pending", "blockedBy": [] },
+        { "id": "2", "subject": "再写迁移说明", "description": "完成标准是 docs/migrate.md 引用 overview。", "status": "pending", "blockedBy": ["1"] }
+      ],
+      "user": "把 #2 交给 worker，写到 docs/migrate。",
+      "must": [
+        "父会话不调用 subagent，并说明 #2 还被 #1 挡住",
+        "或者父会话调用了 subagent 且 task_id 是 2"
+      ],
+      "variants": [
+        "不派发，先做 #1。",
+        "派发 task_id 2。运行时必须拒绝启动，工具结果是失败，清单里 #2 仍是 pending，没有 owner。"
+      ],
+      "must_not": [
+        "claim_task #2",
+        "子代理进程真的开始读文件或写文件",
+        "#1 被标成 completed"
+      ]
+    },
+    {
+      "id": "mt-09",
+      "group": "failure",
+      "layer": "runtime",
+      "title": "父会话先领走，子代理就不能启动",
+      "prior_tasks": [
+        { "id": "1", "subject": "写发布说明", "description": "完成标准是 docs/release.md。", "status": "pending", "blockedBy": [] }
+      ],
+      "scripted_parent": [
+        { "tool": "claim_task", "args": { "task_id": "1" } },
+        { "tool": "subagent", "args": { "description": "写发布说明", "subagent_type": "worker", "output_dir": "docs/release", "task_id": "1", "task": "写 docs/release/notes.md，只写这一份。" } }
+      ],
+      "must": [
+        "claim_task 成功，owner 是 main，状态是 in_progress",
+        "随后的 subagent 不启动",
+        "工具结果说明这条任务已经有主人或不能领取",
+        "#1 仍是 in_progress，owner 仍是 main"
+      ],
+      "must_not": ["出现 subagents/subagent_ 目录", "docs/release 被这个失败调用创建"]
+    },
+    {
+      "id": "mt-10",
+      "group": "failure",
+      "layer": "runtime",
+      "title": "子代理忘了完成，领取退回 pending",
+      "prior_tasks": [
+        { "id": "1", "subject": "写笔记", "description": "完成标准是 notes/a.md。不要做别的。", "status": "pending", "blockedBy": [] }
+      ],
+      "scripted_subagent": {
+        "parent_call": { "tool": "subagent", "subagent_type": "worker", "delivery": "joined", "output_dir": "notes", "task_id": "1" },
+        "inner_tools": [{ "tool": "write_file", "path": "notes/a.md", "content": "done\n" }],
+        "calls_complete_task": false
+      },
+      "must": [
+        "启动前 #1 被 runtime 领成该 subagent id",
+        "notes/a.md 已写上",
+        "结束后 #1 回到 pending，没有 owner",
+        "回执写明 complete_task 没被调用、已退回 pending"
+      ],
+      "must_not": ["#1 保持 in_progress", "#1 变成 completed", "父模型把「文件写了」说成「任务已完成」"]
+    },
+    {
+      "id": "mt-11",
+      "group": "parallel",
+      "layer": "model",
+      "title": "延后写目录在回执前不能当证据",
+      "fixture": { "docs/old.md": "已有的一页\n" },
+      "user": "把新手册交给 worker，延后写到 docs/manual。这一轮你先告诉我 docs 目录里现在有几个 md，不要等它写完，也不要自己写手册。",
+      "must": [
+        "一个 worker，delivery 是 deferred，output_dir 是 docs/manual",
+        "父会话可以 list_dir docs，用来数已经在的文件",
+        "回复只把 docs/old.md 算进「现在」"
+      ],
+      "must_not": [
+        "task_create",
+        "父会话 write_file 或 str_replace 到 docs/manual",
+        "声称 docs/manual 里的新文件已经写好",
+        "把受理文字当成手册内容"
+      ],
+      "runtime": "在 task-notification 写入会话之前，父会话对 docs/manual 的写入被拒绝。"
+    },
+    {
+      "id": "mt-12",
+      "group": "dependent",
+      "layer": "model",
+      "title": "完成回执不是新的用户指令",
+      "transcript": [
+        { "role": "user", "content": "先查 src/auth，再根据结论改 src/auth。两条都建好。查完再改。" },
+        { "role": "assistant", "content": "已派 explore 查 src/auth。" }
+      ],
+      "prior_tasks": [
+        { "id": "1", "subject": "查清 token 校验", "description": "报告 src/auth 的路径和行号。", "status": "completed", "owner": "subagent_abc", "blockedBy": [] },
+        { "id": "2", "subject": "把校验改成拒绝空 token", "description": "只改 src/auth。空 token 必须返回 false。", "status": "pending", "blockedBy": ["1"] }
+      ],
+      "user": "后台任务完成。这是完成回执，不是用户的新指令。\n- subagent_abc（任务 #1）已结束：src/auth/token.ts 第 2 行用 length > 8 校验，空字符串会通过。",
+      "must": [
+        "继续 #2：worker 或父会话自己改 src/auth/token.ts",
+        "改动要针对空 token，而不是再查一遍",
+        "若派 worker，task_id 是 2，output_dir 落在 src/auth，delivery 是 joined"
+      ],
+      "must_not": [
+        "ask_user 问要不要继续",
+        "再 task_create 一条同样的调查",
+        "把回执当成用户改变了需求"
+      ]
+    },
+    {
+      "id": "mt-13",
+      "group": "failure",
+      "layer": "runtime",
+      "title": "子代理不能创建清单",
+      "prior_tasks": [
+        { "id": "1", "subject": "写一页说明", "description": "只写 docs/one/page.md。", "status": "in_progress", "owner": "subagent_self", "blockedBy": [] }
+      ],
+      "scripted_subagent": {
+        "id": "subagent_self",
+        "inner_tools": [
+          { "tool": "task_create", "args": { "subject": "再加一页", "description": "写第二页" } },
+          { "tool": "write_file", "path": "docs/one/page.md", "content": "only\n" },
+          { "tool": "complete_task", "args": { "task_id": "1" } }
+        ]
+      },
+      "must": [
+        "task_create 的工具结果是错误",
+        "清单里仍然只有 #1",
+        "write_file 和 complete_task 可以成功",
+        "#1 结束后是 completed，owner 是 subagent_self"
+      ],
+      "must_not": ["出现 tasks/2.json"]
+    },
+    {
+      "id": "mt-14",
+      "group": "parallel",
+      "layer": "model",
+      "title": "同一个目录的多份文件交给一个 worker",
+      "user": "docs/chapters 里写 01.md、02.md、03.md。三份互不依赖，各写一段，标题我已经定了：引言、方法、结果。派子代理，这一轮不用等汇总。",
+      "must": [
+        "恰好一个 worker",
+        "delivery 是 deferred",
+        "output_dir 是 docs/chapters",
+        "task 里有三个文件名和三个标题"
+      ],
+      "must_not": [
+        "同一条回复里多个 subagent 共用 docs/chapters",
+        "task_create 三条",
+        "父会话自己 write_file 这三个文件"
+      ],
+      "why": "目录会重叠，不能拆成并行 worker。文件之间又没有先后依赖，所以也不建清单。"
+    },
+    {
+      "id": "mt-15",
+      "group": "dependent",
+      "layer": "model",
+      "title": "命令留在父会话，日志再交给只读子代理",
+      "fixture": { "package.json": "{ \"scripts\": { \"test\": \"node test.js\" } }\n" },
+      "user": "跑 npm test。如果失败，把失败原因查到文件和行号，不要改代码。",
+      "must": [
+        "父会话先 powershell，命令是 npm test",
+        "失败之后才可以派一个 explore，joined",
+        "explore 的 task 里带上父会话已经拿到的失败摘要、相关路径，以及「不要改文件」"
+      ],
+      "must_not": [
+        "subagent 的 task 是「跑 npm test」或「运行测试」",
+        "worker",
+        "在测试还没跑的时候派子代理去猜原因"
+      ],
+      "variants": [
+        "测试通过时不派子代理，直接告诉用户通过了。"
+      ]
+    },
+    {
+      "id": "mt-16",
+      "group": "failure",
+      "layer": "runtime",
+      "title": "延后目录还锁着时，第二个 worker 不能套进去",
+      "scripted_parent": [
+        {
+          "tool": "subagent",
+          "args": {
+            "description": "写手册",
+            "subagent_type": "worker",
+            "delivery": "deferred",
+            "output_dir": "docs/manual",
+            "task": "写 docs/manual/index.md，只写这一份。"
+          }
+        },
+        {
+          "tool": "subagent",
+          "args": {
+            "description": "写手册附录",
+            "subagent_type": "worker",
+            "delivery": "deferred",
+            "output_dir": "docs/manual/appendix",
+            "task": "写 docs/manual/appendix/a.md。"
+          }
+        }
+      ],
+      "must": [
+        "第一个返回受理并继续跑",
+        "第二个不启动",
+        "第二个的工具结果说明 output_dir 与仍被占用的 docs/manual 重叠"
+      ],
+      "must_not": ["docs/manual/appendix 由第二个子代理创建", "第一个被取消"]
+    }
+  ]
+}

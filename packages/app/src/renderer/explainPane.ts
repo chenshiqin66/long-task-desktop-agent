@@ -1,6 +1,8 @@
 import {
   appendMessage,
   appendToolStep,
+  removeLastTranscriptNodes,
+  refreshToolGroup,
   rerenderAllAssistantMarkdown,
   setRichText,
   setToolDetailContent,
@@ -124,6 +126,8 @@ export function mountExplainPane(): ExplainPane {
     statusEl.style.bottom = `${stackH}px`;
   }
 
+  new ResizeObserver(() => pad()).observe(floatStack);
+
   function stick(board: HTMLElement): void {
     if (board.dataset.follow === "0") return;
     board.scrollTop = board.scrollHeight;
@@ -221,6 +225,7 @@ export function mountExplainPane(): ExplainPane {
     const board = document.createElement("div");
     board.className = "messages";
     board.dataset.follow = "1";
+    showExplainEmpty(board);
     board.addEventListener(
       "scroll",
       () => {
@@ -262,13 +267,17 @@ export function mountExplainPane(): ExplainPane {
 
   async function renderHistory(slot: Slot, messages: ExplainMessage[]): Promise<void> {
     slot.board.innerHTML = "";
-    if (!messages.length) return;
+    if (!messages.length) {
+      showExplainEmpty(slot.board);
+      return;
+    }
     for (const message of messages) {
       if (message.role === "tool") {
         appendToolStep(slot.board, {
           title: toolTitle(message.name || "工具", message.tool_call_arguments).replace(/^调用 /, "工具结果 · "),
           detail: message.content.slice(0, 4000),
           open: false,
+          error: message.is_error === true,
           toolCallId: message.tool_call_id,
           messageId: message.id,
         });
@@ -295,6 +304,15 @@ export function mountExplainPane(): ExplainPane {
       }
     }
     rerenderAllAssistantMarkdown(slot.board);
+    if (!slot.board.querySelector(".msg")) showExplainEmpty(slot.board);
+  }
+
+  function showExplainEmpty(board: HTMLElement): void {
+    if (board.querySelector(".msg") || board.querySelector(".explain-empty")) return;
+    const hint = document.createElement("p");
+    hint.className = "empty-state explain-empty";
+    hint.textContent = "试试把文本拖到这里~";
+    board.append(hint);
   }
 
   function ensureBubble(slot: Slot): HTMLElement {
@@ -350,7 +368,11 @@ export function mountExplainPane(): ExplainPane {
     }
     if (event.type === "tool_result" && event.tool_call_id) {
       const body = slot.tools.get(event.tool_call_id);
-      if (body) setToolDetailContent(body, (event.content || "").slice(0, 4000));
+      if (body) {
+        setToolDetailContent(body, (event.content || "").slice(0, 4000));
+        body.closest(".tool-step")?.classList.toggle("is-error", event.is_error === true);
+        refreshToolGroup(body.closest(".tool-group"));
+      }
       return;
     }
     if (event.type === "error") {
@@ -435,8 +457,7 @@ export function mountExplainPane(): ExplainPane {
         pending = images;
         paintImages();
       }
-      const bubbles = Array.from(slot.board.querySelectorAll(":scope > .msg"));
-      bubbles.at(-1)?.remove();
+      removeLastTranscriptNodes(slot.board, 1);
       appendMessage(slot.board, "error", err instanceof Error ? err.message : String(err));
       setStatus("", false);
       paintComposer();

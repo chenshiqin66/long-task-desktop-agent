@@ -100,7 +100,7 @@ function installChineseAppMenu(): void {
               type: "info",
               title: "关于",
               message: "Long-Task Desktop Agent",
-              detail: `Electron ${process.versions.electron} · Chromium ${process.versions.chrome}`,
+              detail: `Electron ${process.versions.electron} · Chromium ${process.versions.chrome}\nauthor.ChenShiqin`,
             });
           },
         },

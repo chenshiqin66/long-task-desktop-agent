@@ -49,20 +49,20 @@
         <header id="main-bar" class="main-bar">
           <div id="view-tabs" class="view-tabs" role="tablist">
             <button type="button" id="main-title" class="view-tab active" role="tab" data-view="chat" aria-selected="true">
-              会话台
+              <span class="view-tab-label">会话台</span>
             </button>
             <div id="store-tabs" hidden>
               <button type="button" class="view-tab store-tab" role="tab" data-store-tab="meta" aria-selected="false" aria-controls="store-view">
-                meta.json
+                <span class="view-tab-label">meta</span>
               </button>
               <button type="button" class="view-tab store-tab" role="tab" data-store-tab="messages" aria-selected="false" aria-controls="store-view">
-                messages.jsonl
+                <span class="view-tab-label">messages</span>
               </button>
               <button type="button" class="view-tab store-tab" role="tab" data-store-tab="trace" aria-selected="false" aria-controls="store-view">
-                trace.jsonl
+                <span class="view-tab-label">trace</span>
               </button>
               <button type="button" class="view-tab store-tab" role="tab" data-store-tab="context" aria-selected="false" aria-controls="store-view">
-                context.jsonl
+                <span class="view-tab-label">context</span>
               </button>
             </div>
           </div>
@@ -90,6 +90,7 @@
           </div>
           <div id="conversation" class="conversation">
             <div id="messages" class="messages" aria-live="polite"></div>
+            <nav id="question-nav" class="question-nav" hidden aria-label="问题导航"></nav>
             <div id="status" class="run-status" hidden></div>
           </div>
 
@@ -146,9 +147,9 @@
           </footer>
         </div>
       </main>
-      <aside id="explain-pane" hidden aria-label="解释">
+      <aside id="explain-pane" hidden aria-label="答案解释">
         <header class="explain-bar">
-          <span class="explain-title">解释</span>
+          <span class="explain-title">答案解释</span>
           <button type="button" id="explain-collapse" class="explain-toggle">收起-&gt;</button>
         </header>
         <div class="main-stage explain-stage">
@@ -171,12 +172,14 @@
             </button>
           </div>
           <div id="explain-conversation" class="conversation">
-            <div id="explain-messages" class="messages" aria-live="polite"></div>
+            <div id="explain-messages" class="messages" aria-live="polite">
+              <p class="empty-state explain-empty">试试把文本拖到这里~</p>
+            </div>
             <div id="explain-status" class="run-status" hidden></div>
           </div>
           <div id="explain-float" class="float-stack">
             <footer class="composer-dock">
-              <div id="explain-composer">
+              <div id="explain-composer" class="is-compact">
                 <div id="explain-images" class="composer-images" hidden></div>
                 <label class="sr-only" for="explain-input">解释</label>
                 <div class="composer-input">
