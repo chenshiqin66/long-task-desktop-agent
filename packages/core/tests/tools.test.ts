@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, writeFile, mkdir, symlink } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, readFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -109,6 +109,35 @@ describe("tools", () => {
     const claimed = await host.execute(
       "write_file",
       JSON.stringify({ path: "docs/notes/a.md", content: "x" }),
+      { ...ctx, blockedOutputDirs: ["docs/notes"] },
+    );
+    expect(claimed.is_error).toBe(true);
+    expect(claimed.content).toMatch(/docs\/notes/);
+  });
+
+  it("keeps file tools out of .agent under any spelling of the path", async () => {
+    const state = join(workspace, ".agent", "sessions", "s1");
+    await mkdir(state, { recursive: true });
+    await writeFile(join(state, "messages.jsonl"), "original\n", "utf8");
+    await symlink(join(workspace, ".agent"), join(workspace, "state-link"), "junction");
+    const attempts: Array<[string, Record<string, unknown>]> = [
+      ["write_file", { path: ".AGENT/sessions/s1/messages.jsonl", content: "forged" }],
+      ["write_file", { path: "state-link/sessions/s1/messages.jsonl", content: "forged" }],
+      ["str_replace", { path: ".Agent/sessions/s1/messages.jsonl", old_string: "original", new_string: "forged" }],
+      ["delete_file", { path: ".AGENT/sessions/s1/messages.jsonl" }],
+    ];
+    for (const [tool, args] of attempts) {
+      const result = await host.execute(tool, JSON.stringify(args), ctx);
+      expect(result.is_error, `${tool} ${String(args.path)}`).toBe(true);
+      expect(result.content, `${tool} ${String(args.path)}`).toMatch(/\.agent/);
+    }
+    expect(await readFile(join(state, "messages.jsonl"), "utf8")).toBe("original\n");
+  });
+
+  it("keeps a claimed output_dir locked under another letter case", async () => {
+    const claimed = await host.execute(
+      "write_file",
+      JSON.stringify({ path: "DOCS/Notes/a.md", content: "x" }),
       { ...ctx, blockedOutputDirs: ["docs/notes"] },
     );
     expect(claimed.is_error).toBe(true);
@@ -399,6 +428,56 @@ describe("tools", () => {
     expect(isDangerousBash("Remove-Item -Recurse -Force .\\build")).toBe(false);
     expect(isDangerousBash("Remove-Item -Recurse -Force C:\\Users\\x")).toBe(false);
     expect(isDangerousBash("Get-ChildItem C:\\")).toBe(false);
+  });
+
+  it("isDangerousBash sees through other spellings of a root wipe", () => {
+    for (const cmd of [
+      "rm -r /*",
+      "rm -rf //",
+      "rm -rf '/'",
+      "rm -rf /tmp/..",
+      "rm -rf / --no-preserve-root",
+      "/bin/rm -rf /",
+      "bash -c 'rm -rf /'",
+      "echo $(rm -rf /)",
+      "ls / | xargs rm -rf",
+      "Remove-Item -Recurse -Force C:/",
+      "Remove-Item -Recurse C:\\*",
+      "Remove-Item C:\\ -Recurse",
+      "Remove-Item -Path:C:\\ -Recurse",
+      "Remove-Item -Recurse ‘C:\\’",
+      "ri -r -fo D:\\",
+      "Remove-Item -Recurse $env:SystemDrive\\",
+      "Get-ChildItem C:\\ | Remove-Item -Recurse -Force",
+      "gci / | ri -r",
+      "Get-ChildItem C:\\ | ForEach-Object { Remove-Item $_.FullName -Recurse }",
+      "del /s /q C:\\*",
+      "rd /s /q C:\\",
+      "cmd /c rd /s /q C:\\",
+      "format /q D:",
+      "diskpart /s wipe.txt",
+      "wipefs -a /dev/sda",
+      "cat /dev/zero > /dev/sda",
+    ]) {
+      expect(isDangerousBash(cmd), cmd).toBe(true);
+    }
+    for (const cmd of [
+      "rm -r /tmp/x",
+      "rm -rf -- ./build",
+      "git rm -r --cached .",
+      "Remove-Item C:\\temp\\a.txt",
+      "Remove-Item -Force C:\\temp\\a.txt",
+      "Get-ChildItem C:\\ | Select-Object Name",
+      "Get-ChildItem C:\\ -Recurse -Filter *.log",
+      "ls -R /",
+      "echo /",
+      "ls 2>/dev/null",
+      "Get-Date -Format yyyy-MM-dd",
+      "Get-ChildItem | Format-List -Property *",
+      "git log --format=%H",
+    ]) {
+      expect(isDangerousBash(cmd), cmd).toBe(false);
+    }
   });
 
   it("reports a native command failure instead of the pipeline tail", async () => {

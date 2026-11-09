@@ -31,7 +31,7 @@ export const writeFileTool: Tool = {
     const requested = String(args.path ?? "");
     const content = args.content == null ? "" : String(args.content);
     if (!requested) return { content: "Missing path", is_error: true };
-    const scoped = writeScopeError({
+    const scoped = await writeScopeError({
       workspacePath: ctx.workspacePath,
       requested,
       writeRoot: ctx.writeRoot,

@@ -56,6 +56,21 @@ describe("SessionStore", () => {
     expect(ids).toEqual([a.session_id, b.session_id].sort());
   });
 
+  it("listSessions puts the session with the latest message first", async () => {
+    const quiet = await store.createSession("quiet");
+    const active = await store.createSession("active");
+    await store.appendMessage({
+      id: newId("msg"),
+      session_id: quiet.session_id,
+      turn_id: newId("turn"),
+      role: "user",
+      content: "later",
+      created_at: nowIso(),
+    });
+    const list = await store.listSessions();
+    expect(list.map((m) => m.session_id)).toEqual([quiet.session_id, active.session_id]);
+  });
+
   it("appendMessage throws when session missing", async () => {
     await expect(
       store.appendMessage({

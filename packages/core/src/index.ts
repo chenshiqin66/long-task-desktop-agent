@@ -24,6 +24,7 @@ export * from "./runtime/permission.js";
 export * from "./runtime/askGate.js";
 export * from "./tools/askUserTool.js";
 export * from "./runtime/agentRuntime.js";
+export * from "./runtime/sessionRuntimePool.js";
 export * from "./runtime/explainRuntime.js";
 export * from "./explain/context.js";
 export * from "./store/explainStore.js";

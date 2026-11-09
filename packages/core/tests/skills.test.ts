@@ -62,6 +62,18 @@ describe("skill frontmatter and tokens", () => {
     expect(extractSkillTokens("C:/Windows https://example.com /demo")).toEqual(["demo"]);
     expect(extractSkillTokens("/demo /demo")).toEqual(["demo"]);
   });
+
+  it("leaves absolute paths and code alone", () => {
+    expect(extractSkillTokens("看看 /etc/hosts")).toEqual([]);
+    expect(extractSkillTokens("/api/v1/users 返回 500")).toEqual([]);
+    expect(extractSkillTokens("读一下 /notes.md")).toEqual([]);
+    expect(extractSkillTokens("D:\\x 和 /mnt\\d")).toEqual([]);
+    expect(extractSkillTokens("路径写成 `/usr` 就行")).toEqual([]);
+    expect(extractSkillTokens("```\n/demo\n```\n照着改")).toEqual([]);
+    expect(extractSkillTokens("use /demo.")).toEqual(["demo"]);
+    expect(extractSkillTokens("/demo，做个幻灯片")).toEqual(["demo"]);
+    expect(extractSkillTokens("`x` 然后 /demo")).toEqual(["demo"]);
+  });
 });
 
 describe("installed skills", () => {

@@ -72,8 +72,10 @@ describe("subagent definitions", () => {
     expect(windows.ok && windows.dir).toBe("docs/notes");
     expect(normalizeOutputDir(".").ok).toBe(false);
     expect(normalizeOutputDir(".agent/sessions").ok).toBe(false);
+    expect(normalizeOutputDir(".AGENT/sessions").ok).toBe(false);
     expect(normalizeOutputDir("../x").ok).toBe(false);
     expect(outputDirsOverlap("docs/notes", "docs/notes/a")).toBe(true);
+    expect(outputDirsOverlap("docs/Notes", "DOCS/notes/a")).toBe(true);
     expect(outputDirsOverlap("docs/notes", "docs/other")).toBe(false);
     expect(outputDirsOverlap("docs/a", "docs/ab")).toBe(false);
   });

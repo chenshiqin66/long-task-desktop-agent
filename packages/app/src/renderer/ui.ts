@@ -459,30 +459,148 @@ export function appendMessage(
 
 const stickyFrames = new WeakMap<HTMLElement, number>();
 
-/** Pin detection. The bubble only collapses once it is actually stuck, so the full prompt stays readable at the turn start. */
+/** The folded bar is one text line plus the bubble's own vertical padding. */
+function oneLineHeight(node: HTMLElement): number {
+  const body = node.querySelector(":scope > .msg-body");
+  if (!(body instanceof HTMLElement)) return node.offsetHeight;
+  const style = getComputedStyle(body);
+  const line = parseFloat(style.lineHeight);
+  const pad = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+  if (!Number.isFinite(line)) return node.offsetHeight;
+  return line + (Number.isFinite(pad) ? pad : 0) + (Number.isFinite(border) ? border : 0);
+}
+
+function scrollHoldOf(container: HTMLElement): HTMLElement | null {
+  const node = container.querySelector(":scope > .scroll-hold");
+  return node instanceof HTMLElement ? node : null;
+}
+
+/** Keep a fold offset reachable when the shortened turn no longer fills the viewport. */
+function holdFoldOffset(container: HTMLElement, target: number): void {
+  const existing = scrollHoldOf(container);
+  const held = existing?.offsetHeight ?? 0;
+  let holdAt = existing ? parseFloat(existing.dataset.holdAt ?? "0") : 0;
+  if (!Number.isFinite(holdAt)) holdAt = 0;
+  holdAt = Math.max(holdAt, target);
+  const contentMax = container.scrollHeight - held - container.clientHeight;
+  const gap = Math.max(0, holdAt - Math.max(0, contentMax));
+  if (gap <= 0.5) {
+    existing?.remove();
+    return;
+  }
+  const node = existing ?? document.createElement("div");
+  if (!existing) {
+    node.className = "scroll-hold";
+    node.setAttribute("aria-hidden", "true");
+    container.append(node);
+  }
+  node.dataset.holdAt = String(holdAt);
+  node.style.flexShrink = "0";
+  if (Math.abs(node.offsetHeight - gap) > 0.5) {
+    node.style.height = `${gap}px`;
+    node.style.minHeight = `${gap}px`;
+  }
+}
+
+function releaseFoldOffset(container: HTMLElement): void {
+  const hold = scrollHoldOf(container);
+  if (!hold) return;
+  const contentMax = container.scrollHeight - hold.offsetHeight - container.clientHeight;
+  if (container.scrollTop <= contentMax + 0.5) hold.remove();
+}
+
+/**
+ * Folding removes the bubble's height from the document. Move the viewport by the same
+ * amount so the lines below stay put. If that offset would be clamped, extend the tail
+ * just enough that the previous bubble stays above the viewport.
+ */
+function foldToLine(container: HTMLElement, node: HTMLElement): void {
+  const before = node.offsetHeight;
+  const scrollBefore = container.scrollTop;
+  node.classList.remove("is-short");
+  node.classList.add("is-stuck");
+  const delta = Math.max(0, before - node.offsetHeight);
+  const target = Math.max(0, scrollBefore - delta);
+  holdFoldOffset(container, target);
+  void container.scrollHeight;
+  if (container.scrollTop >= target - 0.5) return;
+  const previous = container.style.scrollBehavior;
+  container.style.scrollBehavior = "auto";
+  container.scrollTop = target;
+  container.style.scrollBehavior = previous;
+}
+
+/**
+ * A tall bubble scrolls away at full height. It folds to one line only once that is all
+ * that remains in the viewport, then stays pinned until the next user message pushes it out.
+ * A bubble that is already one line pins as soon as it reaches the top; its height does not change.
+ */
+function updateStickyTurns(container: HTMLElement): void {
+  const padTop = parseFloat(getComputedStyle(container).paddingTop) || 0;
+  const viewTop = container.getBoundingClientRect().top;
+  const edge = viewTop + padTop;
+  let pinned: HTMLElement | null = null;
+  for (const node of Array.from(container.querySelectorAll(":scope > .turn > .msg.user"))) {
+    if (!(node instanceof HTMLElement)) continue;
+    const turn = node.parentElement;
+    if (!(turn instanceof HTMLElement)) continue;
+    const one = oneLineHeight(node);
+    if (node.classList.contains("is-stuck")) {
+      const top = node.getBoundingClientRect().top;
+      // The pin lets go once the user scrolls up and the bar moves down by about a line.
+      if (top > edge + Math.max(one, 16)) {
+        node.classList.remove("is-stuck");
+        node.classList.toggle("is-short", node.offsetHeight <= one + 2);
+        releaseFoldOffset(container);
+      } else if (top >= viewTop - 1 && turn.getBoundingClientRect().top < top - 1) {
+        pinned = node;
+      }
+      continue;
+    }
+    const rect = node.getBoundingClientRect();
+    if (rect.height <= one + 2) {
+      node.classList.add("is-short");
+      const top = node.getBoundingClientRect().top;
+      if (top <= edge + 4 && top >= viewTop - 1 && turn.getBoundingClientRect().top < top - 1) pinned = node;
+      continue;
+    }
+    node.classList.remove("is-short");
+    const turnBottom = turn.getBoundingClientRect().bottom;
+    const entered = rect.top < edge - 1;
+    const turnRemains = turnBottom > edge + 4;
+    const oneLeft = rect.bottom > edge - 8 && rect.bottom <= edge + one + 6;
+    const jumpedPast = rect.bottom <= edge;
+    if (entered && turnRemains && (oneLeft || jumpedPast)) {
+      foldToLine(container, node);
+      const top = node.getBoundingClientRect().top;
+      if (top >= viewTop - 1 && top <= edge + 4) pinned = node;
+    }
+  }
+  if (container.querySelector(":scope > .turn > .msg.user.is-stuck")) {
+    const hold = scrollHoldOf(container);
+    const holdAt = hold ? parseFloat(hold.dataset.holdAt ?? "") : NaN;
+    if (Number.isFinite(holdAt)) holdFoldOffset(container, holdAt);
+  } else {
+    releaseFoldOffset(container);
+  }
+  placeSeam(container, pinned);
+}
+
 function syncStickyTurns(container: HTMLElement): void {
   if (stickyFrames.get(container)) return;
   stickyFrames.set(
     container,
     requestAnimationFrame(() => {
       stickyFrames.delete(container);
-      const padTop = parseFloat(getComputedStyle(container).paddingTop) || 0;
-      const scrollTop = container.getBoundingClientRect().top;
-      const edge = scrollTop + padTop + 4;
-      let pinned: HTMLElement | null = null;
-      for (const node of Array.from(container.querySelectorAll(":scope > .turn > .msg.user"))) {
-        if (!(node instanceof HTMLElement)) continue;
-        const turn = node.parentElement;
-        if (!(turn instanceof HTMLElement)) continue;
-        const top = node.getBoundingClientRect().top;
-        // An earlier turn leaves its bubble parked at the turn bottom, above the viewport. That is not pinned.
-        const stuck = top <= edge && top >= scrollTop - 1 && turn.getBoundingClientRect().top < top - 1;
-        node.classList.toggle("is-stuck", stuck);
-        if (stuck) pinned = node;
-      }
-      placeSeam(container, pinned);
+      updateStickyTurns(container);
     }),
   );
+}
+
+/** Re-measure after the transcript grows, before a tail jump lands inside a stale spacer. */
+export function refreshStickyTurns(container: HTMLElement): void {
+  updateStickyTurns(container);
 }
 
 /** History is built in a detached holder and moved into `.messages` later, so watch the live scrollers, not the append target. */
@@ -527,20 +645,27 @@ function placeSeam(container: HTMLElement, pinned: HTMLElement | null): void {
   seam.style.height = `${Math.max(0, y2 - y1)}px`;
 }
 
-/** A user message starts a section. Later siblings stay in it, so the bubble can stick until the next user message. */
+function appendTranscriptNode(container: HTMLElement, node: Node): void {
+  const hold = scrollHoldOf(container);
+  if (hold) container.insertBefore(node, hold);
+  else container.append(node);
+}
+
+/** A user message starts a section. Later siblings stay in it, so the folded line can stick until the next user message. */
 function placeTranscript(container: HTMLElement, node: HTMLElement, startsTurn: boolean): void {
   if (startsTurn) {
     const turn = el("div", { class: "turn" });
     turn.append(node);
-    container.append(turn);
+    appendTranscriptNode(container, turn);
     return;
   }
-  const last = container.lastElementChild;
+  const hold = scrollHoldOf(container);
+  const last = hold ? hold.previousElementSibling : container.lastElementChild;
   if (last instanceof HTMLElement && last.classList.contains("turn")) {
     last.append(node);
     return;
   }
-  container.append(node);
+  appendTranscriptNode(container, node);
 }
 
 export function removeLastTranscriptNodes(container: HTMLElement, count: number): void {
@@ -730,7 +855,7 @@ export function appendPermissionCard(
   const hint = el(
     "p",
     { class: "permission-hint" },
-    "允许后，这一轮剩下的写操作和命令不再逐条询问。停止仍可打断。清空磁盘这类命令不会放行。",
+    "允许后，这一轮剩下的写操作和命令不再逐条询问。停止会打断这一轮，但不会中止已经在后台运行的子代理。认得出的删盘根、格式化磁盘命令始终不执行。",
   );
   const body = el("pre", { class: "permission-body" }, permissionCommandText(opts));
 

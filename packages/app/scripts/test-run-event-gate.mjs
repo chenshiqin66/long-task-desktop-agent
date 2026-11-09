@@ -86,6 +86,18 @@ import { beginRun, decideEvent, idleGate } from "../dist/src/renderer/runEventGa
   assert.equal(d.paint, false);
   assert.equal(d.keep, false);
   assert.equal(d.next.isRunning, false);
+  assert.equal(d.stashFor, "sess-a", "the row belongs in sess-a's cached view");
+}
+
+// a late row on the session being viewed paints there, not into a cache
+{
+  const d = decideEvent(idleGate(), "sess-a", {
+    type: "tool_result",
+    turn_id: "t-old",
+    parent_tool_call_id: "call_parent",
+    session_id: "sess-a",
+  });
+  assert.equal(d.stashFor, undefined);
 }
 
 // a continuation latches a new turn and still paints the child's old turn id

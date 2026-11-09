@@ -71,8 +71,8 @@ export class SessionStore {
     }
   }
 
-  async updateMeta(meta: SessionMeta): Promise<void> {
-    meta.updated_at = nowIso();
+  async updateMeta(meta: SessionMeta, opts?: { touch?: boolean }): Promise<void> {
+    if (opts?.touch !== false) meta.updated_at = nowIso();
     const path = join(sessionDir(this.workspacePath, meta.session_id), "meta.json");
     await writeFile(path, JSON.stringify(meta, null, 2), "utf8");
   }
@@ -85,7 +85,7 @@ export class SessionStore {
     const meta = await this.getMeta(sessionId);
     meta.title = title.trim() || meta.title || "会话";
     meta.title_source = opts?.source ?? "user";
-    await this.updateMeta(meta);
+    await this.updateMeta(meta, { touch: false });
     return meta;
   }
 
@@ -156,7 +156,7 @@ export class SessionStore {
         // skip corrupt / invalid names
       }
     }
-    return metas.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    return metas.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
 
   async appendMessage(msg: Message): Promise<void> {

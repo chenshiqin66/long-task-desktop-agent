@@ -1,18 +1,6 @@
 type SkillSummary = { name: string; description: string; enabled: boolean };
 
 const TOKEN_AT_CURSOR = /(^|\s)\/([a-z0-9-]*)$/;
-export function skillTokensIn(text: string): string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
-  const token = /(^|\s)\/([a-z0-9]+(?:-[a-z0-9]+)*)\b/g;
-  for (const match of text.matchAll(token)) {
-    const name = match[2];
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    names.push(name);
-  }
-  return names;
-}
 
 let inputEl: HTMLTextAreaElement | null = null;
 let menuEl: HTMLElement | null = null;

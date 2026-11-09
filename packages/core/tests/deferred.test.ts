@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRuntime } from "../src/runtime/agentRuntime.js";
@@ -207,6 +207,59 @@ describe("deferred subagent", () => {
       releaseChild();
     }
     expect(await readFile(join(workspace, "docs", "notes", "page.txt"), "utf8")).toBe("parent edit");
+  });
+
+  it("deleting a session stops its deferred subagent and leaves nothing behind", async () => {
+    let childStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      childStarted = resolve;
+    });
+    let parentCalls = 0;
+    const provider: LlmProvider = {
+      chatStream: (req) => {
+        if (systemText(req).includes("You are an explore subagent")) {
+          return (async function* () {
+            childStarted();
+            await new Promise<void>((resolve) => req.signal?.addEventListener("abort", () => resolve(), { once: true }));
+            throw new Error("aborted");
+          })();
+        }
+        parentCalls += 1;
+        if (parentCalls === 1) {
+          return chunks([
+            callChunk("call_sub", "subagent", {
+              description: "read later",
+              subagent_type: "explore",
+              task: "Find the login check.",
+              task_id: "1",
+              delivery: "deferred",
+            }),
+          ]);
+        }
+        return chunks([textChunk("waiting")]);
+      },
+    };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: config(), provider });
+    const meta = await rt.createSession();
+    await TaskStore.forSession(workspace, meta.session_id).create({
+      subject: "find login",
+      description: "Where is the check?",
+    });
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    try {
+      await rt.submit(meta.session_id, "start deferred");
+      await withTimeout(started, "child start");
+      await rt.deleteSession(meta.session_id);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await expect(access(join(workspace, ".agent", "sessions", meta.session_id))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
   });
 
   it("does not enqueue a receipt for a joined subagent", async () => {

@@ -16,50 +16,64 @@ const WM_SETICON = 0x0080;
 const ICON_SMALL = 0;
 const ICON_BIG = 1;
 
-const user32 = koffi.load("user32.dll");
-const gdi32 = koffi.load("gdi32.dll");
-const kernel32 = koffi.load("kernel32.dll");
+/**
+ * Bound on first use, after the platform check. user32.dll does not exist off
+ * Windows, and main.ts imports this module on every platform.
+ */
+function loadWin32() {
+  const user32 = koffi.load("user32.dll");
+  const gdi32 = koffi.load("gdi32.dll");
+  const kernel32 = koffi.load("kernel32.dll");
 
-const BITMAPINFOHEADER = koffi.struct("BITMAPINFOHEADER", {
-  biSize: "uint32_t",
-  biWidth: "int32_t",
-  biHeight: "int32_t",
-  biPlanes: "uint16_t",
-  biBitCount: "uint16_t",
-  biCompression: "uint32_t",
-  biSizeImage: "uint32_t",
-  biXPelsPerMeter: "int32_t",
-  biYPelsPerMeter: "int32_t",
-  biClrUsed: "uint32_t",
-  biClrImportant: "uint32_t",
-});
+  koffi.struct("BITMAPINFOHEADER", {
+    biSize: "uint32_t",
+    biWidth: "int32_t",
+    biHeight: "int32_t",
+    biPlanes: "uint16_t",
+    biBitCount: "uint16_t",
+    biCompression: "uint32_t",
+    biSizeImage: "uint32_t",
+    biXPelsPerMeter: "int32_t",
+    biYPelsPerMeter: "int32_t",
+    biClrUsed: "uint32_t",
+    biClrImportant: "uint32_t",
+  });
 
-const ICONINFO = koffi.struct("ICONINFO", {
-  fIcon: "int",
-  xHotspot: "uint32_t",
-  yHotspot: "uint32_t",
-  hbmMask: "intptr",
-  hbmColor: "intptr",
-});
+  koffi.struct("ICONINFO", {
+    fIcon: "int",
+    xHotspot: "uint32_t",
+    yHotspot: "uint32_t",
+    hbmMask: "intptr",
+    hbmColor: "intptr",
+  });
 
-const SendMessageW = user32.func(
-  "intptr __stdcall SendMessageW(intptr hWnd, uint32_t Msg, uintptr_t wParam, intptr lParam)",
-);
-const GetDC = user32.func("intptr __stdcall GetDC(intptr hWnd)");
-const ReleaseDC = user32.func("int __stdcall ReleaseDC(intptr hWnd, intptr hDC)");
-const CreateDIBSection = gdi32.func(
-  "intptr __stdcall CreateDIBSection(intptr hdc, const BITMAPINFOHEADER *pbmi, uint32_t usage, _Out_ void **ppvBits, intptr hSection, uint32_t offset)",
-);
-const CreateBitmap = gdi32.func(
-  "intptr __stdcall CreateBitmap(int nWidth, int nHeight, uint32_t nPlanes, uint32_t nBitCount, const uint8_t *lpBits)",
-);
-const CreateIconIndirect = user32.func("intptr __stdcall CreateIconIndirect(const ICONINFO *piconinfo)");
-const DeleteObject = gdi32.func("int __stdcall DeleteObject(intptr ho)");
-const RtlMoveMemory = kernel32.func(
-  "void __stdcall RtlMoveMemory(void *Destination, const uint8_t *Source, uintptr_t Length)",
-);
+  return {
+    SendMessageW: user32.func(
+      "intptr __stdcall SendMessageW(intptr hWnd, uint32_t Msg, uintptr_t wParam, intptr lParam)",
+    ),
+    GetDC: user32.func("intptr __stdcall GetDC(intptr hWnd)"),
+    ReleaseDC: user32.func("int __stdcall ReleaseDC(intptr hWnd, intptr hDC)"),
+    CreateDIBSection: gdi32.func(
+      "intptr __stdcall CreateDIBSection(intptr hdc, const BITMAPINFOHEADER *pbmi, uint32_t usage, _Out_ void **ppvBits, intptr hSection, uint32_t offset)",
+    ),
+    CreateBitmap: gdi32.func(
+      "intptr __stdcall CreateBitmap(int nWidth, int nHeight, uint32_t nPlanes, uint32_t nBitCount, const uint8_t *lpBits)",
+    ),
+    CreateIconIndirect: user32.func("intptr __stdcall CreateIconIndirect(const ICONINFO *piconinfo)"),
+    DeleteObject: gdi32.func("int __stdcall DeleteObject(intptr ho)"),
+    RtlMoveMemory: kernel32.func(
+      "void __stdcall RtlMoveMemory(void *Destination, const uint8_t *Source, uintptr_t Length)",
+    ),
+  };
+}
 
+let bound: ReturnType<typeof loadWin32> | null = null;
 let failed = false;
+
+function win32(): ReturnType<typeof loadWin32> {
+  bound ??= loadWin32();
+  return bound;
+}
 const handles = new Map<TaskbarIconKind, bigint>();
 
 function hwndOf(win: BrowserWindow): bigint {
@@ -91,6 +105,7 @@ function hiconPixels(kind: TaskbarIconKind): Buffer {
 }
 
 function createHicon(kind: TaskbarIconKind): bigint {
+  const { GetDC, ReleaseDC, CreateDIBSection, CreateBitmap, CreateIconIndirect, DeleteObject, RtlMoveMemory } = win32();
   const pixels = hiconPixels(kind);
   const hdc = GetDC(0n) as bigint;
   try {
@@ -148,6 +163,7 @@ function iconHandle(kind: TaskbarIconKind): bigint {
 export function applyWinTaskbarIcon(win: BrowserWindow, kind: TaskbarIconKind): boolean {
   if (failed || process.platform !== "win32" || win.isDestroyed()) return false;
   try {
+    const { SendMessageW } = win32();
     const hwnd = hwndOf(win);
     const icon = iconHandle(kind);
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, icon);

@@ -42,7 +42,7 @@ export const strReplaceTool: Tool = {
     const replaceAll = Boolean(args.replace_all);
     if (!requested) return { content: "Missing path", is_error: true };
     if (!oldString) return { content: "Missing old_string", is_error: true };
-    const scoped = writeScopeError({
+    const scoped = await writeScopeError({
       workspacePath: ctx.workspacePath,
       requested,
       writeRoot: ctx.writeRoot,

@@ -52,9 +52,12 @@ contextBridge.exposeInMainWorld("agent", {
     sessionId: string,
     text: string,
     images?: Array<{ mime: string; base64: string }>,
-  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images),
-  watchSession: (sessionId: string | null) => ipcRenderer.invoke("agent:watchSession", sessionId),
+    workspace?: string,
+  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, workspace),
+  watchSession: (sessionId: string | null, workspace?: string) =>
+    ipcRenderer.invoke("agent:watchSession", sessionId, workspace),
   listSkills: () => ipcRenderer.invoke("agent:listSkills"),
+  skillTokens: (text: string) => ipcRenderer.invoke("agent:skillTokens", text),
   installSkill: () => ipcRenderer.invoke("agent:installSkill"),
   setSkillEnabled: (name: string, enabled: boolean) =>
     ipcRenderer.invoke("agent:setSkillEnabled", name, enabled),
@@ -62,7 +65,8 @@ contextBridge.exposeInMainWorld("agent", {
   openSkillFolder: (name: string) => ipcRenderer.invoke("agent:openSkillFolder", name),
   readSessionImage: (sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readSessionImage", sessionId, relativePath),
-  cancel: () => ipcRenderer.invoke("agent:cancel"),
+  cancel: (sessionId?: string, workspace?: string) =>
+    ipcRenderer.invoke("agent:cancel", sessionId, workspace),
   explainLoad: (workspace: string, sessionId: string) =>
     ipcRenderer.invoke("agent:explainLoad", workspace, sessionId),
   explainSetOpen: (workspace: string, sessionId: string, open: boolean) =>

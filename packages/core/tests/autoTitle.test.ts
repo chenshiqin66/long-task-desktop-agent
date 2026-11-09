@@ -3,6 +3,7 @@ import {
   sanitizeSessionTitle,
   titleFromFirstUserMessage,
   generateSessionTitle,
+  countAutoTitleTurns,
   SESSION_TITLE_MAX_CHARS,
 } from "../src/session/autoTitle.js";
 import type { Message } from "../src/types.js";
@@ -26,6 +27,24 @@ describe("autoTitle", () => {
       SESSION_TITLE_MAX_CHARS,
     );
     expect(sanitizeSessionTitle("标题\n第二行")).toBe("标题");
+  });
+
+  it("counts an answered ask_user as an utterance, not a new submit", () => {
+    const ask = (content: string, isError = false): Message => ({
+      ...msg("tool", content),
+      name: "ask_user",
+      is_error: isError,
+    });
+    const messages: Message[] = [
+      msg("user", "检索天泽"),
+      ask("天泽AI（河南众恩）汽车4S店AI邀约/营销系统 — 深挖产品能力与落地模式"),
+      msg("assistant", "资料已整理成文档"),
+      { ...msg("user", "再补一份对比表"), turn_id: "t2" },
+      msg("assistant", "对比表已生成"),
+    ];
+    expect(countAutoTitleTurns(messages)).toBe(3);
+    expect(countAutoTitleTurns([messages[0]!, messages[1]!, messages[2]!])).toBe(2);
+    expect(countAutoTitleTurns([messages[0]!, ask("Cancelled", true)])).toBe(1);
   });
 
   it("titleFromFirstUserMessage uses first user text", () => {

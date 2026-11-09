@@ -644,6 +644,14 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   animation: session-spin 0.8s linear infinite;
 }
 
+.session-spinner.is-waiting {
+  color: var(--warn, #c9862a);
+}
+
+.session-spinner.is-waiting svg {
+  animation: none;
+}
+
 @keyframes session-spin {
   to {
     transform: rotate(360deg);
@@ -1227,6 +1235,12 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow-anchor: none;
 }
 
+.messages > .scroll-hold {
+  flex: none;
+  width: 100%;
+  pointer-events: none;
+}
+
 .msg.tool-step + .msg.tool-step {
   margin-top: -10px;
 }
@@ -1342,19 +1356,12 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   right: 8px;
   bottom: 8px;
   width: 26px;
-  pointer-events: auto;
+  /* Only the tick column opens the list. The rest of the rail lets the transcript take the pointer. */
+  pointer-events: none;
 }
 
 .question-nav-hit {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-.question-nav.is-open .question-nav-hit {
-  pointer-events: none;
+  display: none;
 }
 
 .question-nav-card {
@@ -1372,7 +1379,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   padding: 8px 2px;
   border: 1px solid transparent;
   border-radius: var(--question-nav-radius);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   overflow: hidden;
   background: transparent;
   box-shadow: none;
@@ -1520,11 +1528,16 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .turn > .msg.user {
+  z-index: 2;
+  /* msg-in ends on a transform. Chromium then treats a transformed box as relative, so a pinned bubble would scroll away. */
+  animation: none;
+}
+
+/* Full-height bubbles scroll away. A one-line bubble, or one that has folded, pins until the next user message. */
+.turn > .msg.user.is-stuck,
+.turn > .msg.user.is-short {
   position: sticky;
   top: 0;
-  z-index: 2;
-  /* msg-in ends on a transform. Chromium then treats this as relative, so the bubble scrolls away from the seam. */
-  animation: none;
 }
 
 .turn > .msg.user.is-stuck .msg-body {

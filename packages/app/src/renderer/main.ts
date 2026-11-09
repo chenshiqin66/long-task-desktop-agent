@@ -12,12 +12,14 @@ import {
   escapeHtml,
   renderEmptyState,
   rerenderAllAssistantMarkdown,
+  refreshStickyTurns,
   setRichText,
   setToolDetailContent,
 } from "./ui.js";
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
 import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
-import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey, skillTokensIn } from "./skills.js";
+import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
+import { escapeAction } from "./escapeKey.js";
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { mountQuestionNav } from "./questionNav.js";
 
@@ -124,15 +126,17 @@ declare global {
         sessionId: string,
         text: string,
         images?: Array<{ mime: string; base64: string }>,
+        workspace?: string,
       ): Promise<void>;
-      watchSession(sessionId: string | null): Promise<void>;
+      watchSession(sessionId: string | null, workspace?: string): Promise<void>;
       listSkills(): Promise<Array<{ name: string; description: string; enabled: boolean }>>;
+      skillTokens(text: string): Promise<string[]>;
       installSkill(): Promise<{ name: string; description: string; enabled: boolean } | null>;
       setSkillEnabled(name: string, enabled: boolean): Promise<void>;
       uninstallSkill(name: string): Promise<void>;
       openSkillFolder(name: string): Promise<void>;
       readSessionImage(sessionId: string, relativePath: string): Promise<string>;
-      cancel(): Promise<void>;
+      cancel(sessionId?: string, workspace?: string): Promise<void>;
       explainLoad(
         workspace: string,
         sessionId: string,
@@ -205,18 +209,6 @@ let taskPanel: TaskPanelView = { rows: [], unreadable: [], attention: 0 };
 let taskPanelOpen = false;
 let taskLoad = 0;
 let currentSessionTitle = "";
-let streamingEl: HTMLElement | null = null;
-/** Raw markdown accumulated during stream — never read back from DOM after rich render. */
-let streamBuffer = "";
-let streamRaf = 0;
-let openToolDetail: HTMLElement | null = null;
-/** Live tool bars keyed by tool_call id. Nested rows use parent id + call id. */
-const openTools = new Map<string, HTMLElement>();
-/** The `.msg.tool-step` element for a live call, so a child row can sit after it. */
-const toolStepNodes = new Map<string, HTMLElement>();
-/** Last nested tool row under the tool call that started a subagent. */
-const nestedTails = new Map<string, HTMLElement>();
-let runGate: RunGate = idleGate();
 let hasWorkspace = false;
 let workspacePaths: string[] = [];
 let workspaceLabels: Record<string, string> = {};
@@ -236,18 +228,108 @@ const SESSION_VIEW_LIMIT = 8;
 type StashedSessionView = { holder: HTMLElement; scrollTop: number; followTail: boolean };
 const sessionViews = new Map<string, StashedSessionView>();
 const sessionLoads = new Map<string, Promise<void>>();
-let runParked = false;
-let parkedSessionId: string | null = null;
-let isRunning = false;
-/** Continuation turn: the composer stays open and a typed message is sent ahead of the next request. */
-let wakeAcceptsInput = false;
-/** Stop was asked; the turn has not emitted done yet. Composer stays locked. */
-let stopRequested = false;
-/** Latest phase of the in-flight submit. Shown only on that session's page. */
-let runLiveStatus = "";
 let statusIsRun = false;
 let creatingSession = false;
-let pendingAsk: { requestId: string } | null = null;
+
+type RunPrompt =
+  | { kind: "permission"; requestId: string; tool: string; summary: string; command?: string }
+  | { kind: "ask"; requestId: string; question: string; options: string[] };
+
+/** Paint state for one live session. Several of these can stream at once. */
+type RunPaint = {
+  workspace: string;
+  sessionId: string;
+  gate: RunGate;
+  liveStatus: string;
+  stopRequested: boolean;
+  wakeAcceptsInput: boolean;
+  pendingAsk: { requestId: string } | null;
+  prompt: RunPrompt | null;
+  /** Pool still holds this session, including a deferred subagent after the turn. */
+  slotHeld: boolean;
+  streamBuffer: string;
+  streamingEl: HTMLElement | null;
+  streamRaf: number;
+  openToolDetail: HTMLElement | null;
+  openTools: Map<string, HTMLElement>;
+  toolStepNodes: Map<string, HTMLElement>;
+  nestedTails: Map<string, HTMLElement>;
+};
+
+const runs = new Map<string, RunPaint>();
+/** session_idle already dropped this key. Late events must not light the spinner again. */
+const releasedRuns = new Set<string>();
+/** Set while an event is being painted, so tool maps belong to that session. */
+let drawing: RunPaint | null = null;
+
+function runKeyOf(workspace: string, sessionId: string): string {
+  return sessionViewKey(workspace, sessionId) ?? "";
+}
+
+function ensureRun(workspace: string, sessionId: string): RunPaint {
+  const key = runKeyOf(workspace, sessionId);
+  const found = runs.get(key);
+  if (found) return found;
+  const created: RunPaint = {
+    workspace,
+    sessionId,
+    gate: idleGate(),
+    liveStatus: "",
+    stopRequested: false,
+    wakeAcceptsInput: false,
+    pendingAsk: null,
+    prompt: null,
+    slotHeld: false,
+    streamBuffer: "",
+    streamingEl: null,
+    streamRaf: 0,
+    openToolDetail: null,
+    openTools: new Map(),
+    toolStepNodes: new Map(),
+    nestedTails: new Map(),
+  };
+  runs.set(key, created);
+  return created;
+}
+
+function pageRun(): RunPaint | null {
+  if (!currentSessionId) return null;
+  const workspace = viewWorkspace ?? activeWorkspace;
+  if (!workspace) return null;
+  return runs.get(runKeyOf(workspace, currentSessionId)) ?? null;
+}
+
+function dropRun(workspace: string | null, sessionId: string | null): void {
+  if (!workspace || !sessionId) return;
+  const run = runs.get(runKeyOf(workspace, sessionId));
+  if (run?.streamRaf) cancelAnimationFrame(run.streamRaf);
+  runs.delete(runKeyOf(workspace, sessionId));
+}
+
+function sessionStillHeld(run: RunPaint | undefined): boolean {
+  return Boolean(run && (run.gate.isRunning || run.slotHeld));
+}
+
+function releaseHeldRun(workspace: string, sessionId: string): void {
+  const key = runKeyOf(workspace, sessionId);
+  const run = runs.get(key);
+  if (run?.gate.isRunning) return;
+  releasedRuns.add(key);
+  dropRun(workspace, sessionId);
+  updateChrome();
+  void refreshSessions();
+}
+
+function workspaceHasRun(path: string): boolean {
+  for (const run of runs.values()) {
+    if (sessionStillHeld(run) && sameWorkspace(run.workspace, path)) return true;
+  }
+  return false;
+}
+
+function sessionRun(workspace: string, sessionId: string): RunPaint | undefined {
+  return runs.get(runKeyOf(workspace, sessionId));
+}
 
 const FILE_TABS = ["meta", "messages", "trace", "context"] as const;
 type StoreTab = (typeof FILE_TABS)[number];
@@ -270,11 +352,10 @@ let sessionArtifacts: {
 } | null = null;
 const STORE_STRING_PREVIEW = 1600;
 
-function cancelStreamRichPaint(): void {
-  if (streamRaf) {
-    cancelAnimationFrame(streamRaf);
-    streamRaf = 0;
-  }
+function cancelStreamRichPaint(run: RunPaint | null = drawing): void {
+  if (!run?.streamRaf) return;
+  cancelAnimationFrame(run.streamRaf);
+  run.streamRaf = 0;
 }
 
 function distanceFromTail(): number {
@@ -299,31 +380,33 @@ function revealTail(): void {
 function keepTail(mutate: () => void): void {
   const stick = followTail;
   mutate();
+  refreshStickyTurns(messagesEl);
   if (stick) revealTail();
 }
 
-function paintStreamRich(immediate = false): void {
-  if (!streamingEl) return;
+function paintStreamRich(immediate = false, run: RunPaint | null = drawing): void {
+  if (!run?.streamingEl) return;
   const paint = () => {
-    streamRaf = 0;
-    if (!streamingEl) return;
-    const stick = followTail && !!streamingEl.closest("#messages");
-    setRichText(streamingEl, streamBuffer, true);
+    run.streamRaf = 0;
+    if (!run.streamingEl) return;
+    const stick = followTail && !!run.streamingEl.closest("#messages");
+    setRichText(run.streamingEl, run.streamBuffer, true);
     if (stick) revealTail();
   };
   if (immediate) {
-    cancelStreamRichPaint();
+    cancelStreamRichPaint(run);
     paint();
     return;
   }
-  if (streamRaf) return;
-  streamRaf = requestAnimationFrame(paint);
+  if (run.streamRaf) return;
+  run.streamRaf = requestAnimationFrame(paint);
 }
 
-function resetStreamTarget(el: HTMLElement | null = null): void {
-  cancelStreamRichPaint();
-  streamingEl = el;
-  streamBuffer = "";
+function resetStreamTarget(el: HTMLElement | null = null, run: RunPaint | null = drawing): void {
+  if (!run) return;
+  cancelStreamRichPaint(run);
+  run.streamingEl = el;
+  run.streamBuffer = "";
 }
 
 /** Soft-truncate long strings so jsonl dumps stay readable in the dock. */
@@ -918,7 +1001,9 @@ document.addEventListener("click", (ev) => {
   hidePageCtxMenu();
 });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && !pageCtxMenu.hidden) hidePageCtxMenu();
+  if (ev.key !== "Escape" || pageCtxMenu.hidden) return;
+  ev.preventDefault();
+  hidePageCtxMenu();
 });
 window.addEventListener("blur", hidePageCtxMenu);
 window.addEventListener("resize", hidePageCtxMenu);
@@ -948,9 +1033,12 @@ function setStatus(text: string, busy = false, source: "page" | "run" = "page"):
 }
 
 /** Remember the running session's phase. Paint it only while that page is open. */
-function showRunStatus(text: string): void {
-  runLiveStatus = text;
-  if (!isRunning || currentSessionId !== runGate.runSessionId) return;
+function showRunStatus(text: string, run: RunPaint | null = drawing): void {
+  if (!run) return;
+  run.liveStatus = text;
+  if (!run.gate.isRunning || currentSessionId !== run.sessionId || !sameWorkspace(viewWorkspace, run.workspace)) {
+    return;
+  }
   setStatus(text, true, "run");
 }
 
@@ -971,11 +1059,12 @@ function showChatError(err: unknown): void {
   appendMessage(messagesEl, "error", msg);
 }
 
-function clearOpenTools(): void {
-  openTools.clear();
-  toolStepNodes.clear();
-  nestedTails.clear();
-  openToolDetail = null;
+function clearOpenTools(run: RunPaint | null = drawing): void {
+  if (!run) return;
+  run.openTools.clear();
+  run.toolStepNodes.clear();
+  run.nestedTails.clear();
+  run.openToolDetail = null;
 }
 
 function toolRowKey(callId: string, parentId?: string): string {
@@ -999,10 +1088,10 @@ function rowByToolCall(host: HTMLElement, callId: string, parentId?: string): HT
 }
 
 /** Where the next nested row goes. Maps are cleared when the parent turn ends; the DOM row stays. */
-function anchorForParent(host: HTMLElement, parentId: string): HTMLElement | undefined {
-  const fromTail = nestedTails.get(parentId);
+function anchorForParent(host: HTMLElement, parentId: string, run: RunPaint | null = drawing): HTMLElement | undefined {
+  const fromTail = run?.nestedTails.get(parentId);
   if (fromTail?.isConnected) return fromTail;
-  const fromMap = toolStepNodes.get(parentId);
+  const fromMap = run?.toolStepNodes.get(parentId);
   if (fromMap?.isConnected) return fromMap;
   let last: HTMLElement | undefined;
   const nested = host.querySelectorAll<HTMLElement>("[data-parent-tool-call-id]");
@@ -1053,10 +1142,6 @@ function sameWorkspace(a: string | null, b: string | null): boolean {
   return a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
 }
 
-function viewingRun(): boolean {
-  return !isRunning || currentSessionId === runGate.runSessionId;
-}
-
 function workspaceLabel(path: string): string {
   const key = Object.keys(workspaceLabels).find((item) => item.toLowerCase() === path.toLowerCase());
   const custom = key ? workspaceLabels[key].trim() : "";
@@ -1070,17 +1155,16 @@ function updateChrome(): void {
   else mainTitle.textContent = sessionTitle;
   mainTitle.title = sessionTitle;
   syncHomeBar();
-  const asking = Boolean(pendingAsk) && viewingRun();
-  const onRun = viewingRun();
-  const lockedOut = isRunning && !onRun;
-  const wakeHere = wakeAcceptsInput && onRun && !asking;
+  const run = pageRun();
+  const running = Boolean(run?.gate.isRunning);
+  const asking = Boolean(run?.pendingAsk);
+  const wakeHere = Boolean(run?.wakeAcceptsInput) && !asking;
   const wakeDraft = wakeHere && (inputEl.value.trim().length > 0 || pendingImages.length > 0);
-  const canCompose = hasWorkspace && onRun && !asking && !creatingSession && (!isRunning || wakeHere);
+  const canCompose = hasWorkspace && !asking && !creatingSession && (!running || wakeHere);
   const hasDraft = inputEl.value.trim().length > 0 || pendingImages.length > 0;
-  // Stop belongs to the running session's composer, not to every page.
-  // During a continuation, text in the box sends; an empty box still stops.
-  const stopHere = isRunning && onRun && !asking && !wakeDraft;
-  const stopping = stopHere && stopRequested;
+  // Stop belongs to this session. Another session's turn does not lock this box.
+  const stopHere = running && !asking && !wakeDraft;
+  const stopping = stopHere && Boolean(run?.stopRequested);
   btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose || !hasDraft;
   btnSend.textContent = asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : "发送";
   btnSend.classList.toggle("is-stop", stopHere && !stopping);
@@ -1090,19 +1174,15 @@ function updateChrome(): void {
     asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : canCompose && hasDraft ? "发送" : "发送已禁用",
   );
   btnNew.disabled = !hasWorkspace || creatingSession;
-  inputEl.disabled = lockedOut || creatingSession || (isRunning && !asking && !wakeHere);
-  composerEl.classList.toggle("is-locked", lockedOut);
-  composerEl.classList.toggle("has-draft", lockedOut && inputEl.value.length > 0);
-  composerLockNote.hidden = !lockedOut;
-  inputEl.placeholder = lockedOut
-    ? ""
-    : asking
-      ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
-      : "向CSQ-Agent发送消息...";
-  if (lockedOut) {
-    if (statusIsRun) setStatus("", false);
-  } else if (isRunning && onRun && runLiveStatus) {
-    setStatus(runLiveStatus, true, "run");
+  inputEl.disabled = creatingSession || (running && !asking && !wakeHere);
+  composerEl.classList.remove("is-locked");
+  composerEl.classList.remove("has-draft");
+  composerLockNote.hidden = true;
+  inputEl.placeholder = asking
+    ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
+    : "向CSQ-Agent发送消息...";
+  if (running && run?.liveStatus) {
+    setStatus(run.liveStatus, true, "run");
   }
   btnImage.disabled = !canCompose;
   syncImageRemoveLock();
@@ -1145,12 +1225,6 @@ async function refreshTasks(): Promise<void> {
     if (token !== taskLoad) return;
     showStatusError(err);
   }
-}
-
-function taskEventForCurrentView(): boolean {
-  if (!currentSessionId) return false;
-  if (!isRunning) return true;
-  return currentSessionId === runGate.runSessionId && sameWorkspace(viewWorkspace, activeWorkspace);
 }
 
 function composerKey(workspace: string | null, sessionId: string | null): string {
@@ -1219,10 +1293,10 @@ function ensureSessionView(key: string): StashedSessionView {
 }
 
 function evictSessionViews(keep: string | null): void {
-  const parkedKey = parkedSessionId ? sessionViewKey(activeWorkspace, parkedSessionId) : null;
   for (const key of sessionViews.keys()) {
     if (sessionViews.size <= SESSION_VIEW_LIMIT) return;
-    if (key === keep || key === parkedKey || sessionLoads.has(key)) continue;
+    const live = runs.get(key);
+    if (key === keep || sessionStillHeld(live) || live?.prompt || sessionLoads.has(key)) continue;
     sessionViews.delete(key);
   }
 }
@@ -1278,35 +1352,6 @@ function mountIfCached(workspace: string, sessionId: string): boolean {
   return Boolean(key && mountStashedView(key));
 }
 
-function parkedHost(): HTMLElement | null {
-  if (!runParked || !parkedSessionId) return null;
-  const key = sessionViewKey(activeWorkspace, parkedSessionId);
-  if (!key) return null;
-  return sessionViews.get(key)?.holder ?? null;
-}
-
-function parkRun(): void {
-  if (!isRunning || !currentSessionId || currentSessionId !== runGate.runSessionId) return;
-  if (runParked) return;
-  stashVisibleView();
-  runParked = true;
-  parkedSessionId = currentSessionId;
-}
-
-function takeParkedRun(sessionId: string): boolean {
-  if (!runParked || parkedSessionId !== sessionId) return false;
-  const key = sessionViewKey(activeWorkspace, sessionId);
-  const ok = Boolean(key && mountStashedView(key));
-  runParked = false;
-  parkedSessionId = null;
-  return ok;
-}
-
-function discardParkedRun(): void {
-  runParked = false;
-  parkedSessionId = null;
-}
-
 function markSessionListActive(workspace: string, sessionId: string): void {
   const items = treesEl.querySelectorAll<HTMLElement>(".session-item");
   for (let i = 0; i < items.length; i++) {
@@ -1314,30 +1359,6 @@ function markSessionListActive(workspace: string, sessionId: string): void {
     const on = li.dataset.sessionId === sessionId && sameWorkspace(li.dataset.workspace ?? null, workspace);
     li.classList.toggle("active", on);
   }
-}
-
-function setRunning(v: boolean): void {
-  isRunning = v;
-  if (!v) {
-    stopRequested = false;
-    wakeAcceptsInput = false;
-  }
-  updateChrome();
-}
-
-function noteRunFinished(): void {
-  if (!viewWorkspace || sameWorkspace(viewWorkspace, activeWorkspace)) return;
-  const next = viewWorkspace;
-  void (async () => {
-    try {
-      await window.agent.activateWorkspace(next);
-      activeWorkspace = next;
-      await refreshSessions();
-      updateChrome();
-    } catch (err) {
-      showStatusError(err);
-    }
-  })();
 }
 
 function syncEmptyState(): void {
@@ -1350,19 +1371,26 @@ function syncEmptyState(): void {
 function clearPermissionDock(): void {
   permissionDock.innerHTML = "";
   permissionDock.hidden = true;
-  if (pendingAsk) {
-    pendingAsk = null;
-    updateChrome();
+  const run = pageRun();
+  if (run) {
+    run.pendingAsk = null;
+    run.prompt = null;
   }
   syncTaskbarAttention();
+  updateChrome();
 }
 
 let taskbarPromptKey = "";
 
 /** Tell the shell to blink when a card is waiting and this page is not showing it. */
 function syncTaskbarAttention(): void {
-  const open = permissionDock.childElementCount > 0;
-  const inView = open && viewingRun();
+  let open = false;
+  let inView = false;
+  for (const run of runs.values()) {
+    if (!run.prompt) continue;
+    open = true;
+    if (promptOnScreen(run)) inView = true;
+  }
   const key = `${open}:${inView}`;
   if (key === taskbarPromptKey) return;
   taskbarPromptKey = key;
@@ -1370,7 +1398,8 @@ function syncTaskbarAttention(): void {
 }
 
 function syncLiveDock(): void {
-  const show = isRunning && viewingRun() && permissionDock.childElementCount > 0;
+  const run = pageRun();
+  const show = Boolean(run?.gate.isRunning && run.prompt && permissionDock.childElementCount > 0);
   permissionDock.hidden = !show;
   syncTaskbarAttention();
 }
@@ -1392,8 +1421,9 @@ function askQuestion(argsJson: string | undefined): string {
 
 async function answerPending(raw: string): Promise<void> {
   const text = raw.trim();
-  if (!text || !pendingAsk) return;
-  const requestId = pendingAsk.requestId;
+  const run = pageRun();
+  if (!text || !run?.pendingAsk) return;
+  const requestId = run.pendingAsk.requestId;
   inputEl.value = "";
   rememberComposer();
   clearPermissionDock();
@@ -1547,8 +1577,8 @@ function startWorkspaceRename(path: string, pathBtn: HTMLButtonElement): void {
 }
 
 async function removeWorkspaceFromList(path: string): Promise<void> {
-  if (isRunning && path === activeWorkspace) {
-    setStatus("请先停止当前任务再移除工作区", true);
+  if (workspaceHasRun(path)) {
+    setStatus("请先停止这个工作区里正在执行的会话", true);
     return;
   }
   try {
@@ -1565,11 +1595,9 @@ async function removeWorkspaceFromList(path: string): Promise<void> {
       currentSessionId = null;
       viewWorkspace = result.active;
       currentSessionTitle = "";
-      if (!isRunning) {
-        resetStreamTarget(null);
-        clearOpenTools();
-        clearPermissionDock();
-      }
+      resetStreamTarget(null);
+      clearOpenTools();
+      clearPermissionDock();
       hideStoreDock();
       messagesEl.innerHTML = "";
       setMainView("chat");
@@ -1657,7 +1685,7 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   const ul = document.createElement("ul");
   ul.className = "session-list";
   ul.hidden = !open;
-  const runningHere = isRunning && sameWorkspace(path, activeWorkspace);
+  const runningHere = workspaceHasRun(path);
   if (runningHere && !open) row.append(sessionSpinner());
   row.append(pathBtn, chevron, more);
   block.append(row, ul);
@@ -1679,11 +1707,11 @@ function rememberWorkspaceFold(paths: string[], collapsed: string[]): void {
   }
 }
 
-function sessionSpinner(): HTMLElement {
+function sessionSpinner(waiting = false): HTMLElement {
   const mark = document.createElement("span");
-  mark.className = "session-spinner";
+  mark.className = waiting ? "session-spinner is-waiting" : "session-spinner";
   mark.setAttribute("role", "img");
-  mark.setAttribute("aria-label", "执行中");
+  mark.setAttribute("aria-label", waiting ? "等待确认" : "执行中");
   mark.innerHTML =
     '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.25" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.28"/><path d="M8 2.75a5.25 5.25 0 0 1 5.25 5.25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
   return mark;
@@ -1706,7 +1734,8 @@ function placeSessionMenu(trigger: HTMLElement, pop: HTMLElement): void {
 async function refreshSessions(): Promise<void> {
   document.querySelectorAll(".session-menu-pop").forEach((el) => el.remove());
   treesEl.replaceChildren();
-  for (const workspace of workspacePaths) {
+  // Saved order is oldest-first. Show the latest addition at the top.
+  for (const workspace of [...workspacePaths].reverse()) {
     const open = workspaceExpanded.get(workspace) !== false;
     const listEl = mountWorkspaceTree(workspace, open);
     if (!open) continue;
@@ -1720,10 +1749,9 @@ async function refreshSessions(): Promise<void> {
       const viewingThis =
         s.session_id === currentSessionId && sameWorkspace(workspace, viewWorkspace);
       if (viewingThis) li.classList.add("active");
-      const executing =
-        isRunning &&
-        s.session_id === runGate.runSessionId &&
-        sameWorkspace(workspace, activeWorkspace);
+      const live = sessionRun(workspace, s.session_id);
+      const executing = sessionStillHeld(live);
+      const waiting = Boolean(live?.prompt);
 
       const label = document.createElement("button");
       label.type = "button";
@@ -1793,11 +1821,6 @@ async function refreshSessions(): Promise<void> {
             restoreLabel();
             return;
           }
-          if (isRunning && workspace !== activeWorkspace) {
-            restoreLabel();
-            setStatus("请先停止当前任务再改其他工作区的会话", true);
-            return;
-          }
           try {
             const meta = await window.agent.renameWorkspaceSession(workspace, s.session_id, next, {
               source: "user",
@@ -1847,17 +1870,11 @@ async function refreshSessions(): Promise<void> {
         ev.stopPropagation();
         closeMenu();
         if (!window.confirm(`删除会话「${s.title || s.session_id}」？`)) return;
-        if (isRunning && s.session_id === runGate.runSessionId) {
-          setStatus("请先停止当前任务再删除正在执行的会话", true);
-          return;
-        }
-        if (isRunning && !sameWorkspace(workspace, activeWorkspace)) {
-          setStatus("请先停止当前任务再改其他工作区的会话", true);
-          return;
-        }
         try {
           await window.agent.deleteWorkspaceSession(workspace, s.session_id);
           forgetComposer(workspace, s.session_id);
+          releasedRuns.add(runKeyOf(workspace, s.session_id));
+          dropRun(workspace, s.session_id);
           dropSessionView(workspace, s.session_id);
           if (currentSessionId === s.session_id && sameWorkspace(workspace, viewWorkspace)) {
             currentSessionId = null;
@@ -1876,7 +1893,8 @@ async function refreshSessions(): Promise<void> {
 
       pop.append(btnRename, btnDel);
       menu.append(btnMore, pop);
-      if (executing) li.append(sessionSpinner());
+      if (waiting) li.append(sessionSpinner(true));
+      else if (executing) li.append(sessionSpinner());
       li.append(label, menu);
       listEl.appendChild(li);
       }
@@ -1896,14 +1914,9 @@ async function showSession(workspace: string, sessionId: string, title: string):
     return;
   }
   rememberComposer();
-  const leavingRun =
-    isRunning &&
-    currentSessionId === runGate.runSessionId &&
-    sameWorkspace(viewWorkspace, activeWorkspace);
-  if (leavingRun) parkRun();
-  else stashVisibleView();
+  stashVisibleView();
   try {
-    if (!isRunning && !sameWorkspace(workspace, activeWorkspace)) {
+    if (!sameWorkspace(workspace, activeWorkspace)) {
       await window.agent.activateWorkspace(workspace);
       activeWorkspace = workspace;
       hasWorkspace = true;
@@ -1917,7 +1930,7 @@ async function showSession(workspace: string, sessionId: string, title: string):
     updateChrome();
     const key = sessionViewKey(workspace, sessionId);
     const loading = key ? sessionLoads.get(key) : undefined;
-    const fromBuffer = takeParkedRun(sessionId) || mountIfCached(workspace, sessionId);
+    const fromBuffer = mountIfCached(workspace, sessionId);
     if (!fromBuffer && !loading) {
       const job = loadCurrent().finally(() => {
         if (key) sessionLoads.delete(key);
@@ -1929,11 +1942,12 @@ async function showSession(workspace: string, sessionId: string, title: string):
     } else {
       void refreshStoreDock(sessionId);
     }
+    const shown = pageRun();
+    if (shown) paintPrompt(shown);
+    else clearPermissionDock();
     await refreshSessions();
     updateChrome();
-    if (sameWorkspace(workspace, activeWorkspace)) void window.agent.watchSession(sessionId);
-    else void window.agent.watchSession(null);
-    // A one-shot warning such as "stop before adding a workspace" belongs to that click, not to every session opened afterwards.
+    void window.agent.watchSession(sessionId, workspace);
     if (!statusIsRun) setStatus("", false);
     void refreshTasks();
   } catch (err) {
@@ -1957,23 +1971,13 @@ async function showNewPage(): Promise<void> {
     return;
   }
   rememberComposer();
-  if (
-    isRunning &&
-    currentSessionId === runGate.runSessionId &&
-    sameWorkspace(viewWorkspace, activeWorkspace)
-  ) {
-    parkRun();
-  } else {
-    stashVisibleView();
-  }
+  stashVisibleView();
   currentSessionId = null;
   viewWorkspace = activeWorkspace;
   currentSessionTitle = "";
-  if (!isRunning) {
-    resetStreamTarget(null);
-    clearOpenTools();
-    clearPermissionDock();
-  }
+  resetStreamTarget(null);
+  clearOpenTools();
+  clearPermissionDock();
   hideStoreDock();
   messagesEl.innerHTML = "";
   followTail = true;
@@ -1983,7 +1987,6 @@ async function showNewPage(): Promise<void> {
   syncEmptyState();
   setStatus("", false);
   updateChrome();
-  void window.agent.watchSession(null);
   void refreshTasks();
   if (!inputEl.disabled) inputEl.focus();
 }
@@ -1996,12 +1999,13 @@ async function loadCurrent(): Promise<void> {
     const key = sessionViewKey(workspace, sessionId);
     return key ? ensureSessionView(key).holder : messagesEl;
   };
-  paint().replaceChildren();
-  if (!runParked) {
-    resetStreamTarget(null);
-    clearOpenTools();
+  const live = sessionId && workspace ? sessionRun(workspace, sessionId) : null;
+  if (live?.gate.isRunning || live?.prompt) {
+    if (live.prompt && promptOnScreen(live)) paintPrompt(live);
+    return;
   }
-  if (!isRunning) clearPermissionDock();
+  paint().replaceChildren();
+  clearPermissionDock();
   if (!sessionId) {
     hideStoreDock();
     syncEmptyState();
@@ -2035,7 +2039,7 @@ async function loadCurrent(): Promise<void> {
       return;
     }
     let openQuestion: { body: HTMLElement; text: string } | null = null;
-    const liveHere = isRunning && runGate.runSessionId === sessionId;
+    const liveHere = Boolean(live?.gate.isRunning);
     const closeUnanswered = () => {
       if (!openQuestion) return;
       ensureReask(openQuestion.body, openQuestion.text);
@@ -2138,11 +2142,11 @@ async function applyWorkspace(path: string | null): Promise<void> {
   currentSessionId = null;
   viewWorkspace = null;
   currentSessionTitle = "";
-  void window.agent.watchSession(null);
+  runs.clear();
+  releasedRuns.clear();
+  drawing = null;
   resetStreamTarget(null);
   clearOpenTools();
-  runGate = idleGate();
-  setRunning(false);
   clearPermissionDock();
   hideStoreDock();
   messagesEl.innerHTML = "";
@@ -2156,10 +2160,6 @@ async function applyWorkspace(path: string | null): Promise<void> {
 document.getElementById("btn-workspace")!.onclick = async () => {
   if (!window.agent?.addWorkspace) {
     setStatus("预加载失败：window.agent 不可用，请重启应用", true);
-    return;
-  }
-  if (isRunning) {
-    setStatus("请先停止当前任务再增加工作区", true);
     return;
   }
   setStatus("选择要增加的工作区…", true);
@@ -2229,7 +2229,7 @@ configForm.addEventListener("submit", async (ev) => {
     await window.agent.saveConfig({ ...cur, baseUrl, model, apiKey });
     configDialog.close();
     // A running turn owns the status line. Saving must not clear 「等待确认权限」 or 「等你回答」.
-    if (!isRunning) setStatus("配置已保存");
+    if (!pageRun()?.gate.isRunning) setStatus("配置已保存");
   } catch (err) {
     showStatusError(err);
   }
@@ -2377,15 +2377,15 @@ async function ensureSession(): Promise<string | null> {
 }
 
 async function acceptSkillTokens(text: string): Promise<boolean> {
-  const tokens = skillTokensIn(text);
-  if (!tokens.length) return true;
   try {
+    const tokens = await window.agent.skillTokens(text);
+    if (!tokens.length) return true;
     const installed = await window.agent.listSkills();
     const byName = new Map(installed.map((skill) => [skill.name, skill]));
     for (const name of tokens) {
       const skill = byName.get(name);
       if (!skill) {
-        showChatError(new Error(`未知技能 /${name}`));
+        showChatError(new Error(`未知技能 /${name}。如果这是路径，放进反引号里：\`/${name}\``));
         return false;
       }
       if (!skill.enabled) {
@@ -2426,7 +2426,8 @@ function appendUserQuestion(text: string, images: string[], messageId?: string):
 
 async function reask(text: string): Promise<void> {
   if (!text.trim()) return;
-  if (isRunning || creatingSession || (pendingAsk && viewingRun())) {
+  const run = pageRun();
+  if (creatingSession || run?.gate.isRunning) {
     setStatus("请先停止当前任务再重新问", true);
     return;
   }
@@ -2435,21 +2436,24 @@ async function reask(text: string): Promise<void> {
 }
 
 async function sendMessage(): Promise<void> {
-  if (pendingAsk && viewingRun()) {
+  const page = pageRun();
+  if (page?.pendingAsk) {
     await answerPending(inputEl.value);
     return;
   }
   if (creatingSession) return;
-  if (isRunning && !wakeAcceptsInput) return;
+  if (page?.gate.isRunning && !page.wakeAcceptsInput) return;
   const text = inputEl.value.trim();
   const images = pendingImages.slice();
   if (!text && images.length === 0) return;
   if (text && !(await acceptSkillTokens(text))) return;
   const draftKey = currentComposerKey();
+  const workspace = viewWorkspace ?? activeWorkspace;
+  if (!workspace) return;
   try {
-    if (viewWorkspace && !sameWorkspace(viewWorkspace, activeWorkspace)) {
-      await window.agent.activateWorkspace(viewWorkspace);
-      activeWorkspace = viewWorkspace;
+    if (!sameWorkspace(workspace, activeWorkspace)) {
+      await window.agent.activateWorkspace(workspace);
+      activeWorkspace = workspace;
     }
   } catch (err) {
     showStatusError(err);
@@ -2463,20 +2467,28 @@ async function sendMessage(): Promise<void> {
   composerImages.innerHTML = "";
   composerImages.hidden = true;
   inputEl.value = "";
-  discardParkedRun();
   if (messagesEl.querySelector(".empty-state")) messagesEl.innerHTML = "";
   followTail = true;
-  const joiningWake = isRunning && wakeAcceptsInput;
-  appendUserQuestion(text, images.map((image) => image.previewUrl));
-  if (!joiningWake) {
-    resetStreamTarget(appendMessage(messagesEl, "assistant", ""));
-    clearOpenTools();
-    runLiveStatus = "运行中…";
-    // Record the run before painting. updateChrome treats a running flag with an
-    // empty run session as "some other session", which locks this page for the whole turn.
-    runGate = beginRun(sessionId);
-    setRunning(true);
+  releasedRuns.delete(runKeyOf(workspace, sessionId));
+  const run = ensureRun(workspace, sessionId);
+  const alreadyHeld = run.slotHeld;
+  const joiningWake = run.gate.isRunning && run.wakeAcceptsInput;
+  drawing = run;
+  try {
+    appendUserQuestion(text, images.map((image) => image.previewUrl));
+    if (!joiningWake) {
+      resetStreamTarget(appendMessage(messagesEl, "assistant", ""), run);
+      clearOpenTools(run);
+      run.liveStatus = "运行中…";
+      run.gate = beginRun(sessionId);
+      run.wakeAcceptsInput = false;
+      run.stopRequested = false;
+    }
+  } finally {
+    drawing = null;
   }
+  updateChrome();
+  void refreshSessions();
   try {
     await window.agent.submit(
       sessionId,
@@ -2484,10 +2496,13 @@ async function sendMessage(): Promise<void> {
       images.length
         ? images.map((image) => ({ mime: image.mime, base64: image.base64 }))
         : undefined,
+      workspace,
     );
   } catch (err) {
-    runGate = idleGate();
-    setRunning(false);
+    if (!joiningWake) {
+      run.gate = idleGate();
+      if (!alreadyHeld) dropRun(workspace, sessionId);
+    }
     if (isSkillSendFailure(err)) {
       inputEl.value = text;
       pendingImages = images;
@@ -2497,20 +2512,26 @@ async function sendMessage(): Promise<void> {
       if (!messagesEl.querySelector(".msg")) renderEmptyState(messagesEl, "idle");
     }
     showChatError(err);
+    updateChrome();
+    void refreshSessions();
   }
 }
 
 function requestStop(): void {
-  if (!isRunning || stopRequested) return;
-  stopRequested = true;
-  clearPermissionDock();
+  const run = pageRun();
+  if (!run?.gate.isRunning || run.stopRequested) return;
+  run.stopRequested = true;
+  run.prompt = null;
+  run.pendingAsk = null;
+  permissionDock.innerHTML = "";
+  permissionDock.hidden = true;
   updateChrome();
   void (async () => {
     try {
-      await window.agent.cancel();
-      showRunStatus("已请求停止");
+      await window.agent.cancel(run.sessionId, run.workspace);
+      showRunStatus("已请求停止", run);
     } catch (err) {
-      stopRequested = false;
+      run.stopRequested = false;
       updateChrome();
       showStatusError(err);
     }
@@ -2532,19 +2553,19 @@ taskPanelEl.addEventListener("click", (ev) => {
 });
 
 btnSend.onclick = () => {
-  if (pendingAsk && viewingRun()) {
+  const run = pageRun();
+  if (run?.pendingAsk) {
     void answerPending(inputEl.value);
     return;
   }
-  if (isRunning && viewingRun()) {
-    if (wakeAcceptsInput && (inputEl.value.trim() || pendingImages.length > 0)) {
+  if (run?.gate.isRunning) {
+    if (run.wakeAcceptsInput && (inputEl.value.trim() || pendingImages.length > 0)) {
       void sendMessage();
       return;
     }
     requestStop();
     return;
   }
-  if (isRunning) return;
   void sendMessage();
 };
 
@@ -2673,18 +2694,23 @@ window.addEventListener("keydown", (ev) => {
     openFindBar();
     return;
   }
-  if (ev.key === "Escape" && !findBar.hidden) {
-    ev.preventDefault();
+  if (ev.key !== "Escape") return;
+  const action = escapeAction({
+    handled: ev.defaultPrevented,
+    composing: ev.isComposing,
+    dialogOpen: configDialog.open,
+    findOpen: !findBar.hidden || Boolean(explainApi && !explainApi.findBar.hidden),
+    taskPanelOpen: taskPanelOpen && !taskPanelEl.hidden,
+    viewingRun: Boolean(pageRun()?.gate.isRunning),
+  });
+  if (action === "none") return;
+  ev.preventDefault();
+  if (action === "close-find") {
     closeFindBar();
-    return;
-  }
-  if (ev.key === "Escape" && taskPanelOpen && !taskPanelEl.hidden) {
-    ev.preventDefault();
+  } else if (action === "close-tasks") {
     taskPanelOpen = false;
     syncTaskChrome();
-    return;
-  }
-  if (ev.key === "Escape" && isRunning && viewingRun()) {
+  } else {
     requestStop();
   }
 });
@@ -2863,55 +2889,93 @@ findObserver.observe(document.getElementById("explain-conversation")!, {
   characterData: true,
 });
 
-function recordLivePrompt(e: {
-  type: string;
-  request_id: string;
-  tool?: string;
-  summary?: string;
-  command?: string;
-  question?: string;
-  options?: string[];
-}): void {
-  if (viewingRun() && streamingEl && streamBuffer) paintStreamRich(true);
-  if (viewingRun()) resetStreamTarget(null);
-  permissionDock
-    .querySelectorAll(`[data-request-id="${CSS.escape(String(e.request_id))}"]`)
-    .forEach((n) => n.remove());
-  if (e.type === "permission_request") {
-    showRunStatus("等待确认权限…");
+function promptOnScreen(run: RunPaint): boolean {
+  return run.sessionId === currentSessionId && sameWorkspace(run.workspace, viewWorkspace);
+}
+
+function paintPrompt(run: RunPaint): void {
+  if (!promptOnScreen(run)) {
+    syncTaskbarAttention();
+    return;
+  }
+  permissionDock.innerHTML = "";
+  const prompt = run.prompt;
+  if (!prompt) {
+    permissionDock.hidden = true;
+    syncTaskbarAttention();
+    return;
+  }
+  if (prompt.kind === "permission") {
     appendPermissionCard(permissionDock, {
-      requestId: e.request_id,
-      tool: e.tool ?? "",
-      summary: e.summary ?? "",
-      command: e.command,
+      requestId: prompt.requestId,
+      tool: prompt.tool,
+      summary: prompt.summary,
+      command: prompt.command,
       onAllow: () => {
-        void window.agent.respondPermission(e.request_id, "allow");
+        void window.agent.respondPermission(prompt.requestId, "allow");
       },
       onDeny: () => {
-        void window.agent.respondPermission(e.request_id, "deny");
+        void window.agent.respondPermission(prompt.requestId, "deny");
       },
       onStop: () => {
         requestStop();
       },
     });
-    syncLiveDock();
-    return;
+  } else {
+    appendAskCard(permissionDock, {
+      requestId: prompt.requestId,
+      question: prompt.question,
+      options: prompt.options,
+      onAnswer: (text) => {
+        void answerPending(text);
+      },
+      onCancel: () => {
+        requestStop();
+      },
+    });
   }
-  pendingAsk = { requestId: e.request_id };
-  showRunStatus("等你回答…");
-  appendAskCard(permissionDock, {
-    requestId: e.request_id,
-    question: e.question ?? "",
-    options: e.options ?? [],
-    onAnswer: (text) => {
-      void answerPending(text);
-    },
-    onCancel: () => {
-      requestStop();
-    },
-  });
+  permissionDock.hidden = false;
+  syncLiveDock();
+  if (prompt.kind === "ask") inputEl.focus();
+}
+
+function recordLivePrompt(
+  e: {
+    type: string;
+    request_id: string;
+    tool?: string;
+    summary?: string;
+    command?: string;
+    question?: string;
+    options?: string[];
+  },
+  run: RunPaint,
+): void {
+  if (run.streamingEl && run.streamBuffer) paintStreamRich(true, run);
+  resetStreamTarget(null, run);
+  if (e.type === "permission_request") {
+    run.pendingAsk = null;
+    run.prompt = {
+      kind: "permission",
+      requestId: e.request_id,
+      tool: e.tool ?? "",
+      summary: e.summary ?? "",
+      command: e.command,
+    };
+    showRunStatus("等待确认权限…", run);
+  } else {
+    run.pendingAsk = { requestId: e.request_id };
+    run.prompt = {
+      kind: "ask",
+      requestId: e.request_id,
+      question: e.question ?? "",
+      options: e.options ?? [],
+    };
+    showRunStatus("等你回答…", run);
+  }
+  paintPrompt(run);
   updateChrome();
-  if (viewingRun()) inputEl.focus();
+  void refreshSessions();
 }
 
 function runStatusText(reason: string): string {
@@ -2932,31 +2996,33 @@ function applyTranscript(host: HTMLElement, e: {
   parent_tool_call_id?: string;
   session_id?: string;
 }): boolean {
+  const run = drawing;
+  if (!run) return false;
   const place = (mutate: () => void) => {
     if (host === messagesEl) keepTail(mutate);
     else mutate();
   };
   if (e.type === "task_notification") {
-    if (streamingEl && streamBuffer) paintStreamRich(true);
+    if (run.streamingEl && run.streamBuffer) paintStreamRich(true);
     resetStreamTarget(null);
     place(() => appendTaskNotice(host, e.content ?? ""));
     return true;
   }
   if (e.type === "held_user") {
-    if (streamingEl && streamBuffer) paintStreamRich(true);
+    if (run.streamingEl && run.streamBuffer) paintStreamRich(true);
     resetStreamTarget(null);
     return true;
   }
   if (e.type === "text") {
-    if (!streamingEl) place(() => resetStreamTarget(appendMessage(host, "assistant", "")));
-    streamBuffer += e.delta ?? "";
+    if (!run.streamingEl) place(() => resetStreamTarget(appendMessage(host, "assistant", "")));
+    run.streamBuffer += e.delta ?? "";
     paintStreamRich(false);
     return true;
   }
   if (e.type === "tool_call" && e.tool_call) {
     const call = e.tool_call;
     const parentId = e.parent_tool_call_id;
-    if (!parentId && streamingEl && streamBuffer) paintStreamRich(true);
+    if (!parentId && run.streamingEl && run.streamBuffer) paintStreamRich(true);
     if (!parentId) resetStreamTarget(null);
     place(() => {
       const after = parentId ? anchorForParent(host, parentId) : undefined;
@@ -2970,21 +3036,21 @@ function applyTranscript(host: HTMLElement, e: {
         parentToolCallId: parentId,
       });
       const key = toolRowKey(call.id, parentId);
-      openTools.set(key, body);
+      run.openTools.set(key, body);
       const wrap = stepWrap(body);
       if (wrap) {
-        toolStepNodes.set(key, wrap);
-        if (parentId) nestedTails.set(parentId, wrap);
-        else toolStepNodes.set(call.id, wrap);
+        run.toolStepNodes.set(key, wrap);
+        if (parentId) run.nestedTails.set(parentId, wrap);
+        else run.toolStepNodes.set(call.id, wrap);
       }
-      if (!parentId) openToolDetail = body;
+      if (!parentId) run.openToolDetail = body;
     });
     return true;
   }
   if (e.type === "tool_result") {
     const detail = (e.content ?? "").slice(0, 4000);
     const key = e.tool_call_id ? toolRowKey(e.tool_call_id, e.parent_tool_call_id) : "";
-    const node = key ? openTools.get(key) : undefined;
+    const node = key ? run.openTools.get(key) : undefined;
     const fill = (body: HTMLElement) => {
       setToolDetailContent(body, detail);
       const details = body.parentElement instanceof HTMLDetailsElement ? body.parentElement : null;
@@ -2995,8 +3061,8 @@ function applyTranscript(host: HTMLElement, e: {
       step?.classList.toggle("is-error", e.is_error === true);
       if (details) details.open = false;
       refreshToolGroup(body.closest(".tool-group"));
-      if (key) openTools.delete(key);
-      if (openToolDetail === body) openToolDetail = null;
+      if (key) run.openTools.delete(key);
+      if (run.openToolDetail === body) run.openToolDetail = null;
       if (isAsk && !e.is_error && !e.parent_tool_call_id) appendMessage(host, "user", e.content ?? "");
     };
     if (node) {
@@ -3020,114 +3086,123 @@ function applyTranscript(host: HTMLElement, e: {
             parentToolCallId: e.parent_tool_call_id,
           });
           const wrap = stepWrap(body);
-          if (wrap && e.parent_tool_call_id) nestedTails.set(e.parent_tool_call_id, wrap);
+          if (wrap && e.parent_tool_call_id) run.nestedTails.set(e.parent_tool_call_id, wrap);
         });
       }
     }
     return true;
   }
   if (e.type === "error") {
-    clearPermissionDock();
+    run.prompt = null;
+    run.pendingAsk = null;
+    if (promptOnScreen(run)) {
+      permissionDock.innerHTML = "";
+      permissionDock.hidden = true;
+      syncTaskbarAttention();
+    }
     place(() => appendMessage(host, "error", e.message ?? ""));
     return true;
   }
   return false;
 }
 
-function finishRun(reason: string, refreshStore: boolean): void {
-  if (reason === "cancelled" && streamingEl && !streamBuffer.trim()) {
-    streamingEl.textContent = CANCELLED_TURN_NOTICE;
-    streamingEl.closest(".msg")?.classList.add("is-cancelled");
-    const questions = messagesEl.querySelectorAll(":scope > .turn > .msg.user .msg-body, :scope > .msg.user .msg-body");
-    const asked = questions[questions.length - 1];
+function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
+  const host = run.streamingEl?.closest(".messages");
+  if (reason === "cancelled" && run.streamingEl && !run.streamBuffer.trim()) {
+    run.streamingEl.textContent = CANCELLED_TURN_NOTICE;
+    run.streamingEl.closest(".msg")?.classList.add("is-cancelled");
+    const questions = host?.querySelectorAll(":scope > .turn > .msg.user .msg-body, :scope > .msg.user .msg-body");
+    const asked = questions?.[questions.length - 1];
     if (asked instanceof HTMLElement) ensureReask(asked, asked.textContent ?? "");
-  } else if (streamingEl && streamBuffer) {
-    paintStreamRich(true);
+  } else if (run.streamingEl && run.streamBuffer) {
+    paintStreamRich(true, run);
   }
-  resetStreamTarget(null);
-  clearPermissionDock();
-  clearOpenTools();
-  const showHere = refreshStore;
-  runLiveStatus = "";
-  setRunning(false);
-  if (showHere) setStatus(runStatusText(reason), reason !== "completed");
-  else if (statusIsRun) setStatus("", false);
-  if (refreshStore && currentSessionId) void refreshStoreDock(currentSessionId);
-  noteRunFinished();
+  resetStreamTarget(null, run);
+  run.prompt = null;
+  run.pendingAsk = null;
+  if (onScreen) {
+    permissionDock.innerHTML = "";
+    permissionDock.hidden = true;
+  }
+  clearOpenTools(run);
+  run.liveStatus = "";
+  run.gate = idleGate();
+  run.wakeAcceptsInput = false;
+  run.stopRequested = false;
+  run.slotHeld = true;
+  if (onScreen) setStatus(runStatusText(reason), reason !== "completed");
+  else if (statusIsRun && currentSessionId === run.sessionId && sameWorkspace(viewWorkspace, run.workspace)) {
+    setStatus("", false);
+  }
+  if (onScreen && currentSessionId) void refreshStoreDock(currentSessionId);
+  syncTaskbarAttention();
+  updateChrome();
   void refreshSessions();
 }
 
 window.agent.onEvent((e) => {
-  if (
-    (e.type === "tool_result" || e.type === "task_notification" || e.type === "done") &&
-    taskEventForCurrentView()
-  ) {
-    void refreshTasks();
-  }
-  // Auto-title may arrive after `done` cleared the run gate — always apply.
   if (e.type === "session_title") {
-    if (currentSessionId === e.session_id) {
+    if (currentSessionId === e.session_id && (!e.workspace || sameWorkspace(viewWorkspace, e.workspace))) {
       currentSessionTitle = e.title;
       updateChrome();
     }
     void refreshSessions();
     return;
   }
-  if (e.type === "inbox_wake") {
-    wakeAcceptsInput = e.session_id === currentSessionId;
-    runGate = beginRun(e.session_id);
-    if (streamingEl && streamBuffer) paintStreamRich(true);
-    resetStreamTarget(null);
-    setRunning(true);
-    if (wakeAcceptsInput) showRunStatus("正在把后台结果交给模型");
+  const sessionId = typeof e.session_id === "string" ? e.session_id : "";
+  const workspace = typeof e.workspace === "string" ? e.workspace : "";
+  if (!sessionId || !workspace) return;
+  if (e.type === "session_idle") {
+    releaseHeldRun(workspace, sessionId);
     return;
   }
-
-  const decision = decideEvent(runGate, currentSessionId, e);
-  runGate = decision.next;
-  if (
-    (e.type === "tool_call" || e.type === "tool_result") &&
-    e.parent_tool_call_id &&
-    e.session_id &&
-    runParked &&
-    parkedSessionId === e.session_id &&
-    currentSessionId !== e.session_id
-  ) {
-    const parked = parkedHost();
-    if (parked) applyTranscript(parked, e);
-    return;
-  }
-  if (!decision.paint) {
-    if (!decision.keep) return;
+  const key = runKeyOf(workspace, sessionId);
+  if (releasedRuns.has(key)) return;
+  const run = ensureRun(workspace, sessionId);
+  run.slotHeld = true;
+  const onScreen = sessionId === currentSessionId && sameWorkspace(workspace, viewWorkspace);
+  drawing = run;
+  try {
+    if (
+      (e.type === "tool_result" || e.type === "task_notification" || e.type === "done") &&
+      onScreen
+    ) {
+      void refreshTasks();
+    }
+    if (e.type === "inbox_wake") {
+      run.wakeAcceptsInput = onScreen;
+      run.gate = beginRun(sessionId);
+      if (run.streamingEl && run.streamBuffer) paintStreamRich(true, run);
+      resetStreamTarget(null, run);
+      if (run.wakeAcceptsInput) showRunStatus("正在把后台结果交给模型", run);
+      updateChrome();
+      void refreshSessions();
+      return;
+    }
+    const decision = decideEvent(run.gate, onScreen ? currentSessionId : null, e);
+    run.gate = decision.next;
+    if (!decision.paint && !decision.keep && !decision.stashFor) return;
     if (e.type === "status") {
-      runLiveStatus = PHASE_LABEL[e.phase] ?? e.phase;
+      showRunStatus(PHASE_LABEL[e.phase] ?? e.phase, run);
       return;
     }
     if (e.type === "ask_user" || e.type === "permission_request") {
-      recordLivePrompt(e);
+      recordLivePrompt(e, run);
       return;
     }
     if (e.type === "done") {
-      finishRun(e.reason, false);
+      finishRun(run, e.reason, onScreen);
       return;
     }
-    const parked = parkedHost();
-    if (parked) applyTranscript(parked, e);
-    return;
-  }
-
-  if (applyTranscript(messagesEl, e)) return;
-  if (e.type === "permission_request" || e.type === "ask_user") {
-    recordLivePrompt(e);
-  } else if (e.type === "done") {
-    finishRun(e.reason, true);
-  } else if (e.type === "status") {
-    showRunStatus(PHASE_LABEL[e.phase] ?? e.phase);
+    const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
+    applyTranscript(host, e);
+  } finally {
+    drawing = null;
   }
 });
 
 function refreshVisibleAssistantMarkdown(): void {
-  if (isRunning) return;
+  if (pageRun()?.gate.isRunning) return;
   rerenderAllAssistantMarkdown(messagesEl);
 }
 

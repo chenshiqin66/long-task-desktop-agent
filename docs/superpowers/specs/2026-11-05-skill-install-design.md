@@ -2,6 +2,11 @@
 
 日期：2026-11-05
 
+> **这是当时的设计记录，不再随代码更新。** 现行行为以 [技能](../../skills.md) 为准。已知和代码不一致的地方：
+>
+> - 「脚本」一节说不新增脚本工具、用 shell 执行脚本。现在有专门的 `run_skill_script`，提示词反而要求模型不要用 shell 跑技能脚本。
+> - 文件表里说 preload 暴露 `replaceSkill`。现在 preload 暴露的是 `listSkills`、`installSkill`、`uninstallSkill`、`setSkillEnabled`、`openSkillFolder`；`replaceSkill` 只留在 core 里，界面没有入口。
+
 安装把一份技能复制到本机用户目录，让每次模型请求都带上它的名字和 description。用户在输入框用 `/name` 点名，或模型调用 `read_skill`，才会在这一次发送里带上正文。下一次发送不再附上正文。
 
 ## 已定行为

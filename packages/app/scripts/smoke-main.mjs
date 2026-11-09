@@ -8,8 +8,14 @@ require("electron");
 console.log("electron module resolvable");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-for (const script of ["test-run-event-gate.mjs", "test-taskbar-attention.mjs"]) {
-  const gate = spawnSync(process.execPath, [join(root, "scripts", script)], {
+const scripts = [
+  ["test-run-event-gate.mjs"],
+  ["test-escape-key.mjs"],
+  ["test-taskbar-attention.mjs"],
+  ["test-taskbar-icon-win.mjs", "--experimental-test-module-mocks"],
+];
+for (const [script, ...flags] of scripts) {
+  const gate = spawnSync(process.execPath, [...flags, join(root, "scripts", script)], {
     encoding: "utf8",
   });
   if (gate.status !== 0) {

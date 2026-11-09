@@ -1,5 +1,7 @@
 import type { Message } from "../types.js";
 import type { LlmProvider } from "../provider/types.js";
+import { countUserTurns } from "../context/compress.js";
+import { ASK_USER_TOOL_NAME } from "../tools/askUserTool.js";
 
 /** Max display length for session titles (汉字 / 码点计). */
 export const SESSION_TITLE_MAX_CHARS = 12;
@@ -23,6 +25,24 @@ export function sanitizeSessionTitle(raw: string): string {
     t = chars.slice(0, SESSION_TITLE_MAX_CHARS).join("");
   }
   return t || DEFAULT_TITLE;
+}
+
+/** A submitted ask_user answer. The turn stays open, so it is not a new user message. */
+function isAnsweredAsk(message: Message): boolean {
+  return (
+    message.role === "tool" &&
+    message.name === ASK_USER_TOOL_NAME &&
+    message.is_error !== true &&
+    message.content.trim().length > 0
+  );
+}
+
+/**
+ * Utterances that should name the session: each submit, plus each ask_user answer
+ * the model then continued from. Cancelled or empty answers do not count.
+ */
+export function countAutoTitleTurns(messages: Message[]): number {
+  return countUserTurns(messages) + messages.filter(isAnsweredAsk).length;
 }
 
 /** Fallback when the LLM call fails: first user message, truncated. */

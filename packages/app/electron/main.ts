@@ -7,6 +7,8 @@ import {
   AgentError,
   AgentRuntime,
   ExplainRuntime,
+  SessionRuntimePool,
+  sessionRunKey,
   ExplainStore,
   SessionStore,
   sourceTurnContext,
@@ -20,6 +22,7 @@ import {
   DeferredPermissionGate,
   DeferredAskGate,
   defaultSkillsRoot,
+  extractSkillTokens,
   installSkill,
   isPathInside,
   isSkillName,
@@ -32,7 +35,7 @@ import {
   TaskStore,
   buildTaskPanel,
 } from "@agent/core";
-import type { AgentConfig, ImageMime, PermissionDecision, RuntimeEvent, StoredConfig, SubmittedImage } from "@agent/core";
+import type { AgentConfig, ImageMime, PermissionDecision, StoredConfig, SubmittedImage } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 
@@ -41,14 +44,43 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 let win: BrowserWindow | null = null;
 let taskbarAlert: TaskbarAlert | null = null;
 let appMenu: Menu | null = null;
-let runtime: AgentRuntime | null = null;
-/** AgentConfig snapshot used to build `runtime`. Compared on the next submit. */
-let runtimeConfigKey: string | null = null;
 let explainRt: ExplainRuntime | null = null;
 let explainKey = "";
-let permissionGate: DeferredPermissionGate | null = null;
-let askGate: DeferredAskGate | null = null;
+/** Workspace the sidebar last focused. Not the only workspace that can run. */
 let workspacePath: string | null = null;
+
+type LiveRun = {
+  runtime: AgentRuntime;
+  permissions: DeferredPermissionGate;
+  asks: DeferredAskGate;
+};
+
+const lives = new Map<string, LiveRun>();
+
+const runPool = new SessionRuntimePool<AgentRuntime>(async (workspace, sessionId) => {
+  const config = await readAgentConfig();
+  const permissions = new DeferredPermissionGate();
+  const asks = new DeferredAskGate();
+  const runtime = new AgentRuntime({
+    workspacePath: workspace,
+    config,
+    provider: new OpenAICompatibleProvider({
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+    }),
+    permissions,
+    asks,
+  });
+  const key = sessionRunKey(workspace, sessionId);
+  lives.set(key, { runtime, permissions, asks });
+  runtime.onEvent((event) => {
+    const session_id = "session_id" in event && event.session_id ? event.session_id : sessionId;
+    win?.webContents.send("agent:event", { ...event, session_id, workspace });
+  });
+  return runtime;
+}, (workspace, sessionId) => {
+  win?.webContents.send("agent:event", { type: "session_idle", session_id: sessionId, workspace });
+});
 
 /** Replace Electron's English default menu with zh-CN labels. */
 function installChineseAppMenu(): void {
@@ -114,10 +146,6 @@ function installChineseAppMenu(): void {
 /** Native menu bars are always full-window. Drop the bar; the sidebar pops the same menus. */
 function hideNativeMenuBar(target: BrowserWindow): void {
   target.removeMenu();
-}
-
-function sendEvent(e: RuntimeEvent) {
-  win?.webContents.send("agent:event", e);
 }
 
 const CONFIG_DEFAULTS = {
@@ -231,34 +259,33 @@ function agentConfigKey(config: AgentConfig): string {
   ]);
 }
 
-async function ensureRuntime(): Promise<AgentRuntime> {
-  if (!workspacePath) throw new Error("No workspace selected");
-  if (runtime) return runtime;
-  const config = await readAgentConfig();
-  const provider = new OpenAICompatibleProvider({
-    baseUrl: config.baseUrl,
-    apiKey: config.apiKey,
-  });
-  permissionGate = new DeferredPermissionGate();
-  askGate = new DeferredAskGate();
-  runtime = new AgentRuntime({
-    workspacePath,
-    config,
-    provider,
-    permissions: permissionGate,
-    asks: askGate,
-  });
-  runtimeConfigKey = agentConfigKey(config);
-  runtime.onEvent(sendEvent);
-  return runtime;
+async function currentConfigKey(): Promise<string> {
+  return agentConfigKey(await readAgentConfig());
 }
 
-/** Next send picks up a saved model config. A live turn keeps its provider and gates. */
-async function adoptConfigIfIdle(): Promise<void> {
-  if (!runtime || runtime.isTurnRunning) return;
-  const key = agentConfigKey(await readAgentConfig());
-  if (key === runtimeConfigKey) return;
-  resetRuntime();
+function liveFor(workspace: string, sessionId: string): LiveRun | undefined {
+  return lives.get(sessionRunKey(workspace, sessionId));
+}
+
+function cancelLive(workspace: string, sessionId: string): void {
+  const live = liveFor(workspace, sessionId);
+  live?.permissions.denyAll();
+  live?.asks.cancelAll();
+  runPool.cancel(workspace, sessionId);
+}
+
+/** Page reload. Stop every live turn instead of dropping the object while it still runs. */
+async function resetAllRuntimes(): Promise<void> {
+  for (const live of lives.values()) {
+    live.permissions.denyAll();
+    live.asks.cancelAll();
+    live.runtime.cancel();
+  }
+  for (const live of lives.values()) {
+    await live.runtime.stopDeferred();
+  }
+  runPool.clear();
+  lives.clear();
 }
 
 const IMAGE_MIMES = new Set<ImageMime>(["image/png", "image/jpeg", "image/webp", "image/gif"]);
@@ -298,15 +325,6 @@ async function ensureExplainRuntime(workspace: string): Promise<ExplainRuntime> 
     win?.webContents.send("agent:explain-event", event);
   });
   return explainRt;
-}
-
-function resetRuntime(): void {
-  permissionGate?.denyAll();
-  permissionGate = null;
-  askGate?.cancelAll();
-  askGate = null;
-  runtime = null;
-  runtimeConfigKey = null;
 }
 
 function createWindow() {
@@ -386,7 +404,7 @@ app.whenReady().then(() => {
       paths[0] ||
       null;
     workspacePath = active;
-    resetRuntime();
+    await resetAllRuntimes();
     const labels = labelsFor(stored, paths);
     const labelsDirty =
       JSON.stringify(labels) !== JSON.stringify(stored?.workspaceLabels ?? {});
@@ -424,10 +442,7 @@ app.whenReady().then(() => {
     const existing = paths.find((p) => samePath(p, picked));
     if (!existing) paths.push(picked);
     const added = existing ?? picked;
-    if (!workspacePath) {
-      workspacePath = added;
-      resetRuntime();
-    }
+    if (!workspacePath) workspacePath = added;
     await saveStoredConfig({
       ...stored,
       workspacePaths: paths,
@@ -438,10 +453,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("agent:activateWorkspace", async (_e, raw: string) => {
     const path = await assertKnownWorkspace(raw);
-    if (!workspacePath || !samePath(workspacePath, path)) {
-      workspacePath = path;
-      resetRuntime();
-    }
+    workspacePath = path;
     const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
     await saveStoredConfig({
       ...stored,
@@ -507,7 +519,18 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:deleteWorkspaceSession", async (_e, raw: string, sessionId: string) => {
     const path = await assertKnownWorkspace(raw);
     assertValidSessionId(sessionId);
-    await new SessionStore(path).deleteSession(sessionId);
+    // Background subagents live in the runtime; it stops them before the directory goes.
+    const live = liveFor(path, sessionId);
+    if (live) {
+      live.permissions.denyAll();
+      live.asks.cancelAll();
+      live.runtime.cancel();
+      runPool.forget(path, sessionId);
+      lives.delete(sessionRunKey(path, sessionId));
+      await live.runtime.deleteSession(sessionId);
+    } else {
+      await new SessionStore(path).deleteSession(sessionId);
+    }
   });
 
   ipcMain.handle("agent:openWorkspaceFolder", async (_e, raw: string) => {
@@ -544,10 +567,13 @@ app.whenReady().then(() => {
     const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
     const paths = workspaceList(stored).filter((item) => !samePath(item, path));
     const labels = labelsFor(stored, paths);
-    if (workspacePath && samePath(workspacePath, path)) {
-      workspacePath = paths[0] ?? null;
-      resetRuntime();
+    await runPool.discardWorkspace(path);
+    const head = sessionRunKey(path, "x");
+    const prefix = head.slice(0, head.length - 1);
+    for (const key of [...lives.keys()]) {
+      if (key.startsWith(prefix)) lives.delete(key);
     }
+    if (workspacePath && samePath(workspacePath, path)) workspacePath = paths[0] ?? null;
     await saveStoredConfig({
       ...stored,
       workspacePaths: paths,
@@ -561,12 +587,17 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("agent:createSession", async (_e, title?: string) => {
-    return (await ensureRuntime()).createSession(title);
+    if (!workspacePath) throw new Error("No workspace selected");
+    return new SessionStore(workspacePath).createSession(title);
   });
-  ipcMain.handle("agent:listSessions", async () => (await ensureRuntime()).listSessions());
+  ipcMain.handle("agent:listSessions", async () => {
+    if (!workspacePath) return [];
+    return new SessionStore(workspacePath).listSessions();
+  });
   ipcMain.handle("agent:loadMessages", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);
-    return (await ensureRuntime()).loadMessages(sessionId);
+    if (!workspacePath) return [];
+    return new SessionStore(workspacePath).readMessages(sessionId);
   });
   ipcMain.handle("agent:loadSubagentSteps", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);
@@ -585,7 +616,18 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("agent:loadSessionArtifacts", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);
-    return (await ensureRuntime()).loadSessionArtifacts(sessionId);
+    if (!workspacePath) throw new Error("No workspace selected");
+    const store = new SessionStore(workspacePath);
+    const meta = await store.getMeta(sessionId);
+    const messages = await store.readMessages(sessionId);
+    let traces: unknown[] = [];
+    try {
+      traces = await new TraceStore(workspacePath).read(sessionId);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    const context = await new ContextStore(workspacePath).read(sessionId);
+    return { meta, messages, traces, context };
   });
   ipcMain.handle(
     "agent:renameSession",
@@ -596,40 +638,63 @@ app.whenReady().then(() => {
       opts?: { source?: "user" | "auto" },
     ) => {
     assertValidSessionId(sessionId);
-    return (await ensureRuntime()).renameSession(sessionId, title, opts);
+    if (!workspacePath) throw new Error("No workspace selected");
+    return new SessionStore(workspacePath).renameSession(sessionId, title, opts);
   });
   ipcMain.handle("agent:deleteSession", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);
-    await (await ensureRuntime()).deleteSession(sessionId);
+    if (!workspacePath) throw new Error("No workspace selected");
+    const live = liveFor(workspacePath, sessionId);
+    if (live) {
+      live.permissions.denyAll();
+      live.asks.cancelAll();
+      live.runtime.cancel();
+      runPool.forget(workspacePath, sessionId);
+      lives.delete(sessionRunKey(workspacePath, sessionId));
+      await live.runtime.deleteSession(sessionId);
+      return;
+    }
+    await new SessionStore(workspacePath).deleteSession(sessionId);
   });
   ipcMain.handle(
     "agent:submit",
-    async (_e, sessionId: string, text: string, images?: unknown) => {
+    async (_e, sessionId: string, text: string, images?: unknown, workspaceRaw?: unknown) => {
       assertValidSessionId(sessionId);
-      await adoptConfigIfIdle();
-      await (await ensureRuntime()).submit(sessionId, text, normalizeSubmittedImages(images));
+      const workspace =
+        typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
+      if (!workspace) throw new Error("No workspace selected");
+      await runPool.submit(
+        workspace,
+        sessionId,
+        text,
+        normalizeSubmittedImages(images),
+        await currentConfigKey(),
+      );
     },
   );
-  ipcMain.handle("agent:watchSession", async (_e, sessionId: unknown) => {
+  ipcMain.handle("agent:watchSession", async (_e, sessionId: unknown, workspaceRaw?: unknown) => {
     if (sessionId != null && typeof sessionId !== "string") throw new Error("Invalid session id");
-    const watched: string | null = typeof sessionId === "string" ? sessionId : null;
-    if (watched) assertValidSessionId(watched);
-    if (!workspacePath) return;
-    const rt = await ensureRuntime();
-    void rt.watchSession(watched).catch(() => undefined);
+    if (typeof sessionId !== "string") return;
+    assertValidSessionId(sessionId);
+    const workspace =
+      typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
+    if (!workspace) return;
+    await runPool.watch(workspace, sessionId, await currentConfigKey());
   });
   ipcMain.handle(
     "agent:readSessionImage",
     async (_e, sessionId: string, relativePath: string) => {
       assertValidSessionId(sessionId);
       if (typeof relativePath !== "string") throw new Error("Invalid image path");
-      return (await ensureRuntime()).readSessionImage(sessionId, relativePath);
+      if (!workspacePath) throw new Error("No workspace selected");
+      return new SessionStore(workspacePath).readImageDataUrl(sessionId, relativePath);
     },
   );
-  ipcMain.handle("agent:cancel", async () => {
-    permissionGate?.denyAll();
-    askGate?.cancelAll();
-    runtime?.cancel();
+  ipcMain.handle("agent:cancel", async (_e, sessionId?: unknown, workspaceRaw?: unknown) => {
+    if (typeof sessionId === "string" && typeof workspaceRaw === "string") {
+      assertValidSessionId(sessionId);
+      cancelLive(await assertKnownWorkspace(workspaceRaw), sessionId);
+    }
   });
   ipcMain.handle("agent:explainLoad", async (_e, rawWorkspace: string, sessionId: string) => {
     assertValidSessionId(sessionId);
@@ -687,16 +752,26 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("agent:answerAsk", async (_e, requestId: string, text: string) => {
     if (typeof requestId !== "string" || typeof text !== "string") return false;
-    return askGate?.answer(requestId, text) ?? false;
+    for (const live of lives.values()) {
+      if (live.asks.answer(requestId, text)) return true;
+    }
+    return false;
   });
   ipcMain.handle(
     "agent:permissionRespond",
     async (_e, requestId: string, decision: PermissionDecision) => {
       if (decision !== "allow" && decision !== "deny") return false;
-      return permissionGate?.respond(requestId, decision) ?? false;
+      for (const live of lives.values()) {
+        if (live.permissions.respond(requestId, decision)) return true;
+      }
+      return false;
     },
   );
   ipcMain.handle("agent:listSkills", async () => listInstalledSkills());
+  ipcMain.handle("agent:skillTokens", async (_e, text: unknown) => {
+    if (typeof text !== "string") throw new Error("Invalid text");
+    return extractSkillTokens(text);
+  });
   ipcMain.handle("agent:installSkill", async () => {
     const picked = await pickSkillFolder("添加技能");
     if (!picked) return null;

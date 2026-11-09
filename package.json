@@ -1,6 +1,7 @@
 {
   "name": "long-task-desktop-agent",
   "private": true,
+  "license": "MIT",
   "workspaces": [
     "packages/*"
   ],

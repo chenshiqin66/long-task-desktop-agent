@@ -11,6 +11,8 @@ export interface GateDecision {
   /** Belongs to the in-flight run. Still true when the user is looking at another session. */
   keep: boolean;
   next: RunGate;
+  /** A late subagent row for a session not on screen. Paint it into that session's cached view. */
+  stashFor?: string;
 }
 
 export function idleGate(): RunGate {
@@ -45,7 +47,8 @@ export function decideEvent(
       gate.runSessionId === event.session_id &&
       (!gate.activeTurnId || !event.turn_id || event.turn_id === gate.activeTurnId);
     if (!sameTurn) {
-      return { paint: event.session_id === currentSessionId, keep: false, next: gate };
+      if (event.session_id === currentSessionId) return { paint: true, keep: false, next: gate };
+      return { paint: false, keep: false, next: gate, stashFor: event.session_id };
     }
   }
 

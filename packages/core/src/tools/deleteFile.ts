@@ -21,7 +21,7 @@ export const deleteFileTool: Tool = {
   async execute(args, ctx): Promise<ToolResult> {
     const requested = String(args.path ?? "");
     if (!requested) return { content: "Missing path", is_error: true };
-    const scoped = writeScopeError({
+    const scoped = await writeScopeError({
       workspacePath: ctx.workspacePath,
       requested,
       writeRoot: ctx.writeRoot,

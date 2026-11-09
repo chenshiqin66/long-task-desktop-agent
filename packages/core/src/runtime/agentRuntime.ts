@@ -36,13 +36,13 @@ import type { ToolResult } from "../tools/types.js";
 import { assembleContext } from "../context/assemble.js";
 import { projectAuditMessages, toolsFingerprint } from "../context/auditContext.js";
 import { countOutboundImages, outboundTextChars, prepareOutbound } from "../context/images.js";
-import { countUserTurns } from "../context/compress.js";
 import {
   SYNTHETIC_INTERRUPTED_TOOL,
   canAppendToolRepair,
   findMissingToolResults,
 } from "../context/repairToolCalls.js";
 import {
+  countAutoTitleTurns,
   generateSessionTitle,
   isDefaultSessionTitle,
 } from "../session/autoTitle.js";
@@ -169,6 +169,8 @@ const ASK_SKIPPED_CONTENT =
 const ASK_UNAVAILABLE_CONTENT = "ask_user is not connected to a user.";
 const ASK_EMPTY_CONTENT = "Empty answer.";
 const ANSWER_MAX = 8_000;
+/** How long deleting a session waits for its stopped background subagents to finish writing. */
+const DEFERRED_STOP_MS = 5_000;
 
 /** Sessions written before the tool rename still show the model the name `agent`. */
 function renameLegacySubagentCall(call: ToolCall): ToolCall {
@@ -200,7 +202,7 @@ export class AgentRuntime {
   private deferredOutputDirs: string[] = [];
   private deferredRuns = new Map<
     string,
-    { abort: AbortController; outputDir?: string; sessionId: string; notify: boolean }
+    { abort: AbortController; outputDir?: string; sessionId: string; notify: boolean; settled: Promise<void> }
   >();
   /** output_dir stays locked until the receipt is written into the session, not merely until the run returns. */
   private noteDirs = new Map<string, { sessionId: string; outputDir: string }>();
@@ -358,8 +360,9 @@ export class AgentRuntime {
   }
 
   /**
-   * After ≥3 user turns, once, if the title is still default — ask the model
-   * for a ≤12-char name. Best-effort; never fails the turn.
+   * After ≥3 utterances, once, if the title is still default — ask the model
+   * for a ≤12-char name. An ask_user answer counts: the user submitted it and
+   * the model continued the same turn. Best-effort; never fails the turn.
    */
   private async maybeAutoTitle(sessionId: string): Promise<void> {
     try {
@@ -370,7 +373,7 @@ export class AgentRuntime {
       const spoken = messages.filter(
         (message) => !(message.role === "user" && message.name === TASK_NOTIFICATION_NAME),
       );
-      if (countUserTurns(spoken) < AUTO_TITLE_AFTER_USER_TURNS) return;
+      if (countAutoTitleTurns(spoken) < AUTO_TITLE_AFTER_USER_TURNS) return;
       const title = await generateSessionTitle({
         provider: this.provider,
         model: this.config.model,
@@ -400,7 +403,7 @@ export class AgentRuntime {
     await this.maybeAutoTitle(sessionId);
   }
 
-  deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(sessionId: string): Promise<void> {
     this.taskReminderAssistants.delete(sessionId);
     if (this.watchedSessionId === sessionId) this.watchedSessionId = null;
     this.closedSessions.add(sessionId);
@@ -409,13 +412,16 @@ export class AgentRuntime {
       this.noteDirs.delete(noteId);
       this.releaseDeferredDir(held.outputDir);
     }
-    for (const [agentId, run] of this.deferredRuns) {
+    const stopping: Promise<void>[] = [];
+    for (const run of this.deferredRuns.values()) {
       if (run.sessionId !== sessionId) continue;
       run.abort.abort();
-      this.deferredRuns.delete(agentId);
-      this.releaseDeferredDir(run.outputDir);
+      stopping.push(run.settled);
     }
-    return this.store.deleteSession(sessionId);
+    // A stopped subagent still writes its meta and task files. Removing the
+    // directory under those writes fails, or leaves a stray tasks/ behind.
+    await Promise.race([Promise.all(stopping), new Promise((resolve) => setTimeout(resolve, DEFERRED_STOP_MS))]);
+    await this.store.deleteSession(sessionId);
   }
 
   /** System-prompt addendum for this request. Empty when the open list was touched recently. */
@@ -449,6 +455,40 @@ export class AgentRuntime {
   /** True for the whole submit, including permission and ask waits. */
   get isTurnRunning(): boolean {
     return this.running;
+  }
+
+  /** Deferred subagents still running after the parent turn returned. */
+  hasDeferredWork(): boolean {
+    return this.deferredRuns.size > 0;
+  }
+
+  /**
+   * Fires when this object is idle: no turn and no deferred subagent.
+   * The pool drops the object then. A later send builds a new one.
+   */
+  setIdleListener(listener: (() => void) | null): void {
+    this.idleListener = listener;
+  }
+
+  /** Abort deferred subagents and wait briefly for their own files to settle. */
+  async stopDeferred(): Promise<void> {
+    const stopping: Promise<void>[] = [];
+    for (const run of this.deferredRuns.values()) {
+      run.abort.abort();
+      stopping.push(run.settled);
+    }
+    if (!stopping.length) return;
+    await Promise.race([
+      Promise.all(stopping),
+      new Promise((resolve) => setTimeout(resolve, DEFERRED_STOP_MS)),
+    ]);
+  }
+
+  private idleListener: (() => void) | null = null;
+
+  private notifyIdle(): void {
+    if (this.running || this.deferredRuns.size > 0) return;
+    this.idleListener?.();
   }
 
   /**
@@ -585,8 +625,11 @@ export class AgentRuntime {
     if (completedTurnId && follow !== sessionId) {
       await this.emitDoneAndMaybeTitle(sessionId, completedTurnId, "completed");
     }
-    if (!follow) return;
-    await this.runWake(follow);
+    if (follow) await this.runWake(follow);
+    // After the whole chain, including a wake this turn just started. clearRunning
+    // is too early: it runs before that wake, and dropping the slot there would
+    // let the next send build a second object on the same transcript.
+    this.notifyIdle();
   }
 
   private clearRunning(): void {
@@ -1292,14 +1335,16 @@ export class AgentRuntime {
             return { item, agentId, deferred: false, result: { content: await releaseClaim(CANCELLED_TOOL_CONTENT), is_error: true } };
           }
           const abort = new AbortController();
-          this.deferredRuns.set(agentId, {
+          const run = {
             abort,
             outputDir: item.call.output_dir,
             sessionId,
             notify: true,
-          });
+            settled: Promise.resolve(),
+          };
+          this.deferredRuns.set(agentId, run);
           if (item.call.output_dir) this.deferredOutputDirs.push(item.call.output_dir);
-          void this.finishDeferred({
+          run.settled = this.finishDeferred({
             abort,
             agentId,
             sessionId,
@@ -1307,6 +1352,10 @@ export class AgentRuntime {
             parentToolCallId: item.tc.id,
             call: item.call,
             releaseClaim,
+          }).catch(() => {
+            // The receipt could not be written. Do not leave its output_dir locked until restart.
+            this.noteDirs.delete(`note_${agentId}`);
+            this.releaseDeferredDir(item.call.output_dir);
           });
           return { item, agentId, deferred: true, result: { content: deferredAcceptance(agentId, item.call), is_error: false } };
         }
@@ -1423,10 +1472,10 @@ export class AgentRuntime {
         agentId: opts.agentId,
         taskId: opts.call.task_id,
       });
-      content = await opts.releaseClaim(result.content);
+      content = this.closedSessions.has(opts.sessionId) ? "" : await opts.releaseClaim(result.content);
       ok = !result.is_error;
     } catch (err) {
-      content = await opts.releaseClaim(`Subagent failed: ${String(err)}`);
+      content = this.closedSessions.has(opts.sessionId) ? "" : await opts.releaseClaim(`Subagent failed: ${String(err)}`);
       ok = false;
     } finally {
       this.deferredRuns.delete(opts.agentId);
@@ -1435,6 +1484,7 @@ export class AgentRuntime {
     if (this.closedSessions.has(opts.sessionId) || run?.notify === false || !content.trim()) {
       this.noteDirs.delete(noteId);
       this.releaseDeferredDir(opts.call.output_dir);
+      this.notifyIdle();
       return;
     }
     if (opts.call.output_dir) this.noteDirs.set(noteId, { sessionId: opts.sessionId, outputDir: opts.call.output_dir });
@@ -1445,6 +1495,7 @@ export class AgentRuntime {
       content,
       ok,
     });
+    this.notifyIdle();
   }
 
   /** Drop output_dir locks whose receipt is now in the transcript. */

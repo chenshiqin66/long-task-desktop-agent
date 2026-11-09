@@ -70,4 +70,15 @@ describe("skill bodies on submit", () => {
     expect(systems[1]).not.toContain("# Skill body:");
     expect(systems[1]).toContain("# Installed skills");
   });
+
+  it("sends a message that only mentions an absolute path", async () => {
+    const provider: LlmProvider = { chatStream: () => textOnly("ok") };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: config(), provider, skillsRoot });
+    const session = await rt.createSession("t");
+    await rt.submit(session.session_id, "看看 /etc/hosts");
+    const messages = await rt.loadMessages(session.session_id);
+    expect(messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual([
+      "看看 /etc/hosts",
+    ]);
+  });
 });
