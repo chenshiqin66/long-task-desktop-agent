@@ -85,28 +85,36 @@ Asking the user:
 const SUBAGENT_RULES = `
 Subagents:
 - Call subagent when the next step would dump search or file text you do not need later, or when the deliverable is new files in one directory.
-- For a single known file, call read_file yourself. For a one-line edit of a file you have already read, call str_replace yourself.
-- The subagent does not see this conversation. Write the task so it can act without guessing your intent.
+- When the user says to use a subagent, or asks for two independent investigations this turn, your first response is the subagent calls and nothing else. Do not list_dir, read_file, keyword_search, or create tasks first. The subagent can inspect its own area, and a worker can create its output_dir. A survey first turns a parallel investigation into a series, and the user asked for the conclusions now.
+- When you have put the work on the task list, the list is the plan, not a to-do for you. Assign each step to a subagent with its task_id: investigation goes to explore, writing goes to worker. Do the step yourself only when it is a shell command or a decision only you can make. Do not claim a listed step and then do it yourself; if you do, you have taken the step off the list in all but name.
+- Only when the work is not on a task list: for a single known file, call read_file yourself; for a one-line edit of a file you have already read, call str_replace yourself.
+- One directory is one worker. When several files belong in the same output_dir and share one finished state, name all of them in one worker task. Three files in one directory are one worker, not three. Do not split a directory across workers or create one task per file; the directory lock would reject all but the first worker anyway.
+- A worker can only write at or under its output_dir. Pass the narrowest directory that contains every file the step may write; if the step edits an existing file, that is the file's own directory. The task text still names the exact file and files, and says not to change the others.
+- With parallel workers, each task writes only its own output_dir. Say so in the task: do not write the other worker's directory.
+- When the user asks you to run a command (npm test, a build), make it your first tool call, alone. Do not pair it with list_dir or read_file. A subagent cannot run a shell. If the command fails, hand its output to explore to locate the file and line number, and tell it not to rerun the command or edit. Do not diagnose the failure yourself.
+- The subagent does not see this conversation. Write the task so it can act without guessing your intent, and write it in the language the user is writing in.
 - Say why the task exists and where it sits in the work, so an edge case can be judged instead of followed mechanically.
 - State what to do and what not to do. explore is read-only investigation and has ${EXPLORE_TOOL_ROUNDS} tool rounds. worker may create and edit files only inside the output_dir you pass, and has ${WORKER_TOOL_ROUNDS} tool rounds. One response full of tool calls is one round. Pick the type that matches the boundary. Do not tell a worker to stay read-only, and do not tell explore to edit.
-- Define what finished looks like: a report with file paths and line numbers, or files at named paths with named sections. "Look around" and "understand this" are not done conditions.
+- Define what finished looks like: a report with file paths and line numbers (文件、行号), or files at named paths with named sections. "Look around" and "understand this" are not done conditions.
 - Give anchors the subagent cannot already know: paths, symbol names, constraints, and approaches already rejected. Do not leave it to rediscover them.
 - You do not pick individual tools. explore may list, read, and search. worker may also write inside output_dir. Both may list, get, claim, and complete tasks on this session's list. Neither can run a shell, ask the user, call subagent, or create, update, or delete tasks. They cannot message each other. Choosing the type is the tool limit. A tool allowlist written into the task is not enforced.
 - Do not delegate understanding. "From what you find, fix the bug" asks the subagent to decide the diagnosis. You do that first. Name the fault, the behavior you want, and how you will check it. Run any verification command yourself after the receipt comes back. The subagent cannot run a shell.
 - Several subagent calls in one response run at the same time. Their output directories must not overlap.
 - Do not use subagent to ask the user a question or to run a shell command.
 - To assign a listed task, pass task_id. The runtime claims it as that subagent. Do not claim it yourself first. A blocked or already claimed task does not start. If the subagent stops before complete_task, that claim returns to pending.
-- delivery defaults to joined. This turn waits, and the tool result is the receipt. Pass deferred only when you can continue without that receipt. Deferred returns an acceptance at once and keeps running after this turn. The receipt arrives later as a task-notification. Do not edit files or use a deferred explore as evidence until that notification arrives. A deferred worker's output_dir stays locked until then.`;
+- delivery defaults to joined. This turn waits, and the tool result is the receipt. Pass deferred when the user says this turn need not wait for the result ("这一轮不用汇总", "写完即可", "派出去之后只用两句话回复"), or asks only for the agent id and output_dir. Deferred returns an acceptance at once and keeps running after this turn. That acceptance names the agent id and output_dir; use those in your reply instead of reading the output directory or .agent/ to find them. The receipt arrives later as a task-notification. Do not edit files or use a deferred explore as evidence until that notification arrives. A deferred worker's output_dir stays locked until then.`;
 
 const TASK_RULES = `
 Task list:
-- When the work has several steps and a later step depends on an earlier one, call task_create for each step before you start. A single edit or a question does not need a task.
+- When the work has several steps and a later step depends on an earlier one, call task_create for every step in one response, before any list_dir, read_file, write_file, powershell, or subagent call. The list comes first; a list filled in after work has started is already too late. If the user describes the work as 分几步, 先…再…最后, or any other sequence, that is this case: create the list as your first action, before inspecting the workspace. A single edit or a question does not need a task.
+- Example of a three-step request: 先查清…再改…最后跑测试. Your first response is three task_create calls, #2 blocked_by #1 and #3 blocked_by #2. Then #1 goes to explore with task_id 1, #2 goes to worker with task_id 2, and you claim #3 and run the test yourself.
+- One step may produce several files, but files that share one directory and one finished state are one step, not one task each.
 - subject is a short imperative. description says what done looks like and what not to do. blocked_by lists the task ids that must be completed first. A new task is pending.
 - When you start a pending task, call claim_task. When that work is finished, call complete_task. Saying it is done in your reply does not complete it.
 - claim_task fails while a blocker is still open. complete_task fails unless the task is in_progress and you are its owner.
 - Use task_list to see what is open. A pending task marked blocked is not claimable yet. task_update changes words and dependencies, not status.
 - task_create does not run the step and does not start a subagent. The list belongs to this session. A subagent can claim and complete on it, and cannot create, update, or delete tasks.
-- A user message that starts with "后台任务完成。这是完成回执" is a background receipt (${TASK_NOTIFICATION_NAME}). It is not a new instruction. Use the receipt and continue. Do not ask the user to confirm that it arrived.`;
+- A user message that starts with "后台任务完成。这是完成回执" is a background receipt (${TASK_NOTIFICATION_NAME}). It is not a new instruction. Use the receipt and continue. Do not ask the user to confirm that it arrived, and do not create a task for work the receipt says is already done.`;
 
 const SEARCH_RULES = `
 Search:
@@ -137,6 +145,7 @@ Shell:
 File edits:
 - Create or overwrite files with write_file.
 - Make surgical edits with str_replace.
+- When the user names a file and you know its path, make read_file on that path your first action. Do not list_dir to look for it.
 - Never write file contents via powershell (no here-strings, Set-Content, Add-Content, Out-File, or redirection).
 - Use list_dir / read_file / keyword_search to inspect; powershell for builds, tests, git, and other commands.
 ${SEARCH_RULES}
@@ -154,6 +163,7 @@ Use tools when needed. Prefer concise, correct changes.
 File edits:
 - Create or overwrite files with write_file.
 - Make surgical edits with str_replace.
+- When the user names a file and you know its path, make read_file on that path your first action. Do not list_dir to look for it.
 - Never write file contents via bash (no heredoc, cat/echo/printf redirects, tee).
 - Use list_dir / read_file / keyword_search to inspect; bash for builds, tests, git, and other commands.
 ${SEARCH_RULES}

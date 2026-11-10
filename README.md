@@ -187,13 +187,14 @@ npm test                      # core 的 vitest，含文档一致性检查
 npm run build                 # 构建 core 和 app
 npm start                     # 构建 core，再构建 app 并启动 Electron
 npm run smoke -w @agent/app   # 构建 app，跑事件门、Esc 优先级和任务栏的四个脚本
+npm run eval                  # 构建 core 和评测器，跑 subagent-multitask 的 16 条用例
 ```
 
 - `npm start -w @agent/app` 不会重新构建 core。改了 core 用根目录的 `npm start`。
 - 应用从 `packages/app/dist` 加载，只改了 `index.html` 或 `styles.css` 也要重新构建。
 - `packages/app/scripts/` 下还有三个测试没有接进 npm 脚本，构建后在 `packages/app` 下用 `node` 运行。`test-open-target.mjs` 和 `test-question-nav.mjs` 能通过；`test-markdown.mjs` 目前跑不起来，见 [已知问题](docs/roadmap.md#已知问题)。
 - `packages/core/tests/docs.test.ts` 检查文档和代码是否一致：内置工具名和 shell 白名单都出现在工具文档里，`StoredConfig` 的字段和默认限额都出现在上面的配置表里，README 和 `docs/` 里的相对链接、锚点都能解析。改了工具、白名单或配置，测试会提醒你同步文档。
-- `evals/subagent-multitask/cases.json` 是 16 条评测用例，分三层：只看模型的选择、只看运行时、两者都看。必须项全部出现、禁止项一条都没有才算通过，不给部分分。仓库里还没有自动跑它的脚本。
+- `evals/subagent-multitask/cases.json` 是 16 条评测用例，分三层：只看模型的选择、只看运行时、两者都看。必须项全部出现、禁止项一条都没有才算通过，不给部分分。`npm run eval` 跑全部用例；`runtime` 层不需要模型，其余层读取 `~/.long-task-agent/config.json`。用法和已知用例问题见 [评测说明](evals/subagent-multitask/README.md)。
 
 ## 文档
 

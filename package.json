@@ -8,7 +8,9 @@
   "scripts": {
     "test": "npm run test -w @agent/core",
     "build": "npm run build -w @agent/core && npm run build -w @agent/app",
-    "start": "npm run build -w @agent/core && npm run start -w @agent/app"
+    "start": "npm run build -w @agent/core && npm run start -w @agent/app",
+    "eval:build": "npm run build -w @agent/core && tsc -p evals/subagent-multitask/runner/tsconfig.json",
+    "eval": "npm run eval:build && node evals/subagent-multitask/runner/dist/cli.js"
   },
   "allowScripts": {
     "electron@33.4.11": true

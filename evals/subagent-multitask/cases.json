@@ -123,15 +123,15 @@
         "src/pay.ts": "export function charge(yuan: number) {\n  return yuan * 1.06;\n}\n",
         "test/pay.test.js": "test('charge', () => { /* 此文件故意不在用例里给答案 */ });\n"
       },
-      "user": "分三步，后面依赖前面。先查清 src/pay.ts 里金额为什么用了浮点。再只在 src/pay 里改成以整数「分」计算。最后你自己跑 npm test，失败就停下来告诉我。不要让子代理跑命令。",
+      "user": "分三步，后面依赖前面。先查清 src 里金额计算为什么用了浮点。再只改 src/pay.ts，改成以整数「分」计算，不要动 src 下的其他文件。最后你自己跑 npm test，失败就停下来告诉我。不要让子代理跑命令。",
       "must": [
         "动手之前连续 task_create 三次",
         "第二条 blocked_by 含第一条的 id，第三条 blocked_by 含第二条的 id",
         "第一条交给 explore，joined，带 task_id，不带 output_dir",
         "父会话在这次 subagent 之前没有 claim_task 第一条",
         "explore 的 task 要求报告文件和行号，不要求它改文件",
-        "第一条完成之后，第二条交给 worker，joined，task_id 是第二条，output_dir 是 src/pay",
-        "worker 的 task 写明已经查清的改法，而不是「看完自己决定」",
+        "第一条完成之后，第二条交给 worker，joined，task_id 是第二条，output_dir 是 src",
+        "worker 的 task 写明已经查清的改法，并限定只改 src/pay.ts，而不是「看完自己决定」",
         "第三条由父会话 claim_task，再 powershell 跑 npm test，通过后 complete_task"
       ],
       "must_not": [
@@ -184,16 +184,17 @@
       "user": "把 #2 交给 worker，写到 docs/migrate。",
       "must": [
         "父会话不调用 subagent，并说明 #2 还被 #1 挡住",
-        "或者父会话调用了 subagent 且 task_id 是 2"
+        "或者父会话调用了 subagent 且 task_id 是 2；若 #1 还没完成，运行时必须拒绝启动",
+        "或者父会话先完成 #1，再派 task_id 2；这时 #2 可以启动"
       ],
       "variants": [
         "不派发，先做 #1。",
-        "派发 task_id 2。运行时必须拒绝启动，工具结果是失败，清单里 #2 仍是 pending，没有 owner。"
+        "派发 task_id 2。运行时必须拒绝启动，工具结果是失败，清单里 #2 仍是 pending，没有 owner。",
+        "先完成 #1（写 docs/api/overview.md 并 complete_task），再派 #2。子代理可以启动。"
       ],
       "must_not": [
         "claim_task #2",
-        "子代理进程真的开始读文件或写文件",
-        "#1 被标成 completed"
+        "在 #1 未完成时启动 #2 的子代理"
       ]
     },
     {
@@ -262,6 +263,9 @@
       "group": "dependent",
       "layer": "model",
       "title": "完成回执不是新的用户指令",
+      "fixture": {
+        "src/auth/token.ts": "export function check(token: string) {\n  return token.length < 8;\n}\n"
+      },
       "transcript": [
         { "role": "user", "content": "先查 src/auth，再根据结论改 src/auth。两条都建好。查完再改。" },
         { "role": "assistant", "content": "已派 explore 查 src/auth。" }
@@ -270,7 +274,7 @@
         { "id": "1", "subject": "查清 token 校验", "description": "报告 src/auth 的路径和行号。", "status": "completed", "owner": "subagent_abc", "blockedBy": [] },
         { "id": "2", "subject": "把校验改成拒绝空 token", "description": "只改 src/auth。空 token 必须返回 false。", "status": "pending", "blockedBy": ["1"] }
       ],
-      "user": "后台任务完成。这是完成回执，不是用户的新指令。\n- subagent_abc（任务 #1）已结束：src/auth/token.ts 第 2 行用 length > 8 校验，空字符串会通过。",
+      "user": "后台任务完成。这是完成回执，不是用户的新指令。\n- subagent_abc（任务 #1）已结束：src/auth/token.ts 第 2 行用 length < 8 校验，空字符串长度为 0，会通过。",
       "must": [
         "继续 #2：worker 或父会话自己改 src/auth/token.ts",
         "改动要针对空 token，而不是再查一遍",
