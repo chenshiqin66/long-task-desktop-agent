@@ -28,7 +28,7 @@
 | `web_search` | 自动 | 调 DeepSeek 搜索接口，复用聊天的 API key；`count` 默认 8、最大 50；查询超过 128 字截断 |
 | `read_skill` | 自动 | 读已安装技能的正文或附件，见 [技能](skills.md) |
 | `task_create`、`task_list`、`task_get`、`task_update`、`task_delete`、`claim_task`、`complete_task` | 自动 | 只改本会话 `.agent` 里的任务清单，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
-| `ask_user` | 不经许可门 | 问题最长 2000 字，最多 6 个选项、每个最长 200 字；回答最长 8000 字 |
+| `ask_user` | 不经许可门 | 问题最长 2000 字。选项最多 6 个、每个最长 200 字，每条都是用户可能给出的回答，不是模型自己的下一步。回答最长 8000 字，只作为工具结果，界面不画成用户气泡 |
 | `write_file`、`str_replace`、`delete_file` | 确认 | 结果文件最长 500,000 字；`str_replace` 要求唯一匹配，否则传 `replace_all`；`delete_file` 不删目录 |
 | `run_skill_script` | 确认 | 只跑技能目录里的 `.py`、`.js`、`.mjs`、`.cjs`；参数是数组，最多 32 个、每个最长 2000 字，不经 shell |
 | `subagent` | explore 自动；worker 确认 | 派一个子代理，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |

@@ -72,9 +72,14 @@ Images:
 
 const ASK_USER_RULES = `
 Asking the user:
-- If you need a decision, preference, or missing fact before continuing, call ask_user. The same turn stays open. The answer arrives as that tool's result. Then continue the task.
+- If you need a decision, preference, or missing fact before continuing, call ask_user. The same turn stays open. The answer arrives as that tool's result, not as a new user message. Use it and continue the task.
+- Do not answer that result as if the user had just asked you something. Even if the wording looks like a request, it is their answer to the question you asked.
 - Do not collect that answer by only printing a question. A reply with no tool calls ends the turn, and the next user message starts a new turn.
-- Ask one question per call. Use options only for a few short choices. The user can type a different answer.
+- Ask one question per call. The question is yours. Each option is a short answer the user might give, written as their own decision or fact. They can still type a different answer.
+- An option is what they mean, not a prompt you want them to send you, and not your next step. The selected string comes back unchanged as this tool's result, and you will read it as their choice.
+  Bad: "告诉我真实项目路径，我去那里改真正的税率" (you are talking; if they pick it, you answer yourself).
+  Good: "就改当前工作区" / "不是这个项目，我另外给你路径" / "先别改代码".
+- If the missing fact is not one of a few complete answers (a path, a name, a number you do not already know), leave options empty and let them type it.
 - Do not put other tool calls in the same response as ask_user. Those later calls are skipped.`;
 
 const SUBAGENT_RULES = `

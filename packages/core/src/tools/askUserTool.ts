@@ -49,15 +49,16 @@ export const askUserTool: Tool = {
   definition: {
     name: ASK_USER_TOOL_NAME,
     description:
-      "Ask the user one question and wait for their answer before doing anything else. Use this when a decision, preference, or missing fact blocks the current task. The answer comes back as this tool's result in the same turn. Do not only print the question. Put at most a few short choices in options; the user can still type their own answer. Do not call other tools in the same response.",
+      "Ask the user one question and wait. Use this when a decision, preference, or missing fact blocks the current task. The answer comes back as this tool's result in the same turn. It is not a new user message: use it and continue, and do not reply to it as if they had asked you something. Do not only print the question. Do not call other tools in the same response. options, if any, are a few complete answers in the user's voice (their decision or fact). Never put your own instruction, suggestion, or request in an option, such as '告诉我…' or '我去改…'. The chosen string is returned unchanged. Leave options empty when they must type an open fact you do not already know, such as a path or a name.",
     parameters: {
       type: "object",
       properties: {
-        question: { type: "string", description: "One clear question for the user." },
+        question: { type: "string", description: "One clear question for the user. This is your question, not one of the answers." },
         options: {
           type: "array",
           items: { type: "string" },
-          description: "Optional short choices. The user may pick one or type something else.",
+          description:
+            "Optional. Each item is a complete answer the user might choose, written as their intent. Not your suggestion and not a prompt for them to send you. Omit when the answer is an open fact.",
         },
       },
       required: ["question"],

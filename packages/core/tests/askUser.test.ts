@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRuntime } from "../src/runtime/agentRuntime.js";
 import { DeferredAskGate } from "../src/runtime/askGate.js";
-import { parseAskUserArgs } from "../src/tools/askUserTool.js";
+import { askUserTool, parseAskUserArgs } from "../src/tools/askUserTool.js";
 import type { LlmProvider, LlmStreamChunk, LlmChatRequest } from "../src/provider/types.js";
 import type { RuntimeEvent, AgentConfig } from "../src/types.js";
 import { DEFAULT_AGENT_CONFIG } from "../src/types.js";
@@ -49,6 +49,16 @@ describe("ask_user", () => {
     expect(parsed.call.question).toBe("用哪一种？");
     expect(parsed.call.options).toEqual(["PDF", "HTML", "Markdown"]);
     expect(parseAskUserArgs({ question: "  " }).ok).toBe(false);
+  });
+
+  it("tells the model that each option is the user's answer, not the agent's prompt", () => {
+    const params = askUserTool.definition.parameters as {
+      properties?: { options?: { description?: string } };
+    };
+    const text = `${askUserTool.definition.description}\n${params.properties?.options?.description ?? ""}`;
+    expect(text).toContain("user's voice");
+    expect(text).toContain("告诉我");
+    expect(text).toContain("not a new user message");
   });
 
   it("waits in the same turn and feeds the answer back to the model", async () => {

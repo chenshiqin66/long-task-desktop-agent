@@ -115,6 +115,8 @@ describe("AgentRuntime", () => {
     expect(prompt).toContain("pass task_id");
     expect(prompt).toContain("delivery defaults to joined");
     expect(prompt).toContain("后台任务完成。这是完成回执");
+    expect(prompt).toContain("you answer yourself");
+    expect(prompt).toContain("leave options empty");
   });
 
   let workspace: string;

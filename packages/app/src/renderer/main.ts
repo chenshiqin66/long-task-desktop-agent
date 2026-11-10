@@ -2051,23 +2051,14 @@ async function loadCurrent(): Promise<void> {
       if (m.role === "tool" && m.name === "ask_user") {
         openQuestion = null;
         const question = askQuestion(m.tool_call_arguments);
-        if (question) {
-          appendToolStep(into, {
-            title: `提问 · ${question}`,
-            detail: m.is_error ? m.content.slice(0, 4000) : "已回答",
-            open: false,
-            error: m.is_error === true,
-          });
-        }
-        if (!m.is_error) appendMessage(into, "user", m.content);
-        else if (!question) {
-          appendToolStep(into, {
-            title: "提问",
-            detail: m.content.slice(0, 4000),
-            open: false,
-            error: true,
-          });
-        }
+        appendToolStep(into, {
+          title: question ? `提问 · ${question}` : "提问",
+          detail: m.content.slice(0, 4000),
+          open: false,
+          error: m.is_error === true,
+          toolCallId: m.tool_call_id,
+          messageId: m.id,
+        });
       } else if (m.role === "tool") {
         const body = appendToolStep(into, {
           title: `工具结果${m.name ? ` · ${m.name}` : ""}`,
@@ -3054,8 +3045,6 @@ function applyTranscript(host: HTMLElement, e: {
     const fill = (body: HTMLElement) => {
       setToolDetailContent(body, detail);
       const details = body.parentElement instanceof HTMLDetailsElement ? body.parentElement : null;
-      const summary = details?.querySelector(".tool-summary")?.textContent ?? "";
-      const isAsk = summary.includes("ask_user");
       const step = stepWrap(body);
       step?.classList.remove("is-pending");
       step?.classList.toggle("is-error", e.is_error === true);
@@ -3063,7 +3052,6 @@ function applyTranscript(host: HTMLElement, e: {
       refreshToolGroup(body.closest(".tool-group"));
       if (key) run.openTools.delete(key);
       if (run.openToolDetail === body) run.openToolDetail = null;
-      if (isAsk && !e.is_error && !e.parent_tool_call_id) appendMessage(host, "user", e.content ?? "");
     };
     if (node) {
       place(() => fill(node));
