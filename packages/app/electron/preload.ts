@@ -15,8 +15,8 @@ contextBridge.exposeInMainWorld("agent", {
   listWorkspaceSessions: (path: string) => ipcRenderer.invoke("agent:listWorkspaceSessions", path),
   loadWorkspaceMessages: (path: string, sessionId: string) =>
     ipcRenderer.invoke("agent:loadWorkspaceMessages", path, sessionId),
-  loadWorkspaceArtifacts: (path: string, sessionId: string) =>
-    ipcRenderer.invoke("agent:loadWorkspaceArtifacts", path, sessionId),
+  loadWorkspaceArtifacts: (path: string, sessionId: string, part?: string) =>
+    ipcRenderer.invoke("agent:loadWorkspaceArtifacts", path, sessionId, part),
   readWorkspaceImage: (path: string, sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readWorkspaceImage", path, sessionId, relativePath),
   renameWorkspaceSession: (
@@ -40,8 +40,8 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:loadWorkspaceTasks", path, sessionId),
   loadWorkspaceSubagentSteps: (path: string, sessionId: string) =>
     ipcRenderer.invoke("agent:loadWorkspaceSubagentSteps", path, sessionId),
-  loadSessionArtifacts: (sessionId: string) =>
-    ipcRenderer.invoke("agent:loadSessionArtifacts", sessionId),
+  loadSessionArtifacts: (sessionId: string, part?: string) =>
+    ipcRenderer.invoke("agent:loadSessionArtifacts", sessionId, part),
   renameSession: (
     sessionId: string,
     title: string,

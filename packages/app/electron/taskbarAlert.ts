@@ -8,7 +8,7 @@ import {
   type TaskbarIconKind,
 } from "./taskbarAttention.js";
 import { iconPng } from "./taskbarIcon.js";
-import { applyWinTaskbarIcon } from "./taskbarIconWin.js";
+import { applyWinTaskbarIcon, onWinTaskbarReady } from "./taskbarIconWin.js";
 
 /**
  * Swaps the window icon while a permission or ask card is waiting and the
@@ -33,6 +33,10 @@ export class TaskbarAlert {
     for (const kind of ["rest", "dim", "lit"] as const) {
       if (this.icons[kind].isEmpty()) console.error("taskbar icon empty", kind);
     }
+    onWinTaskbarReady(() => {
+      this.painted = null;
+      this.paint();
+    });
   }
 
   get restIcon(): NativeImage {

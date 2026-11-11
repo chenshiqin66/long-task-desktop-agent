@@ -426,12 +426,76 @@ export function appendTaskNotice(container: HTMLElement, content: string): HTMLE
   return body;
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function localDayKey(at: Date): string {
+  return `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`;
+}
+
+/** `YYYY-MM-DD HH:mm:ss` on the first message of a local day, otherwise `HH:mm:ss`. */
+export function bubbleTimeLabel(at: Date, previous: Date | null): string {
+  const clock = `${pad2(at.getHours())}:${pad2(at.getMinutes())}:${pad2(at.getSeconds())}`;
+  if (previous && localDayKey(previous) === localDayKey(at)) return clock;
+  return `${localDayKey(at)} ${clock}`;
+}
+
+function parseStamp(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+function previousStamp(node: HTMLElement): Date | null {
+  const root = node.closest(".messages");
+  if (!root) return null;
+  let found: Date | null = null;
+  for (const el of Array.from(root.querySelectorAll(".msg-time"))) {
+    if (!(el instanceof HTMLTimeElement)) continue;
+    if ((node.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) === 0) continue;
+    const at = parseStamp(el.dateTime);
+    if (at) found = at;
+  }
+  return found;
+}
+
+/** Clock sits beside the bubble, not inside it, so a pinned one-line question stays one line. */
+function insertMessageTime(msg: HTMLElement, at: Date): void {
+  if (msg.nextElementSibling?.classList.contains("msg-time")) return;
+  const time = document.createElement("time");
+  time.className = "msg-time";
+  time.dateTime = at.toISOString();
+  time.textContent = bubbleTimeLabel(at, previousStamp(msg));
+  msg.after(time);
+}
+
+function stampVisibleBubble(msg: HTMLElement, role: string, content: string, at: string | undefined, images?: string[]): void {
+  if (role !== "user" && role !== "assistant") return;
+  const visible = role === "user" ? Boolean(content.trim() || images?.length) : Boolean(content.trim());
+  if (!visible) return;
+  const parsed = parseStamp(at);
+  if (!parsed) return;
+  insertMessageTime(msg, parsed);
+}
+
+/** Put a clock under a bubble once it actually has a reply. A second call does nothing. */
+export function ensureMessageTime(body: HTMLElement, at: string | Date = new Date()): void {
+  const msg = body.closest(".msg");
+  if (!(msg instanceof HTMLElement)) return;
+  if (msg.classList.contains("is-blank")) return;
+  if (!msg.classList.contains("user") && !msg.classList.contains("assistant")) return;
+  const parsed = typeof at === "string" ? parseStamp(at) : at;
+  if (!parsed || Number.isNaN(parsed.getTime())) return;
+  insertMessageTime(msg, parsed);
+}
+
 /** Returns the `.msg-body` element (streaming appends here). */
 export function appendMessage(
   container: HTMLElement,
   role: string,
   content: string,
-  opts?: { rich?: boolean; images?: string[]; messageId?: string },
+  opts?: { rich?: boolean; images?: string[]; messageId?: string; at?: string },
 ) {
   const div = el("div", { class: `msg ${role}` });
   if (opts?.messageId) div.dataset.messageId = opts.messageId;
@@ -454,6 +518,7 @@ export function appendMessage(
   }
   if (content || role !== "user") div.append(body);
   placeTranscript(container, div, role === "user");
+  stampVisibleBubble(div, role, content, opts?.at, opts?.images);
   return body;
 }
 
@@ -588,6 +653,7 @@ function updateStickyTurns(container: HTMLElement): void {
 }
 
 function syncStickyTurns(container: HTMLElement): void {
+  if (container.dataset.questionNavScroll) return;
   if (stickyFrames.get(container)) return;
   stickyFrames.set(
     container,
@@ -674,6 +740,8 @@ export function removeLastTranscriptNodes(container: HTMLElement, count: number)
     const last = nodes[nodes.length - 1];
     if (!(last instanceof HTMLElement)) return;
     const turn = last.closest(".turn");
+    const time = last.nextElementSibling;
+    if (time instanceof HTMLElement && time.classList.contains("msg-time")) time.remove();
     last.remove();
     if (turn instanceof HTMLElement && turn.parentElement === container && !turn.querySelector(".msg, .tool-group")) {
       turn.remove();
@@ -731,6 +799,10 @@ function adoptToolGroup(wrap: HTMLElement): void {
   while (cursor instanceof HTMLElement) {
     if (cursor.classList.contains("tool-step") && !cursor.classList.contains("tool-step-ask")) {
       run.push(cursor);
+      cursor = cursor.previousElementSibling;
+      continue;
+    }
+    if (cursor.classList.contains("msg-time")) {
       cursor = cursor.previousElementSibling;
       continue;
     }

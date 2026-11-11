@@ -1,6 +1,7 @@
 import {
   appendAskCard,
   appendMessage,
+  ensureMessageTime,
   appendTaskNotice,
   appendReaskButton,
   CANCELLED_TURN_NOTICE,
@@ -63,6 +64,7 @@ declare global {
           tool_call_id?: string;
           tool_call_arguments?: string;
           images?: Array<{ path: string }>;
+          created_at?: string;
         }>
       >;
       loadWorkspaceSubagentSteps(
@@ -72,12 +74,13 @@ declare global {
       loadWorkspaceArtifacts(
         path: string,
         sessionId: string,
-      ): Promise<{
+        part: StoreTab,
+      ): Promise<Partial<{
         meta: Record<string, unknown>;
         messages: unknown[];
         traces: unknown[];
         context: unknown[];
-      }>;
+      }>>;
       readWorkspaceImage(path: string, sessionId: string, relativePath: string): Promise<string>;
       renameWorkspaceSession(
         path: string,
@@ -105,17 +108,21 @@ declare global {
           tool_call_id?: string;
           tool_call_arguments?: string;
           images?: Array<{ path: string }>;
+          created_at?: string;
         }>
       >;
       loadSubagentSteps(sessionId: string): Promise<SubagentToolRow[]>;
       loadTasks(sessionId: string): Promise<TaskPanelView>;
       loadWorkspaceTasks(path: string, sessionId: string): Promise<TaskPanelView>;
-      loadSessionArtifacts(sessionId: string): Promise<{
+      loadSessionArtifacts(
+        sessionId: string,
+        part: StoreTab,
+      ): Promise<Partial<{
         meta: Record<string, unknown>;
         messages: unknown[];
         traces: unknown[];
         context: unknown[];
-      }>;
+      }>>;
       renameSession(
         sessionId: string,
         title: string,
@@ -140,7 +147,7 @@ declare global {
       explainLoad(
         workspace: string,
         sessionId: string,
-      ): Promise<{ open: boolean; messages: Array<{ id?: string; role: string; content: string; name?: string; is_error?: boolean; tool_call_id?: string; tool_call_arguments?: string; images?: Array<{ path: string }> }> }>;
+      ): Promise<{ open: boolean; messages: Array<{ id?: string; role: string; content: string; name?: string; is_error?: boolean; tool_call_id?: string; tool_call_arguments?: string; images?: Array<{ path: string }>; created_at?: string }> }>;
       explainSetOpen(workspace: string, sessionId: string, open: boolean): Promise<void>;
       explainSubmit(
         workspace: string,
@@ -188,6 +195,8 @@ const permissionDock = document.getElementById("permission-dock")!;
 const composerDock = document.querySelector(".composer-dock") as HTMLElement;
 const storeDock = document.getElementById("store-dock")!;
 const storeTabs = document.getElementById("store-tabs")!;
+const logsBtn = document.getElementById("logs-tab") as HTMLButtonElement;
+const questionsBtn = document.getElementById("questions-toggle") as HTMLButtonElement;
 const storeView = document.getElementById("store-view")!;
 const storeHint = document.getElementById("store-meta-hint")!;
 const findBar = document.getElementById("find-bar")!;
@@ -345,11 +354,17 @@ let tailAnchor = 0;
 let skillsPageOpen = false;
 let activeStoreTab: StoreTab = "meta";
 let sessionArtifacts: {
-  meta: Record<string, unknown>;
-  messages: unknown[];
-  traces: unknown[];
-  context: unknown[];
+  sessionId: string;
+  workspace: string | null;
+  meta: Record<string, unknown> | null;
+  messages: unknown[] | null;
+  traces: unknown[] | null;
+  context: unknown[] | null;
 } | null = null;
+let storeDockEpoch = 0;
+let storeLoading = false;
+const storeInflight = new Map<string, object>();
+let sessionListEpoch = 0;
 const STORE_STRING_PREVIEW = 1600;
 
 function cancelStreamRichPaint(run: RunPaint | null = drawing): void {
@@ -477,13 +492,35 @@ function storeTabButtons(): HTMLButtonElement[] {
   return Array.from(storeTabs.querySelectorAll(".store-tab")) as HTMLButtonElement[];
 }
 
-/** Chat and file tabs share one row. Only the selected tab owns the stage. */
+function setLogsAvailable(on: boolean): void {
+  storeTabs.hidden = !on;
+  logsBtn.hidden = !on;
+  syncQuestionsToggle();
+}
+
+/** The filter belongs to the session page. It shows only while that title is selected. */
+function syncQuestionsToggle(): void {
+  questionsBtn.hidden = storeTabs.hidden || skillsPageOpen || activeView !== "chat";
+}
+
+function clearLogsSelection(): void {
+  logsBtn.classList.remove("active");
+  logsBtn.setAttribute("aria-selected", "false");
+  for (const tab of storeTabButtons()) {
+    tab.classList.remove("active");
+    tab.setAttribute("aria-selected", "false");
+  }
+}
+
+/** The title and the log chip share the top row. File buttons live on the black page. */
 function setMainView(view: MainView): void {
   if (view !== "chat" && storeTabs.hidden) view = "chat";
   activeView = view;
   const chatOn = view === "chat";
   mainTitle.classList.toggle("active", chatOn);
   mainTitle.setAttribute("aria-selected", chatOn ? "true" : "false");
+  logsBtn.classList.toggle("active", !chatOn);
+  logsBtn.setAttribute("aria-selected", !chatOn ? "true" : "false");
   for (const btn of storeTabButtons()) {
     const on = !chatOn && btn.dataset.storeTab === view;
     btn.classList.toggle("active", on);
@@ -495,18 +532,19 @@ function setMainView(view: MainView): void {
   if (!chatOn && document.activeElement === inputEl) inputEl.blur();
   storeDock.hidden = chatOn || storeTabs.hidden;
   viewTabs.classList.toggle("has-files", !storeTabs.hidden);
-  if (!chatOn) paintStoreView();
+  if (!chatOn && isFileTab(view)) {
+    if (currentSessionId) void refreshStorePart(currentSessionId, view);
+    paintStoreView();
+  }
   if (skillsPageOpen) {
     coverStageWithSkills();
     mainTitle.classList.remove("active");
     mainTitle.setAttribute("aria-selected", "false");
-    for (const tab of storeTabButtons()) {
-      tab.classList.remove("active");
-      tab.setAttribute("aria-selected", "false");
-    }
+    clearLogsSelection();
   }
   if (!findBar.hidden) runFind(true);
   else if (!conversationEl.hidden && followTail) revealTail();
+  syncQuestionsToggle();
   syncTaskChrome();
 }
 
@@ -541,29 +579,28 @@ function openSkillsPage(): void {
   btnSkills.setAttribute("aria-pressed", "true");
   mainTitle.classList.remove("active");
   mainTitle.setAttribute("aria-selected", "false");
-  for (const tab of storeTabButtons()) {
-    tab.classList.remove("active");
-    tab.setAttribute("aria-selected", "false");
-  }
+  clearLogsSelection();
   coverStageWithSkills();
+  syncQuestionsToggle();
 }
 
 function paintStoreView(): void {
-  if (!sessionArtifacts) {
-    storeView.textContent = "未加载会话数据";
-    storeHint.textContent = "";
+  if (!isFileTab(activeView)) return;
+  const value = loadedStorePart(activeView);
+  if (value == null) {
+    storeView.textContent = "";
+    storeHint.textContent = storeLoading ? "正在读取日志…" : "未加载会话数据";
     return;
   }
-  if (activeStoreTab === "meta") {
-    storeView.textContent = formatStorePayload(sessionArtifacts.meta);
+  if (activeView === "meta") {
+    storeView.textContent = formatStorePayload(value);
     storeHint.textContent = "会话元数据 · JSON";
-  } else if (activeStoreTab === "messages") {
-    paintStoreEntries(sessionArtifacts.messages, "messages.jsonl", renderMessageEntry);
-  } else if (activeStoreTab === "trace") {
-    paintStoreEntries(sessionArtifacts.traces, "trace.jsonl", renderTraceEntry);
-  } else if (activeStoreTab === "context") {
-    paintStoreEntries(sessionArtifacts.context, "context.jsonl", renderContextEntry);
+    return;
   }
+  const file = activeView === "messages" ? "messages.jsonl" : activeView === "trace" ? "trace.jsonl" : "context.jsonl";
+  const render =
+    activeView === "messages" ? renderMessageEntry : activeView === "trace" ? renderTraceEntry : renderContextEntry;
+  paintStoreEntries(value as unknown[], file, render);
 }
 
 function paintStoreEntries(
@@ -725,54 +762,116 @@ function toolCallNames(value: unknown): string[] {
   return names;
 }
 
-function hideStoreDock(): void {
+function setStoreTabLabel(name: StoreTab, text: string): void {
+  const tab = storeTabs.querySelector(`[data-store-tab="${name}"]`);
+  if (!(tab instanceof HTMLElement)) return;
+  const label = tab.querySelector(".view-tab-label");
+  if (label) label.textContent = text;
+  else tab.textContent = text;
+  tab.title = text;
+}
+
+function resetStoreLabels(): void {
+  for (const name of FILE_TABS) setStoreTabLabel(name, name);
+}
+
+function sameViewWorkspace(workspace: string | null): boolean {
+  if (workspace == null) return viewWorkspace == null;
+  return sameWorkspace(viewWorkspace, workspace);
+}
+
+/** The part already read for the session on screen. Null means it has not been read. */
+function loadedStorePart(part: StoreTab): Record<string, unknown> | unknown[] | null {
+  const bundle = sessionArtifacts;
+  if (!bundle || bundle.sessionId !== currentSessionId || !sameViewWorkspace(bundle.workspace)) return null;
+  if (part === "meta") return bundle.meta;
+  if (part === "messages") return bundle.messages;
+  if (part === "trace") return bundle.traces;
+  return bundle.context;
+}
+
+function clearStoreCache(): void {
+  storeDockEpoch += 1;
+  storeInflight.clear();
+  storeLoading = false;
   sessionArtifacts = null;
-  storeTabs.hidden = true;
   storeView.textContent = "";
   storeHint.textContent = "";
+  resetStoreLabels();
+}
+
+function hideStoreDock(): void {
+  clearStoreCache();
+  setLogsAvailable(false);
   setMainView("chat");
 }
 
-async function refreshStoreDock(sessionId: string | null): Promise<void> {
-  if (!sessionId || !window.agent?.loadSessionArtifacts) {
-    hideStoreDock();
-    return;
-  }
+/** Read one log file. Opening a session does not call this. */
+async function refreshStorePart(sessionId: string, part: StoreTab): Promise<void> {
+  if (!sessionId || !window.agent?.loadSessionArtifacts) return;
+  const workspace = viewWorkspace;
+  if (loadedStorePart(part) != null && sessionArtifacts?.sessionId === sessionId && sameViewWorkspace(workspace)) return;
+  const key = `${workspace ?? ""}\0${sessionId}\0${part}`;
+  if (storeInflight.has(key)) return;
+  const ticket = {};
+  storeInflight.set(key, ticket);
+  storeLoading = true;
+  const epoch = storeDockEpoch;
   try {
-    sessionArtifacts =
-      viewWorkspace && !sameWorkspace(viewWorkspace, activeWorkspace)
-        ? await window.agent.loadWorkspaceArtifacts(viewWorkspace, sessionId)
-        : await window.agent.loadSessionArtifacts(sessionId);
-    storeTabs.hidden = false;
-    const labels: Record<StoreTab, string> = {
-      meta: "meta",
-      messages: `messages (${sessionArtifacts.messages.length})`,
-      trace: `trace (${sessionArtifacts.traces.length})`,
-      context: `context (${sessionArtifacts.context.length})`,
-    };
-    for (const name of FILE_TABS) {
-      const tab = storeTabs.querySelector(`[data-store-tab="${name}"]`);
-      if (!(tab instanceof HTMLElement)) continue;
-      const label = tab.querySelector(".view-tab-label");
-      if (label) label.textContent = labels[name];
-      else tab.textContent = labels[name];
-      tab.title = labels[name];
-    }
-    setMainView(activeView);
+    const piece =
+      workspace && !sameWorkspace(workspace, activeWorkspace)
+        ? await window.agent.loadWorkspaceArtifacts(workspace, sessionId, part)
+        : await window.agent.loadSessionArtifacts(sessionId, part);
+    if (epoch !== storeDockEpoch || currentSessionId !== sessionId || !sameViewWorkspace(workspace)) return;
+    const bundle =
+      sessionArtifacts && sessionArtifacts.sessionId === sessionId && sameViewWorkspace(sessionArtifacts.workspace)
+        ? sessionArtifacts
+        : {
+            sessionId,
+            workspace,
+            meta: null,
+            messages: null,
+            traces: null,
+            context: null,
+          };
+    sessionArtifacts = bundle;
+    if (part === "meta") bundle.meta = piece.meta ?? {};
+    else if (part === "messages") bundle.messages = piece.messages ?? [];
+    else if (part === "trace") bundle.traces = piece.traces ?? [];
+    else bundle.context = piece.context ?? [];
+    const count =
+      part === "messages"
+        ? bundle.messages?.length
+        : part === "trace"
+          ? bundle.traces?.length
+          : part === "context"
+            ? bundle.context?.length
+            : null;
+    setStoreTabLabel(part, count == null ? part : `${part} (${count})`);
+    setLogsAvailable(true);
+    if (activeView === part) paintStoreView();
   } catch (err) {
-    sessionArtifacts = null;
-    storeTabs.hidden = false;
-    storeHint.textContent = "";
+    if (epoch !== storeDockEpoch || currentSessionId !== sessionId) return;
     const message = `加载失败：${errText(err)}`;
-    setMainView(activeView);
     if (activeView === "chat") setStatus(`会话文件加载失败：${errText(err)}`, true);
-    else storeView.textContent = message;
+    else if (activeView === part) {
+      storeView.textContent = message;
+      storeHint.textContent = "";
+    }
+  } finally {
+    if (storeInflight.get(key) === ticket) storeInflight.delete(key);
+    storeLoading = storeInflight.size > 0;
   }
 }
 
 mainTitle.addEventListener("click", () => {
   leaveSkillsPage();
   setMainView("chat");
+});
+logsBtn.addEventListener("click", () => {
+  if (logsBtn.hidden) return;
+  leaveSkillsPage();
+  setMainView(activeStoreTab);
 });
 for (const btn of storeTabButtons()) {
   btn.addEventListener("click", () => {
@@ -1732,16 +1831,34 @@ function placeSessionMenu(trigger: HTMLElement, pop: HTMLElement): void {
 }
 
 async function refreshSessions(): Promise<void> {
+  const epoch = ++sessionListEpoch;
+  // Saved order is oldest-first. Show the latest addition at the top.
+  // Names come back before the old list is removed, so a click does not blank the menu.
+  const workspaces = [...workspacePaths].reverse();
+  const listed = await Promise.all(
+    workspaces.map(async (workspace) => {
+      const open = workspaceExpanded.get(workspace) !== false;
+      if (!open) return { workspace, open, sessions: [] as Array<{ session_id: string; title?: string }> };
+      try {
+        const sessions = await window.agent.listWorkspaceSessions(workspace);
+        return { workspace, open, sessions };
+      } catch (err) {
+        return { workspace, open, sessions: [] as Array<{ session_id: string; title?: string }>, err };
+      }
+    }),
+  );
+  if (epoch !== sessionListEpoch) return;
   document.querySelectorAll(".session-menu-pop").forEach((el) => el.remove());
   treesEl.replaceChildren();
-  // Saved order is oldest-first. Show the latest addition at the top.
-  for (const workspace of [...workspacePaths].reverse()) {
-    const open = workspaceExpanded.get(workspace) !== false;
-    const listEl = mountWorkspaceTree(workspace, open);
-    if (!open) continue;
-    try {
-      const sessions = await window.agent.listWorkspaceSessions(workspace);
-      for (const s of sessions) {
+  for (const item of listed) {
+    const workspace = item.workspace;
+    const listEl = mountWorkspaceTree(workspace, item.open);
+    if (!item.open) continue;
+    if (item.err) {
+      showStatusError(item.err);
+      continue;
+    }
+    for (const s of item.sessions) {
       const li = document.createElement("li");
       li.className = "session-item";
       li.dataset.sessionId = s.session_id;
@@ -1870,22 +1987,22 @@ async function refreshSessions(): Promise<void> {
         ev.stopPropagation();
         closeMenu();
         if (!window.confirm(`删除会话「${s.title || s.session_id}」？`)) return;
+        const viewingDeleted =
+          currentSessionId === s.session_id && sameWorkspace(workspace, viewWorkspace);
         try {
           await window.agent.deleteWorkspaceSession(workspace, s.session_id);
           forgetComposer(workspace, s.session_id);
           releasedRuns.add(runKeyOf(workspace, s.session_id));
           dropRun(workspace, s.session_id);
           dropSessionView(workspace, s.session_id);
-          if (currentSessionId === s.session_id && sameWorkspace(workspace, viewWorkspace)) {
-            currentSessionId = null;
-            viewWorkspace = activeWorkspace;
-            currentSessionTitle = "";
-            messagesEl.innerHTML = "";
-            restoreComposer();
-            syncEmptyState();
+          if (viewingDeleted) {
+            // Empty first so the new-session page does not stash this transcript back into the cache.
+            messagesEl.replaceChildren();
+            await showNewPage();
+          } else {
+            await refreshSessions();
+            updateChrome();
           }
-          await refreshSessions();
-          updateChrome();
         } catch (err) {
           showStatusError(err);
         }
@@ -1897,9 +2014,6 @@ async function refreshSessions(): Promise<void> {
       else if (executing) li.append(sessionSpinner());
       li.append(label, menu);
       listEl.appendChild(li);
-      }
-    } catch (err) {
-      showStatusError(err);
     }
   }
 }
@@ -1924,6 +2038,8 @@ async function showSession(workspace: string, sessionId: string, title: string):
     viewWorkspace = workspace;
     currentSessionId = sessionId;
     currentSessionTitle = title || "会话";
+    clearStoreCache();
+    setLogsAvailable(true);
     restoreComposer();
     setMainView("chat");
     markSessionListActive(workspace, sessionId);
@@ -1939,8 +2055,6 @@ async function showSession(workspace: string, sessionId: string, title: string):
       await job;
     } else if (!fromBuffer && loading) {
       await loading;
-    } else {
-      void refreshStoreDock(sessionId);
     }
     const shown = pageRun();
     if (shown) paintPrompt(shown);
@@ -2012,7 +2126,6 @@ async function loadCurrent(): Promise<void> {
     updateChrome();
     return;
   }
-  void refreshStoreDock(sessionId);
   if (paint() === messagesEl) messagesEl.classList.add("is-restoring");
   try {
     const otherWorkspace =
@@ -2089,11 +2202,11 @@ async function loadCurrent(): Promise<void> {
             ensureReask(openQuestion.body, openQuestion.text);
             openQuestion = null;
           }
-          const body = appendMessage(into, "assistant", m.content, { rich: true, messageId: m.id });
+          const body = appendMessage(into, "assistant", m.content, { rich: true, messageId: m.id, at: m.created_at });
           body.closest(".msg")?.classList.add("is-cancelled");
         } else {
           openQuestion = null;
-          appendMessage(into, "assistant", m.content, { rich: true, messageId: m.id });
+          appendMessage(into, "assistant", m.content, { rich: true, messageId: m.id, at: m.created_at });
         }
       } else if (m.role === "user" && m.name === "task-notification") {
         if (openQuestion) closeUnanswered();
@@ -2106,6 +2219,7 @@ async function loadCurrent(): Promise<void> {
           body: appendMessage(paint(), "user", m.content, {
             ...(urls.length ? { images: urls } : {}),
             ...(m.id ? { messageId: m.id } : {}),
+            ...(m.created_at ? { at: m.created_at } : {}),
           }),
           text: m.content,
         };
@@ -2354,6 +2468,8 @@ async function ensureSession(): Promise<string | null> {
     currentSessionId = meta.session_id;
     viewWorkspace = activeWorkspace;
     currentSessionTitle = meta.title || "会话";
+    clearStoreCache();
+    setLogsAvailable(true);
     resetStreamTarget(null);
     clearOpenTools();
     await refreshSessions();
@@ -2409,10 +2525,13 @@ function ensureReask(body: HTMLElement, text: string): void {
 }
 
 function appendUserQuestion(text: string, images: string[], messageId?: string): HTMLElement {
-  return appendMessage(messagesEl, "user", text, {
+  const body = appendMessage(messagesEl, "user", text, {
     ...(images.length ? { images } : {}),
     ...(messageId ? { messageId } : {}),
+    at: new Date().toISOString(),
   });
+  if (messagesEl.classList.contains("is-questions-only")) body.closest(".turn")?.classList.add("is-expanded");
+  return body;
 }
 
 async function reask(text: string): Promise<void> {
@@ -2651,6 +2770,74 @@ new MutationObserver(() => scheduleLocalLinkCheck()).observe(messagesEl, {
   subtree: true,
 });
 
+function isQuestionFilterHidden(node: Node): boolean {
+  if (!messagesEl.classList.contains("is-questions-only")) return false;
+  const el = node instanceof Element ? node : node.parentElement;
+  const turn = el?.closest(".turn");
+  if (!(turn instanceof HTMLElement) || turn.classList.contains("is-expanded") || !messagesEl.contains(turn)) return false;
+  const branch = el?.closest(".turn > *");
+  if (!(branch instanceof HTMLElement)) return false;
+  if (branch.classList.contains("user")) return false;
+  if (branch.classList.contains("msg-time") && branch.previousElementSibling?.classList.contains("user")) return false;
+  return true;
+}
+
+function holdQuestionBubble(bubble: HTMLElement, mutate: () => void): void {
+  const before = bubble.getBoundingClientRect().top;
+  const behavior = messagesEl.style.scrollBehavior;
+  messagesEl.style.scrollBehavior = "auto";
+  mutate();
+  refreshStickyTurns(messagesEl);
+  const delta = bubble.getBoundingClientRect().top - before;
+  if (Math.abs(delta) > 0.5) messagesEl.scrollTop += delta;
+  messagesEl.style.scrollBehavior = behavior;
+}
+
+function visibleQuestionAnchor(): HTMLElement | null {
+  const box = messagesEl.getBoundingClientRect();
+  for (const node of Array.from(messagesEl.querySelectorAll(":scope > .turn > .msg.user"))) {
+    if (!(node instanceof HTMLElement)) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > box.top + 4 && rect.top < box.bottom - 4) return node;
+  }
+  return null;
+}
+
+function setQuestionsOnly(on: boolean): void {
+  const anchor = visibleQuestionAnchor();
+  const apply = () => {
+    messagesEl.classList.toggle("is-questions-only", on);
+    questionsBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    const label = on ? "显示全部消息" : "只看用户问题";
+    questionsBtn.title = label;
+    questionsBtn.setAttribute("aria-label", label);
+    if (on) pageRun()?.streamingEl?.closest(".turn")?.classList.add("is-expanded");
+  };
+  if (anchor) holdQuestionBubble(anchor, apply);
+  else {
+    apply();
+    refreshStickyTurns(messagesEl);
+  }
+}
+
+questionsBtn.addEventListener("click", () => {
+  setQuestionsOnly(!messagesEl.classList.contains("is-questions-only"));
+});
+
+messagesEl.addEventListener("click", (ev) => {
+  if (!messagesEl.classList.contains("is-questions-only")) return;
+  const target = ev.target;
+  if (!(target instanceof Element)) return;
+  if (target.closest("a, button, summary, input, textarea")) return;
+  const bubble = target.closest(".msg.user");
+  if (!(bubble instanceof HTMLElement) || !messagesEl.contains(bubble)) return;
+  const selected = window.getSelection();
+  if (selected && !selected.isCollapsed && bubble.contains(selected.anchorNode)) return;
+  const turn = bubble.parentElement;
+  if (!(turn instanceof HTMLElement) || !turn.classList.contains("turn")) return;
+  holdQuestionBubble(bubble, () => turn.classList.toggle("is-expanded"));
+});
+
 messagesEl.addEventListener("click", (ev) => {
   const t = ev.target;
   if (!(t instanceof Element)) return;
@@ -2752,7 +2939,7 @@ function collectFindRanges(root: HTMLElement, query: string): Range[] {
   while (node) {
     const text = node.nodeValue ?? "";
     const folded = text.toLowerCase();
-    if (folded.length === text.length && needle) {
+    if (folded.length === text.length && needle && !isQuestionFilterHidden(node)) {
       let from = 0;
       while (from < folded.length) {
         const at = folded.indexOf(needle, from);
@@ -3008,6 +3195,7 @@ function applyTranscript(host: HTMLElement, e: {
     if (!run.streamingEl) place(() => resetStreamTarget(appendMessage(host, "assistant", "")));
     run.streamBuffer += e.delta ?? "";
     paintStreamRich(false);
+    if (run.streamingEl && run.streamBuffer.trim()) ensureMessageTime(run.streamingEl);
     return true;
   }
   if (e.type === "tool_call" && e.tool_call) {
@@ -3099,6 +3287,7 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
   if (reason === "cancelled" && run.streamingEl && !run.streamBuffer.trim()) {
     run.streamingEl.textContent = CANCELLED_TURN_NOTICE;
     run.streamingEl.closest(".msg")?.classList.add("is-cancelled");
+    ensureMessageTime(run.streamingEl);
     const questions = host?.querySelectorAll(":scope > .turn > .msg.user .msg-body, :scope > .msg.user .msg-body");
     const asked = questions?.[questions.length - 1];
     if (asked instanceof HTMLElement) ensureReask(asked, asked.textContent ?? "");
@@ -3122,7 +3311,17 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
   else if (statusIsRun && currentSessionId === run.sessionId && sameWorkspace(viewWorkspace, run.workspace)) {
     setStatus("", false);
   }
-  if (onScreen && currentSessionId) void refreshStoreDock(currentSessionId);
+  if (onScreen && currentSessionId) {
+    const bundle = sessionArtifacts;
+    if (bundle && bundle.sessionId === currentSessionId && sameViewWorkspace(bundle.workspace)) {
+      bundle.meta = null;
+      bundle.messages = null;
+      bundle.traces = null;
+      bundle.context = null;
+      resetStoreLabels();
+    }
+    if (isFileTab(activeView) && !skillsPageOpen) void refreshStorePart(currentSessionId, activeView);
+  }
   syncTaskbarAttention();
   updateChrome();
   void refreshSessions();

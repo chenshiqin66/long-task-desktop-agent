@@ -1,8 +1,38 @@
-import koffi from "koffi";
 import type { BrowserWindow } from "electron";
 
 import type { TaskbarIconKind } from "./taskbarAttention.js";
 import { ICON_SIZE, iconRgba } from "./taskbarIcon.js";
+
+/**
+ * The native binding is opened on the first Windows icon swap, not at process
+ * start. Application Control can refuse koffi.node; that must reject this
+ * import instead of killing the main process. Other platforms never load it.
+ */
+type KoffiApi = typeof import("koffi")["default"];
+let koffi: KoffiApi | null = null;
+let loading: Promise<void> | null = null;
+const readyListeners = new Set<() => void>();
+
+export function onWinTaskbarReady(cb: () => void): void {
+  readyListeners.add(cb);
+  if (bound) cb();
+}
+
+function ensureKoffi(): void {
+  if (koffi || failed || loading) return;
+  loading = import("koffi")
+    .then((mod) => {
+      koffi = mod.default;
+      bound = loadWin32();
+      for (const cb of readyListeners) cb();
+    })
+    .catch((err) => {
+      failed = true;
+      koffi = null;
+      bound = null;
+      console.error("taskbar icon", err);
+    });
+}
 
 /**
  * Electron's setIcon always submits SM_CXSMICON (16px at 96 DPI, scaled with
@@ -21,6 +51,7 @@ const ICON_BIG = 1;
  * Windows, and main.ts imports this module on every platform.
  */
 function loadWin32() {
+  if (!koffi) throw new Error("koffi is not loaded");
   const user32 = koffi.load("user32.dll");
   const gdi32 = koffi.load("gdi32.dll");
   const kernel32 = koffi.load("kernel32.dll");
@@ -162,6 +193,10 @@ function iconHandle(kind: TaskbarIconKind): bigint {
 /** Replace the taskbar glyph. False means the caller should use setIcon. */
 export function applyWinTaskbarIcon(win: BrowserWindow, kind: TaskbarIconKind): boolean {
   if (failed || process.platform !== "win32" || win.isDestroyed()) return false;
+  if (!koffi) {
+    ensureKoffi();
+    return false;
+  }
   try {
     const { SendMessageW } = win32();
     const hwnd = hwndOf(win);

@@ -1,6 +1,7 @@
 import {
   appendMessage,
   appendToolStep,
+  ensureMessageTime,
   removeLastTranscriptNodes,
   refreshToolGroup,
   rerenderAllAssistantMarkdown,
@@ -17,6 +18,7 @@ type ExplainMessage = {
   tool_call_id?: string;
   tool_call_arguments?: string;
   images?: Array<{ path: string }>;
+  created_at?: string;
 };
 
 type PendingImage = { previewUrl: string; mime: "image/png" | "image/jpeg"; base64: string };
@@ -286,6 +288,7 @@ export function mountExplainPane(): ExplainPane {
         const body = appendMessage(slot.board, "assistant", message.content, {
           rich: true,
           messageId: message.id,
+          at: message.created_at,
         });
         if (message.content === "任务已终止") body.closest(".msg")?.classList.add("is-cancelled");
       } else if (message.role === "user") {
@@ -300,6 +303,7 @@ export function mountExplainPane(): ExplainPane {
         appendMessage(slot.board, "user", visibleExplainText(message.content), {
           images: urls.length ? urls : undefined,
           messageId: message.id,
+          at: message.created_at,
         });
       }
     }
@@ -350,6 +354,7 @@ export function mountExplainPane(): ExplainPane {
       const body = ensureBubble(slot);
       slot.streamText += event.delta;
       body.textContent = slot.streamText;
+      if (slot.streamText.trim()) ensureMessageTime(body);
       if (shown === slot.board) stick(slot.board);
       return;
     }
@@ -388,6 +393,7 @@ export function mountExplainPane(): ExplainPane {
       if (event.reason === "cancelled" && slot.stream && !slot.streamText.trim()) {
         slot.stream.textContent = "任务已终止";
         slot.stream.closest(".msg")?.classList.add("is-cancelled");
+        ensureMessageTime(slot.stream);
       } else if (slot.stream && slot.streamText) {
         setRichText(slot.stream, slot.streamText, true);
       }
@@ -430,7 +436,10 @@ export function mountExplainPane(): ExplainPane {
     showBoard(slot.board);
     slot.board.querySelector(".empty-state")?.remove();
     const previews = images.map((image) => image.previewUrl);
-    appendMessage(slot.board, "user", text, previews.length ? { images: previews } : undefined);
+    appendMessage(slot.board, "user", text, {
+      ...(previews.length ? { images: previews } : {}),
+      at: new Date().toISOString(),
+    });
     slot.stream = null;
     slot.streamText = "";
     slot.afterTool = false;

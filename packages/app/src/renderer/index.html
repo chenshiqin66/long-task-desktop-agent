@@ -48,23 +48,33 @@
       <main id="main">
         <header id="main-bar" class="main-bar">
           <div id="view-tabs" class="view-tabs" role="tablist">
-            <button type="button" id="main-title" class="view-tab active" role="tab" data-view="chat" aria-selected="true">
-              <span class="view-tab-label">会话台</span>
-            </button>
-            <div id="store-tabs" hidden>
-              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="meta" aria-selected="false" aria-controls="store-view">
-                <span class="view-tab-label">meta</span>
+            <div class="session-title">
+              <button type="button" id="main-title" class="view-tab active" role="tab" data-view="chat" aria-selected="true">
+                <span class="view-tab-label">会话台</span>
               </button>
-              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="messages" aria-selected="false" aria-controls="store-view">
-                <span class="view-tab-label">messages</span>
-              </button>
-              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="trace" aria-selected="false" aria-controls="store-view">
-                <span class="view-tab-label">trace</span>
-              </button>
-              <button type="button" class="view-tab store-tab" role="tab" data-store-tab="context" aria-selected="false" aria-controls="store-view">
-                <span class="view-tab-label">context</span>
+              <button type="button" id="questions-toggle" class="questions-toggle" aria-pressed="false" aria-label="只看用户问题" title="只看用户问题" hidden>
+                <svg class="qt-all" viewBox="0 0 62 70" aria-hidden="true">
+                  <rect x="2" y="2" width="58" height="8" rx="4" fill="#14b8a6" />
+                  <rect x="2" y="14" width="36" height="8" rx="4" fill="#c5c9c7" />
+                  <rect x="24" y="26" width="36" height="8" rx="4" fill="#14b8a6" />
+                  <rect x="2" y="38" width="44" height="8" rx="4" fill="#c5c9c7" />
+                  <rect x="22" y="50" width="38" height="8" rx="4" fill="#14b8a6" />
+                  <rect x="2" y="62" width="58" height="8" rx="3" fill="#c5c9c7" />
+                </svg>
+                <svg class="qt-questions" viewBox="0 0 62 70" aria-hidden="true">
+                  <rect x="2" y="1" width="58" height="7" rx="3.5" fill="#14b8a6" />
+                  <rect x="46" y="11" width="14" height="7" rx="3.5" fill="#14b8a6" />
+                  <rect x="8" y="21" width="52" height="7" rx="3.5" fill="#14b8a6" />
+                  <rect x="18" y="31" width="42" height="7" rx="3.5" fill="#14b8a6" />
+                  <rect x="26" y="41" width="34" height="7" rx="3.5" fill="#14b8a6" />
+                  <rect x="48" y="51" width="12" height="7" rx="3.5" fill="#14b8a6" />
+                  <rect x="2" y="61" width="58" height="7" rx="3.5" fill="#14b8a6" />
+                </svg>
               </button>
             </div>
+            <button type="button" id="logs-tab" class="view-tab logs-tab" role="tab" aria-selected="false" aria-controls="store-dock" hidden>
+              日志
+            </button>
           </div>
           <button type="button" id="explain-toggle" class="explain-toggle" hidden>&lt;-解释</button>
         </header>
@@ -94,7 +104,21 @@
             <div id="status" class="run-status" hidden></div>
           </div>
 
-          <section id="store-dock" class="store-dock" hidden aria-label="会话数据源">
+          <section id="store-dock" class="store-dock" hidden aria-label="日志">
+            <div id="store-tabs" class="store-file-tabs" role="tablist" aria-label="日志文件" hidden>
+              <button type="button" class="store-tab" role="tab" data-store-tab="meta" aria-selected="false" aria-controls="store-view">
+                <span class="view-tab-label">meta</span>
+              </button>
+              <button type="button" class="store-tab" role="tab" data-store-tab="messages" aria-selected="false" aria-controls="store-view">
+                <span class="view-tab-label">messages</span>
+              </button>
+              <button type="button" class="store-tab" role="tab" data-store-tab="trace" aria-selected="false" aria-controls="store-view">
+                <span class="view-tab-label">trace</span>
+              </button>
+              <button type="button" class="store-tab" role="tab" data-store-tab="context" aria-selected="false" aria-controls="store-view">
+                <span class="view-tab-label">context</span>
+              </button>
+            </div>
             <div id="store-meta-hint" class="store-hint"></div>
             <pre id="store-view" class="store-view" role="tabpanel"></pre>
           </section>

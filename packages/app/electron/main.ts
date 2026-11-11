@@ -376,6 +376,36 @@ function watchSkillFolders(window: BrowserWindow): void {
     });
 }
 
+type ArtifactPart = "meta" | "messages" | "trace" | "context";
+
+function artifactPart(value: unknown): ArtifactPart | undefined {
+  if (value == null || value === "") return undefined;
+  if (value === "meta" || value === "messages" || value === "trace" || value === "context") return value;
+  throw new Error("Invalid log file");
+}
+
+/** One log file. Omitting `part` still returns every file, for older callers. */
+async function readSessionArtifacts(workspace: string, sessionId: string, part?: ArtifactPart) {
+  const store = new SessionStore(workspace);
+  const readTrace = async () => {
+    try {
+      return await new TraceStore(workspace).read(sessionId);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      return [];
+    }
+  };
+  if (part === "meta") return { meta: await store.getMeta(sessionId) };
+  if (part === "messages") return { messages: await store.readMessages(sessionId) };
+  if (part === "trace") return { traces: await readTrace() };
+  if (part === "context") return { context: await new ContextStore(workspace).read(sessionId) };
+  const meta = await store.getMeta(sessionId);
+  const messages = await store.readMessages(sessionId);
+  const traces = await readTrace();
+  const context = await new ContextStore(workspace).read(sessionId);
+  return { meta, messages, traces, context };
+}
+
 app.whenReady().then(() => {
   taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
@@ -477,20 +507,10 @@ app.whenReady().then(() => {
     assertValidSessionId(sessionId);
     return listSubagentToolRows(path, sessionId);
   });
-  ipcMain.handle("agent:loadWorkspaceArtifacts", async (_e, raw: string, sessionId: string) => {
+  ipcMain.handle("agent:loadWorkspaceArtifacts", async (_e, raw: string, sessionId: string, part?: unknown) => {
     const path = await assertKnownWorkspace(raw);
     assertValidSessionId(sessionId);
-    const store = new SessionStore(path);
-    const meta = await store.getMeta(sessionId);
-    const messages = await store.readMessages(sessionId);
-    let traces: unknown[] = [];
-    try {
-      traces = await new TraceStore(path).read(sessionId);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
-    const context = await new ContextStore(path).read(sessionId);
-    return { meta, messages, traces, context };
+    return readSessionArtifacts(path, sessionId, artifactPart(part));
   });
   ipcMain.handle(
     "agent:readWorkspaceImage",
@@ -614,20 +634,10 @@ app.whenReady().then(() => {
     assertValidSessionId(sessionId);
     return readTaskPanel(path, sessionId);
   });
-  ipcMain.handle("agent:loadSessionArtifacts", async (_e, sessionId: string) => {
+  ipcMain.handle("agent:loadSessionArtifacts", async (_e, sessionId: string, part?: unknown) => {
     assertValidSessionId(sessionId);
     if (!workspacePath) throw new Error("No workspace selected");
-    const store = new SessionStore(workspacePath);
-    const meta = await store.getMeta(sessionId);
-    const messages = await store.readMessages(sessionId);
-    let traces: unknown[] = [];
-    try {
-      traces = await new TraceStore(workspacePath).read(sessionId);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
-    const context = await new ContextStore(workspacePath).read(sessionId);
-    return { meta, messages, traces, context };
+    return readSessionArtifacts(workspacePath, sessionId, artifactPart(part));
   });
   ipcMain.handle(
     "agent:renameSession",

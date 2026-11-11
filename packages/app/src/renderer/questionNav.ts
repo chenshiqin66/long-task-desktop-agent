@@ -1,5 +1,7 @@
 /** Main-conversation question rail. Collapsed ticks, titles on hover. */
 
+import { refreshStickyTurns } from "./ui.js";
+
 const TITLE_CHARS = 12;
 const TIP_CHARS = 80;
 
@@ -140,11 +142,54 @@ export function mountQuestionNav(nav: HTMLElement, messages: HTMLElement): void 
     }
   }
 
+  let navToken = 0;
+  let detachNavWatch: (() => void) | null = null;
+
+  /**
+   * Scroll the turn's real top to the top of the transcript.
+   * The user bubble is sticky, so scrollIntoView treats a bar already stuck at
+   * the top as done and leaves the reader in the middle of that answer.
+   * Measure the turn, then animate. Sticky folding is paused until the animation
+   * ends so it cannot cancel the scroll by assigning scrollTop.
+   */
   function scrollTo(index: number): void {
     const item = items[index];
     if (!item) return;
+    const turn = item.el.closest(".turn");
+    const anchor = turn instanceof HTMLElement ? turn : item.el;
+    const top = Math.max(
+      0,
+      messages.scrollTop + anchor.getBoundingClientRect().top - messages.getBoundingClientRect().top,
+    );
+    detachNavWatch?.();
+    detachNavWatch = null;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    item.el.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+    if (reduce || Math.abs(messages.scrollTop - top) <= 1) {
+      delete messages.dataset.questionNavScroll;
+      messages.scrollTo({ top, behavior: "auto" });
+      refreshStickyTurns(messages);
+      return;
+    }
+    const token = ++navToken;
+    messages.dataset.questionNavScroll = "1";
+    let settled = false;
+    let timer = 0;
+    const detach = () => {
+      messages.removeEventListener("scrollend", finish);
+      window.clearTimeout(timer);
+      if (detachNavWatch === detach) detachNavWatch = null;
+    };
+    const finish = () => {
+      if (settled || token !== navToken) return;
+      settled = true;
+      detach();
+      delete messages.dataset.questionNavScroll;
+      refreshStickyTurns(messages);
+    };
+    timer = window.setTimeout(finish, 4000);
+    detachNavWatch = detach;
+    messages.addEventListener("scrollend", finish);
+    messages.scrollTo({ top, behavior: "smooth" });
   }
 
   function indexAt(clientY: number): number {
