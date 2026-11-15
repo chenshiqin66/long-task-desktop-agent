@@ -12,6 +12,7 @@ export interface SkillBodyAttachment {
 const SKILL_USE = `Skill use:
 - The catalog above is always present. The body is not, until this user message contains /<name> or you call read_skill.
 - If /<name> is in the user message, that body is already in this request. Do not call read_skill for the body again. Call read_skill with path to read a reference or asset.
+- To read, list, or search inside a skill, call read_file, list_dir, or keyword_search. Pass skill plus a path relative to that skill, or pass an absolute path that is already inside that skill. An absolute path is accepted only when it lands in one installed skill, and the tool stays inside that skill.
 - Run a skill script with run_skill_script. Pass the skill name, a path relative to that skill, and an args array. The program starts python or node on that file. Do not use powershell or bash to read the skill directory or to run its scripts.
 - Do not edit the skill directory.`;
 

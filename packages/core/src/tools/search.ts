@@ -1,8 +1,9 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { isPathInside, resolveWithinWorkspace } from "../pathSandbox.js";
+import { isPathInside } from "../pathSandbox.js";
 import type { Tool, ToolResult } from "./types.js";
 import { truncateOutput } from "./bash.js";
+import { locateToolPath } from "./skillPath.js";
 
 const SKIP = new Set(["node_modules", ".git", ".agent"]);
 /** One call should carry the terms for one path, not a second scan per word. */
@@ -40,14 +41,18 @@ export const searchTool: Tool = {
   definition: {
     name: "keyword_search",
     description:
-      "Search one workspace file or directory for every given term in a single call. Pass path as the narrowest file or directory the task names. Put all terms in queries. Do not call again for another term in that same path. Omit path only when the location is unknown; that scans the whole workspace.",
+      "Search one workspace file or directory, or one path inside an installed skill, for every given term in a single call. Pass path as the narrowest file or directory. A skill can be named with skill plus a relative path, or by an absolute path that is already inside that skill. The search cannot leave that skill. Put all terms in queries. Do not call again for another term in that same path. Omit path only when the location is unknown; that scans the whole workspace, or the whole skill when skill is set.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
           description:
-            "Workspace-relative file or directory. Pass the narrowest path. Use . only when you do not know where to look.",
+            "Workspace file or directory, a path relative to the skill when skill is set, or an absolute path inside one installed skill.",
+        },
+        skill: {
+          type: "string",
+          description: "Installed skill name. When set, path is relative to that skill only.",
         },
         query: {
           type: "string",
@@ -67,15 +72,23 @@ export const searchTool: Tool = {
     if ("error" in parsed) return { content: parsed.error, is_error: true };
     const { terms, omitted } = parsed;
     const pathArg = typeof args.path === "string" ? args.path.trim() : "";
+    const skillArg = typeof args.skill === "string" ? args.skill.trim() : "";
     const requested = pathArg || ".";
     if (ctx.signal?.aborted) return { content: "Search cancelled", is_error: true };
 
     try {
-      const realRoot = await realpath(ctx.workspacePath);
-      const abs = resolveWithinWorkspace(ctx.workspacePath, requested);
+      const located = await locateToolPath(pathArg, skillArg, ctx);
+      if ("error" in located) return { content: located.error, is_error: true };
+      const skill = located.skill ?? "";
+      const realRoot = located.boundary;
+      const abs = located.target;
+      const displayRoot = located.displayRoot;
       const realStart = await safeReal(abs);
       if (!realStart || !isPathInside(realRoot, realStart)) {
-        return { content: `Path is outside workspace: ${requested}`, is_error: true };
+        return {
+          content: skill ? `路径超出技能目录：${requested}` : `Path is outside workspace: ${requested}`,
+          is_error: true,
+        };
       }
       const startStat = await stat(realStart);
       const hits: string[] = [];
@@ -98,7 +111,7 @@ export const searchTool: Tool = {
           const line = lines[i] ?? "";
           const matched = terms.find((term) => line.includes(term));
           if (!matched) continue;
-          const rel = relative(ctx.workspacePath, file).replace(/\\/g, "/");
+          const rel = relative(displayRoot, file).replace(/\\/g, "/");
           hits.push(showTerm ? `${rel}:${i + 1}:${matched}:${line}` : `${rel}:${i + 1}:${line}`);
           if (hits.length >= ctx.maxSearchResults) return;
         }
@@ -150,8 +163,17 @@ export const searchTool: Tool = {
       if (cancelled) return { content: "Search cancelled", is_error: true };
 
       const notes: string[] = [];
+      if (skill) {
+        notes.push(
+          `Searched skill ${skill}. To read a hit, call read_file with skill ${skill} and that relative path.`,
+        );
+      }
       if (!pathArg) {
-        notes.push("No path was given, so this searched the whole workspace. Pass path next time.");
+        notes.push(
+          skill
+            ? `No path was given, so this searched the whole skill ${skill}. Pass path next time.`
+            : "No path was given, so this searched the whole workspace. Pass path next time.",
+        );
       }
       if (omitted > 0) {
         notes.push(`Only the first ${MAX_TERMS} terms were searched. ${omitted} terms were left out.`);

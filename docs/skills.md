@@ -51,7 +51,7 @@ description: 拆分、合并、提取 PDF 文本。
 
 完成通知开出续跑轮时暂存的那条消息也不附正文，里面的 `/技能名` 只作为文字进入对话。
 
-模型也可以自己调用 `read_skill` 读正文或技能目录里的文件，按 `maxReadChars` 截断；正文已经附在上下文里时，它直接说明已附上。已停用的技能，`read_skill` 和 `run_skill_script` 都会拒绝。之前用户轮次里 `read_skill` 的结果，在之后的请求里会换成一句「此前读过技能 X 的正文。需要时再调用 read_skill。」，不重复占预算。
+模型也可以自己调用 `read_skill` 读正文或技能目录里的文件，按 `maxReadChars` 截断；正文已经附在上下文里时，它直接说明已附上。`read_file`、`list_dir` 和 `keyword_search` 也可以读、列、搜某一个技能。可以传技能名加相对路径，也可以直接传落在该技能目录里的绝对路径；工具会从绝对路径里取出相对路径，真实路径仍必须留在这一个技能里。技能根目录本身、别的技能、工作区外的路径不会因此放行。已停用的技能，`read_skill`、`read_file`、`list_dir`、`keyword_search` 和 `run_skill_script` 都会拒绝。之前用户轮次里 `read_skill` 的结果，在之后的请求里会换成一句「此前读过技能 X 的正文。需要时再调用 read_skill。」，不重复占预算。
 
 **脚本。** `run_skill_script` 按扩展名选解释器：`.py` 用 `python`，`.js`、`.mjs`、`.cjs` 用 `node`。
 

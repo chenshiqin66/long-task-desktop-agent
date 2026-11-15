@@ -118,7 +118,7 @@ Task list:
 
 const SEARCH_RULES = `
 Search:
-- keyword_search takes a path and every term in one call. Pass the narrowest file or directory. Do not call it again for another word in that same path.`;
+- keyword_search takes a path and every term in one call. Pass the narrowest file or directory. Do not call it again for another word in that same path. Inside a skill, pass skill plus a relative path, or an absolute path that is already inside that skill.`;
 
 const WEB_SEARCH_RULES = `
 Web search citations (mandatory when web_search was used in this turn):

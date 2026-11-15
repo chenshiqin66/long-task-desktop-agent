@@ -13,7 +13,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { isPathInside } from "../pathSandbox.js";
 import { truncateOutput } from "../tools/bash.js";
 import { isSkillName, parseSkillMarkdown } from "./frontmatter.js";
@@ -183,6 +183,93 @@ export async function resolveInstalledSkillPath(
   }
   if (!isPathInside(realRoot, realTarget)) return { error: `路径超出技能目录：${requested}` };
   return { path: realTarget, directory: realRoot };
+}
+
+/**
+ * Path of `target` relative to `root`, or null when `target` is outside `root`.
+ * Windows compares without case so a copied absolute path still matches the
+ * real skill directory. `..` is collapsed by resolve before the comparison.
+ */
+export function relativeInside(root: string, target: string): string | null {
+  const base = resolve(root);
+  const candidate = resolve(target);
+  const baseCmp = process.platform === "win32" ? base.toLowerCase() : base;
+  const candidateCmp = process.platform === "win32" ? candidate.toLowerCase() : candidate;
+  if (candidateCmp === baseCmp) return "";
+  const prefix = baseCmp.endsWith(sep) ? baseCmp : baseCmp + sep;
+  if (!candidateCmp.startsWith(prefix)) return null;
+  return candidate.slice(base.length + 1).replace(/\\/g, "/");
+}
+
+/**
+ * If an absolute path lands inside one installed skill, return that skill and
+ * the path relative to it. The skills root itself does not match. A symlink is
+ * judged by the path as written, so a link that leaves the skill still names
+ * that skill and can be rejected later.
+ */
+export async function matchInstalledSkillPath(
+  requested: string,
+  root = defaultSkillsRoot(),
+): Promise<{ skill: string; relativePath: string } | null> {
+  if (!isAbsolute(requested)) return null;
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return null;
+  }
+  const lexical = resolve(requested);
+  let best: { skill: string; relativePath: string; baseLen: number } | null = null;
+  for (const name of names) {
+    if (!isSkillName(name)) continue;
+    const linkPath = skillDirectory(name, root);
+    const bases = [linkPath];
+    try {
+      const real = await realpath(linkPath);
+      if (resolve(real) !== resolve(linkPath)) bases.push(real);
+    } catch {
+      // A broken link can still be named by the path as written.
+    }
+    for (const base of bases) {
+      const relativePath = relativeInside(base, lexical);
+      if (relativePath == null) continue;
+      const baseLen = resolve(base).length;
+      if (!best || baseLen > best.baseLen) best = { skill: name, relativePath, baseLen };
+    }
+  }
+  if (!best) return null;
+  return { skill: best.skill, relativePath: best.relativePath };
+}
+
+/**
+ * Real skill directory and a real path inside it. An empty relative path is the
+ * skill directory itself. Absolute paths are refused here; callers extract the
+ * skill-relative portion first so resolve() cannot drop the skill directory.
+ */
+export async function resolveSkillScope(
+  name: string,
+  relativePath: string | undefined,
+  root = defaultSkillsRoot(),
+): Promise<{ root: string; target: string } | { error: string }> {
+  const requested = relativePath?.trim() ?? "";
+  if (requested && isAbsolute(requested)) {
+    return { error: `技能路径必须是相对路径：${requested}` };
+  }
+  if (!isSkillName(name)) return { error: `未找到技能 ${name}` };
+  if ((await loadDisabled(root)).includes(name)) {
+    if (!(await exists(skillDirectory(name, root)))) return { error: `未找到技能 ${name}` };
+    return { error: `技能 ${name} 已停用` };
+  }
+  let realRoot: string;
+  try {
+    realRoot = await realpath(skillDirectory(name, root));
+  } catch {
+    return { error: `未找到技能 ${name}` };
+  }
+  if (!requested) return { root: realRoot, target: realRoot };
+  const resolved = await resolveInstalledSkillPath(name, requested, root);
+  if ("error" in resolved) return resolved;
+  return { root: resolved.directory, target: resolved.path };
 }
 
 export async function readInstalledSkillFile(

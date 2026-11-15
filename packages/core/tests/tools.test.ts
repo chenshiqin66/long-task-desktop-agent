@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, writeFile, mkdir, readFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setSkillEnabled } from "../src/skills/installedSkills.js";
 import {
   createBuiltinTools,
   ToolHost,
@@ -491,5 +492,205 @@ describe("tools", () => {
     const r = await host.execute("bash", JSON.stringify({ command: "echo hi" }), ctx);
     expect(r.is_error).toBe(true);
     expect(r.content).toMatch(/powershell/i);
+  });
+
+  it("reads and searches one skill by name and relative path", async () => {
+    const skillsRoot = await mkdtemp(join(tmpdir(), "agent-skills-"));
+    const outside = await mkdtemp(join(tmpdir(), "agent-skill-out-"));
+    ctx.skillsRoot = skillsRoot;
+    ctx.maxReadChars = 500;
+    ctx.maxToolOutputChars = 2000;
+    await mkdir(join(skillsRoot, "demo", "scripts"), { recursive: true });
+    await mkdir(join(skillsRoot, "other"), { recursive: true });
+    await writeFile(
+      join(skillsRoot, "demo", "SKILL.md"),
+      "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n",
+      "utf8",
+    );
+    await writeFile(join(skillsRoot, "demo", "scripts", "build.py"), "print('NEEDLE')\n", "utf8");
+    await writeFile(join(skillsRoot, "other", "secret.txt"), "OTHER\n", "utf8");
+    await writeFile(join(outside, "secret.txt"), "OUTSIDE\n", "utf8");
+    try {
+      const read = await host.execute(
+        "read_file",
+        JSON.stringify({ skill: "demo", path: "scripts/build.py" }),
+        ctx,
+      );
+      expect(read.is_error).toBe(false);
+      expect(read.content).toContain("NEEDLE");
+
+      const escaped = await host.execute(
+        "read_file",
+        JSON.stringify({ skill: "demo", path: "../other/secret.txt" }),
+        ctx,
+      );
+      expect(escaped.is_error).toBe(true);
+      expect(escaped.content).toMatch(/超出技能目录/);
+
+      const absolute = await host.execute(
+        "read_file",
+        JSON.stringify({ path: join(skillsRoot, "demo", "scripts", "build.py") }),
+        ctx,
+      );
+      expect(absolute.is_error).toBe(false);
+      expect(absolute.content).toContain("NEEDLE");
+
+      const namedAbsolute = await host.execute(
+        "read_file",
+        JSON.stringify({ skill: "demo", path: join(skillsRoot, "demo", "scripts", "build.py") }),
+        ctx,
+      );
+      expect(namedAbsolute.is_error).toBe(false);
+      expect(namedAbsolute.content).toContain("NEEDLE");
+
+      const sibling = await host.execute(
+        "read_file",
+        JSON.stringify({ skill: "demo", path: join(skillsRoot, "other", "secret.txt") }),
+        ctx,
+      );
+      expect(sibling.is_error).toBe(true);
+      expect(sibling.content).toMatch(/超出技能目录/);
+
+      const outsideRead = await host.execute(
+        "read_file",
+        JSON.stringify({ path: join(outside, "secret.txt") }),
+        ctx,
+      );
+      expect(outsideRead.is_error).toBe(true);
+      expect(outsideRead.content).toMatch(/outside/i);
+
+      const workspaceFile = await host.execute(
+        "read_file",
+        JSON.stringify({ path: join(workspace, "hello.txt") }),
+        ctx,
+      );
+      expect(workspaceFile.is_error).toBe(false);
+      expect(workspaceFile.content).toContain("hello");
+
+      const bare = await host.execute(
+        "keyword_search",
+        JSON.stringify({ path: join(skillsRoot, "demo", "scripts", "build.py"), query: "NEEDLE" }),
+        ctx,
+      );
+      expect(bare.is_error).toBe(false);
+      expect(bare.content).toContain("NEEDLE");
+      expect(bare.content).toContain("skill demo");
+      expect(bare.content).not.toContain("OTHER");
+
+      const listed = await host.execute(
+        "list_dir",
+        JSON.stringify({ path: join(skillsRoot, "demo") }),
+        ctx,
+      );
+      expect(listed.is_error).toBe(false);
+      expect(listed.content).toContain("skill demo");
+      expect(listed.content).toContain("scripts");
+      expect(listed.content).not.toContain("secret.txt");
+
+      const scripts = await host.execute(
+        "list_dir",
+        JSON.stringify({ skill: "demo", path: "scripts" }),
+        ctx,
+      );
+      expect(scripts.is_error).toBe(false);
+      expect(scripts.content).toContain("scripts/build.py");
+      expect(scripts.content).not.toContain("secret.txt");
+
+      const found = await host.execute(
+        "keyword_search",
+        JSON.stringify({
+          skill: "demo",
+          path: "scripts",
+          queries: ["NEEDLE", "OTHER", "OUTSIDE"],
+        }),
+        ctx,
+      );
+      expect(found.is_error).toBe(false);
+      expect(found.content).toContain("scripts/build.py");
+      expect(found.content).toContain("NEEDLE");
+      expect(found.content).toContain("skill demo");
+      expect(found.content).not.toContain("OTHER");
+      expect(found.content).not.toContain("OUTSIDE");
+
+      const whole = await host.execute(
+        "keyword_search",
+        JSON.stringify({ skill: "demo", query: "NEEDLE" }),
+        ctx,
+      );
+      expect(whole.is_error).toBe(false);
+      expect(whole.content).toContain("scripts/build.py");
+      expect(whole.content).toMatch(/whole skill demo/);
+
+      await setSkillEnabled("demo", false, skillsRoot);
+      const disabled = await host.execute(
+        "read_file",
+        JSON.stringify({ skill: "demo", path: "scripts/build.py" }),
+        ctx,
+      );
+      expect(disabled.is_error).toBe(true);
+      expect(disabled.content).toMatch(/已停用/);
+    } finally {
+      await rmWorkspace(skillsRoot);
+      await rmWorkspace(outside);
+    }
+  });
+
+  it("skips a skill symlink that leaves the skill directory", async () => {
+    const skillsRoot = await mkdtemp(join(tmpdir(), "agent-skills-"));
+    const outside = await mkdtemp(join(tmpdir(), "agent-skill-out-"));
+    ctx.skillsRoot = skillsRoot;
+    ctx.maxToolOutputChars = 2000;
+    await mkdir(join(skillsRoot, "demo", "scripts"), { recursive: true });
+    await writeFile(join(skillsRoot, "demo", "scripts", "build.py"), "print('NEEDLE')\n", "utf8");
+    const secret = join(outside, "secret.txt");
+    await writeFile(secret, "OUTSIDE\n", "utf8");
+    try {
+      await symlink(secret, join(skillsRoot, "demo", "scripts", "leak.txt"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        await rmWorkspace(skillsRoot);
+        await rmWorkspace(outside);
+        return;
+      }
+      throw err;
+    }
+    try {
+      const leaked = await host.execute(
+        "read_file",
+        JSON.stringify({ skill: "demo", path: "scripts/leak.txt" }),
+        ctx,
+      );
+      expect(leaked.is_error).toBe(true);
+      expect(leaked.content).toMatch(/超出技能目录/);
+
+      const searched = await host.execute(
+        "keyword_search",
+        JSON.stringify({ skill: "demo", path: "scripts", query: "OUTSIDE" }),
+        ctx,
+      );
+      expect(searched.is_error).toBe(false);
+      expect(searched.content).not.toContain("OUTSIDE");
+
+      const absoluteLeak = await host.execute(
+        "read_file",
+        JSON.stringify({ path: join(skillsRoot, "demo", "scripts", "leak.txt") }),
+        ctx,
+      );
+      expect(absoluteLeak.is_error).toBe(true);
+      expect(absoluteLeak.content).toMatch(/超出技能目录/);
+
+      const listed = await host.execute(
+        "list_dir",
+        JSON.stringify({ path: join(skillsRoot, "demo", "scripts") }),
+        ctx,
+      );
+      expect(listed.is_error).toBe(false);
+      expect(listed.content).toContain("build.py");
+      expect(listed.content).not.toContain("leak.txt");
+      expect(listed.content).not.toContain("OUTSIDE");
+    } finally {
+      await rmWorkspace(skillsRoot);
+      await rmWorkspace(outside);
+    }
   });
 });

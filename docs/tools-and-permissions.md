@@ -44,6 +44,8 @@ shell 命令的执行环境：Windows 上以 `powershell.exe -NoProfile -NonInte
 
 `read_file`、`list_dir`、`keyword_search`、`str_replace`、`delete_file` 先对目标路径取 `realpath`，再要求它落在工作区的 `realpath` 之内。符号链接指向工作区外，会被拒绝。
 
+`read_file`、`list_dir` 和 `keyword_search` 多一个口。带上技能名时，路径相对该技能。不带技能名、但路径是落在某一个已安装技能里的绝对路径时，先从这段绝对路径取出技能名和相对路径，再按这个技能的目录检查。真实路径必须留在这一个技能里。技能根目录、指向技能外的符号链接、另一段已经离开该技能的路径，都会被拒绝。`str_replace` 和 `delete_file` 没有这个口。
+
 `write_file` 的目标可能还不存在。它从目标的父目录往上找第一个存在的祖先，确认这个祖先在工作区内，再递归建目录，建完对父目录再取一次 `realpath` 复核。
 
 写入类工具（`write_file`、`str_replace`、`delete_file`）还不能落进 `.agent`，会话状态只能经各自的工具修改。读不受这条限制。比较之前，路径先换成文件系统实际会碰到的那一条：已经存在的部分取 `realpath`，展开符号链接、目录联接、大小写和 8.3 短名，比较本身也不分大小写。所以 `.AGENT/…`、指向 `.agent` 的目录联接都进不去。子代理仍占着的 `output_dir` 锁按同样的方式比较（`packages/core/src/tools/writeScope.ts`）。
