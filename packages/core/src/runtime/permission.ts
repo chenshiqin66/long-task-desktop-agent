@@ -11,6 +11,8 @@ export interface PermissionRequest {
   risk: ToolRisk;
   summary: string;
   command?: string;
+  /** "once" means allowing this call does not allow the rest of the turn. */
+  grant?: "once";
   signal?: AbortSignal;
 }
 

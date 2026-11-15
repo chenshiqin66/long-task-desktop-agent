@@ -35,3 +35,6 @@ export * from "./skills/tokens.js";
 export * from "./skills/prompt.js";
 export * from "./skills/installedSkills.js";
 export * from "./tools/readSkill.js";
+export { McpPool, type McpServerInput, type McpServerView, type McpSnapshot, type McpToolSource } from "./mcp/pool.js";
+export { defaultMcpConfigPath } from "./mcp/store.js";
+export { redactSecrets, redactUrl } from "./mcp/redact.js";

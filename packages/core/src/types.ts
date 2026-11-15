@@ -86,6 +86,8 @@ export type RuntimeEvent =
       risk: "write";
       summary: string;
       command?: string;
+      /** Present when this allow does not cover later writes in the turn. */
+      grant?: "once";
     }
   | { type: "error"; turn_id?: string; message: string; code: string }
   | {

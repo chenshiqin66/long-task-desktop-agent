@@ -34,10 +34,12 @@ import {
   listSubagentStatuses,
   TaskStore,
   buildTaskPanel,
+  McpPool,
 } from "@agent/core";
 import type { AgentConfig, ImageMime, PermissionDecision, StoredConfig, SubmittedImage } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
+import { registerMcpHandlers } from "./mcpIpc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -48,6 +50,8 @@ let explainRt: ExplainRuntime | null = null;
 let explainKey = "";
 /** Workspace the sidebar last focused. Not the only workspace that can run. */
 let workspacePath: string | null = null;
+const mcpPool = new McpPool();
+let mcpClosing = false;
 
 type LiveRun = {
   runtime: AgentRuntime;
@@ -70,6 +74,7 @@ const runPool = new SessionRuntimePool<AgentRuntime>(async (workspace, sessionId
     }),
     permissions,
     asks,
+    mcp: mcpPool,
   });
   const key = sessionRunKey(workspace, sessionId);
   lives.set(key, { runtime, permissions, asks });
@@ -409,7 +414,19 @@ async function readSessionArtifacts(workspace: string, sessionId: string, part?:
 app.whenReady().then(() => {
   taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
+  registerMcpHandlers(ipcMain, mcpPool);
+  mcpPool.onStatus((snapshot) => {
+    if (!win?.isDestroyed()) win?.webContents.send("agent:mcpStatus", snapshot);
+  });
   createWindow();
+  void mcpPool.start();
+
+  app.on("before-quit", (event) => {
+    if (mcpClosing) return;
+    event.preventDefault();
+    mcpClosing = true;
+    void mcpPool.close().finally(() => app.quit());
+  });
 
   ipcMain.handle("agent:setTaskbarPrompt", (_event, open: unknown, inView: unknown) => {
     taskbarAlert?.setPrompt(open === true, inView === true);

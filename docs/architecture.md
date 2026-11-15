@@ -174,6 +174,7 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | `store/*.ts` | 会话、事件、上下文、任务、完成通知、子代理、解释的落盘，见 [数据模型](data-model.md) |
 | `tools/*.ts` | 内置工具、分级、路径沙箱，见 [工具与权限](tools-and-permissions.md) |
 | `skills/*.ts` | 技能的安装、目录、正文附加，见 [技能](skills.md) |
+| `mcp/*.ts` | MCP 连接池、stdio 与 Streamable HTTP、工具名和打码，见 [MCP](mcp.md) |
 | `config/loadConfig.ts` | 读写 `~/.long-task-agent/config.json` |
 | `session/autoTitle.ts` | 自动标题 |
 
@@ -181,13 +182,13 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 
 | 模块 | 职责 |
 | --- | --- |
-| `electron/main.ts` | 窗口、中文菜单、工作区、全部 IPC、会话 runtime 池和解释 runtime 的生命周期、技能目录监视 |
+| `electron/main.ts` | 窗口、中文菜单、工作区、全部 IPC、会话 runtime 池和解释 runtime 的生命周期、技能目录监视。MCP 的 IPC 在 `electron/mcpIpc.ts`，进程退出时关掉连接池 |
 | `electron/preload.ts` | 页面唯一能用的 API：`window.agent` |
 | `electron/openTarget.ts` | 打开链接和本地路径。网址交给浏览器；目录直接打开；文件只在文件夹里选中，不执行 |
 | `electron/taskbar*.ts` | Windows 任务栏提醒：有权限卡或提问卡在等、而你没在看时，图标每 530 毫秒切换一次。Win32 库到第一次换图标时才加载 |
 | `src/renderer/main.ts` | 工作区与会话列表、页面切换、事件订阅、发送与停止、页内搜索、草稿 |
 | `src/renderer/ui.ts` | 消息气泡、Markdown、工具条、权限卡和提问卡。不持有会话状态 |
-| `src/renderer/explainPane.ts`、`skills.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、任务面板、问题轨 |
+| `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、任务面板、问题轨 |
 | `src/renderer/runEventGate.ts` | 丢掉不属于当前会话或轮次的事件 |
 | `src/renderer/escapeKey.ts` | Esc 先关什么、什么时候才停止这一轮 |
 

@@ -327,11 +327,12 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 .sidebar-foot {
   flex-shrink: 0;
   display: flex;
-  flex-direction: row;
+  flex-flow: row wrap;
   gap: 8px;
 }
 
-#btn-skills.is-current {
+#btn-skills.is-current,
+#btn-mcp.is-current {
   border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
   background: var(--teal-soft);
 }
@@ -3094,6 +3095,11 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   white-space: nowrap;
 }
 
+.mcp-empty {
+  white-space: normal;
+  line-height: 1.5;
+}
+
 .skill-menu {
   position: absolute;
   left: 8px;
@@ -3147,6 +3153,132 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+.mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.mcp-form textarea,
+.mcp-form select {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: inherit;
+}
+
+.mcp-hint,
+.mcp-check {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.mcp-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.mcp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.mcp-card.is-off {
+  background: color-mix(in srgb, var(--paper) 78%, #fff);
+}
+
+.mcp-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.mcp-state.is-ok {
+  color: var(--accent-ink);
+}
+
+.mcp-state.is-error,
+.mcp-error {
+  color: var(--danger);
+}
+
+.mcp-summary,
+.mcp-tools,
+.mcp-note-line,
+.mcp-error,
+.mcp-state {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mcp-summary,
+.mcp-tools,
+.mcp-note-line {
+  color: var(--ink-muted);
+}
+
+.mcp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.mcp-actions .skill-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid #c3ccd4;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.mcp-actions .skill-switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent-ink);
+}
+
+.mcp-actions .skill-switch[aria-checked="true"] .skill-switch-knob {
+  left: 18px;
+}
+
+.mcp-actions .mcp-text,
+.mcp-actions .skill-card-remove {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.mcp-actions button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 
 @media (max-width: 780px) {

@@ -1,3 +1,4 @@
+import { mcpToolLabel } from "../mcp/names.js";
 import { isDangerousBash } from "./dangerous.js";
 import { AGENT_TOOL_NAME } from "./agentTool.js";
 import { isTaskTool } from "./taskTools.js";
@@ -10,6 +11,11 @@ export interface PolicyVerdict {
   summary: string;
   /** Parsed bash command when tool is bash; otherwise undefined. */
   command?: string;
+  /**
+   * "once" asks every call and does not arm the rest of the turn.
+   * MCP tools use this so "允许这一轮" cannot cover a third-party server.
+   */
+  grant?: "once";
 }
 
 /** Builtins treated as read-only when used alone (no write redirections / destructive ops). */
@@ -557,6 +563,7 @@ export function classifyBashCommand(command: string): PolicyVerdict {
 export function classifyToolCall(
   toolName: string,
   argsJson: string,
+  opts?: { mcpAutoAllow?: (toolName: string) => boolean },
 ): PolicyVerdict {
   if (toolName === "ask_user") {
     return { risk: "read", summary: "Ask the user" };
@@ -621,6 +628,11 @@ export function classifyToolCall(
     }
     const label = path ? `${toolName}: ${path}` : toolName;
     return { risk: "write", summary: `Needs confirmation: ${label.slice(0, 160)}` };
+  }
+  if (toolName.startsWith("mcp__")) {
+    const label = mcpToolLabel(toolName).slice(0, 160);
+    if (opts?.mcpAutoAllow?.(toolName)) return { risk: "read", summary: `Auto-allow ${label}` };
+    return { risk: "write", grant: "once", summary: `Needs confirmation: ${label}` };
   }
   // Unknown tools: conservative.
   return { risk: "write", summary: `Needs confirmation: ${toolName}` };

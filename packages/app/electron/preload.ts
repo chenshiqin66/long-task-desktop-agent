@@ -63,6 +63,19 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:setSkillEnabled", name, enabled),
   uninstallSkill: (name: string) => ipcRenderer.invoke("agent:uninstallSkill", name),
   openSkillFolder: (name: string) => ipcRenderer.invoke("agent:openSkillFolder", name),
+  listMcpServers: () => ipcRenderer.invoke("agent:listMcpServers"),
+  addMcpServer: (input: unknown) => ipcRenderer.invoke("agent:addMcpServer", input),
+  updateMcpServer: (name: string, input: unknown) => ipcRenderer.invoke("agent:updateMcpServer", name, input),
+  removeMcpServer: (name: string) => ipcRenderer.invoke("agent:removeMcpServer", name),
+  setMcpEnabled: (name: string, enabled: boolean) => ipcRenderer.invoke("agent:setMcpEnabled", name, enabled),
+  setMcpAutoAllow: (name: string, autoAllow: boolean) =>
+    ipcRenderer.invoke("agent:setMcpAutoAllow", name, autoAllow),
+  reconnectMcpServer: (name: string) => ipcRenderer.invoke("agent:reconnectMcpServer", name),
+  onMcpStatus: (cb: (snapshot: unknown) => void) => {
+    const listener = (_: unknown, snapshot: unknown) => cb(snapshot);
+    ipcRenderer.on("agent:mcpStatus", listener);
+    return () => ipcRenderer.removeListener("agent:mcpStatus", listener);
+  },
   readSessionImage: (sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readSessionImage", sessionId, relativePath),
   cancel: (sessionId?: string, workspace?: string) =>
