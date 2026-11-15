@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .worktrees/
+.vscode/
 *.log
 .DS_Store
 .env
