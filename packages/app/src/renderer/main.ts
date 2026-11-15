@@ -3071,6 +3071,19 @@ function promptOnScreen(run: RunPaint): boolean {
   return run.sessionId === currentSessionId && sameWorkspace(run.workspace, viewWorkspace);
 }
 
+/** The card is gone once the user answers. A later visit must not draw that same request again. */
+function clearAnsweredPermission(run: RunPaint): void {
+  if (run.prompt?.kind !== "permission") return;
+  run.prompt = null;
+  if (!promptOnScreen(run)) {
+    syncTaskbarAttention();
+    return;
+  }
+  permissionDock.innerHTML = "";
+  permissionDock.hidden = true;
+  syncTaskbarAttention();
+}
+
 function paintPrompt(run: RunPaint): void {
   if (!promptOnScreen(run)) {
     syncTaskbarAttention();
@@ -3090,9 +3103,12 @@ function paintPrompt(run: RunPaint): void {
       summary: prompt.summary,
       command: prompt.command,
       onAllow: () => {
+        clearAnsweredPermission(run);
+        if (run.gate.isRunning) showRunStatus(PHASE_LABEL.tool, run);
         void window.agent.respondPermission(prompt.requestId, "allow");
       },
       onDeny: () => {
+        clearAnsweredPermission(run);
         void window.agent.respondPermission(prompt.requestId, "deny");
       },
       onStop: () => {
@@ -3370,6 +3386,7 @@ window.agent.onEvent((e) => {
     run.gate = decision.next;
     if (!decision.paint && !decision.keep && !decision.stashFor) return;
     if (e.type === "status") {
+      if (e.phase !== "awaiting_permission") clearAnsweredPermission(run);
       showRunStatus(PHASE_LABEL[e.phase] ?? e.phase, run);
       return;
     }
