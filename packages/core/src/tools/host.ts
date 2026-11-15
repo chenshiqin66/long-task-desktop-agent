@@ -47,6 +47,18 @@ export class ToolHost {
     return [...this.byName.values()].map((t) => t.definition);
   }
 
+  /** Builtins win a name clash. The caller hears about the dropped extra names by their absence. */
+  merge(extra: readonly Tool[]): ToolHost {
+    const tools = [...this.byName.values()];
+    const seen = new Set(this.byName.keys());
+    for (const tool of extra) {
+      if (seen.has(tool.definition.name)) continue;
+      seen.add(tool.definition.name);
+      tools.push(tool);
+    }
+    return new ToolHost(tools);
+  }
+
   /** Tools whose names are in `names` and already registered on this host. */
   subset(names: readonly string[]): ToolHost {
     const allow = new Set(names);

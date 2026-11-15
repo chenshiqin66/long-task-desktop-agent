@@ -20,6 +20,7 @@ import {
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
 import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
+import { attachMcpLibrary } from "./mcp.js";
 import { escapeAction } from "./escapeKey.js";
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { mountQuestionNav } from "./questionNav.js";
@@ -142,6 +143,34 @@ declare global {
       setSkillEnabled(name: string, enabled: boolean): Promise<void>;
       uninstallSkill(name: string): Promise<void>;
       openSkillFolder(name: string): Promise<void>;
+      listMcpServers(): Promise<{
+        servers: Array<{
+          name: string;
+          enabled: boolean;
+          autoAllow: boolean;
+          transport: "stdio" | "http";
+          summary: string;
+          state: "disabled" | "connecting" | "connected" | "error";
+          tools: string[];
+          error?: string;
+          note?: string;
+          command?: string;
+          args?: string[];
+          envKeys?: string[];
+          cwd?: string;
+        }>;
+        fileError?: string;
+      }>;
+      addMcpServer(input: unknown): Promise<unknown>;
+      updateMcpServer(name: string, input: unknown): Promise<unknown>;
+      removeMcpServer(name: string): Promise<void>;
+      setMcpEnabled(name: string, enabled: boolean): Promise<unknown>;
+      setMcpAutoAllow(name: string, autoAllow: boolean): Promise<unknown>;
+      reconnectMcpServer(name: string): Promise<unknown>;
+      onMcpStatus(cb: (snapshot: {
+        servers: Array<{ name: string }>;
+        fileError?: string;
+      }) => void): () => void;
       readSessionImage(sessionId: string, relativePath: string): Promise<string>;
       cancel(sessionId?: string, workspace?: string): Promise<void>;
       explainLoad(
@@ -206,6 +235,8 @@ const configDialog = document.getElementById("config-dialog") as HTMLDialogEleme
 const configForm = document.getElementById("config-form") as HTMLFormElement;
 const skillsPage = document.getElementById("skills-page") as HTMLElement;
 const btnSkills = document.getElementById("btn-skills") as HTMLButtonElement;
+const mcpPage = document.getElementById("mcp-page") as HTMLElement;
+const btnMcp = document.getElementById("btn-mcp") as HTMLButtonElement;
 const skillMenu = document.getElementById("skill-menu") as HTMLElement;
 const pageCtxMenu = document.getElementById("page-ctx-menu")!;
 const pageCtxCopy = pageCtxMenu.querySelector('[data-ctx="copy"]') as HTMLButtonElement;
@@ -241,7 +272,7 @@ let statusIsRun = false;
 let creatingSession = false;
 
 type RunPrompt =
-  | { kind: "permission"; requestId: string; tool: string; summary: string; command?: string }
+  | { kind: "permission"; requestId: string; tool: string; summary: string; command?: string; once?: boolean }
   | { kind: "ask"; requestId: string; question: string; options: string[] };
 
 /** Paint state for one live session. Several of these can stream at once. */
@@ -352,6 +383,7 @@ let activeView: MainView = "chat";
 let followTail = true;
 let tailAnchor = 0;
 let skillsPageOpen = false;
+let mcpPageOpen = false;
 let activeStoreTab: StoreTab = "meta";
 let sessionArtifacts: {
   sessionId: string;
@@ -500,7 +532,7 @@ function setLogsAvailable(on: boolean): void {
 
 /** The filter belongs to the session page. It shows only while that title is selected. */
 function syncQuestionsToggle(): void {
-  questionsBtn.hidden = storeTabs.hidden || skillsPageOpen || activeView !== "chat";
+  questionsBtn.hidden = storeTabs.hidden || libraryOpen() || activeView !== "chat";
 }
 
 function clearLogsSelection(): void {
@@ -536,7 +568,7 @@ function setMainView(view: MainView): void {
     if (currentSessionId) void refreshStorePart(currentSessionId, view);
     paintStoreView();
   }
-  if (skillsPageOpen) {
+  if (libraryOpen()) {
     coverStageWithSkills();
     mainTitle.classList.remove("active");
     mainTitle.setAttribute("aria-selected", "false");
@@ -557,13 +589,30 @@ function coverStageWithSkills(): void {
   syncTaskChrome();
 }
 
-function leaveSkillsPage(): void {
-  if (!skillsPageOpen) return;
+function libraryOpen(): boolean {
+  return skillsPageOpen || mcpPageOpen;
+}
+
+function clearMcpChrome(): void {
+  mcpPageOpen = false;
+  mcpPage.hidden = true;
+  btnMcp.classList.remove("is-current");
+  btnMcp.setAttribute("aria-pressed", "false");
+}
+
+function clearSkillsChrome(): void {
   skillsPageOpen = false;
   skillsPage.hidden = true;
-  mainBar.classList.remove("is-covered");
   btnSkills.classList.remove("is-current");
   btnSkills.setAttribute("aria-pressed", "false");
+}
+
+function leaveSkillsPage(): void {
+  const open = libraryOpen();
+  clearSkillsChrome();
+  clearMcpChrome();
+  if (!open) return;
+  mainBar.classList.remove("is-covered");
 }
 
 function closeSkillsPage(): void {
@@ -573,10 +622,31 @@ function closeSkillsPage(): void {
 }
 
 function openSkillsPage(): void {
+  clearMcpChrome();
   skillsPageOpen = true;
   skillsPage.hidden = false;
   btnSkills.classList.add("is-current");
   btnSkills.setAttribute("aria-pressed", "true");
+  mainTitle.classList.remove("active");
+  mainTitle.setAttribute("aria-selected", "false");
+  clearLogsSelection();
+  coverStageWithSkills();
+  syncQuestionsToggle();
+}
+
+function closeMcpPage(): void {
+  if (!mcpPageOpen) return;
+  clearMcpChrome();
+  mainBar.classList.remove("is-covered");
+  setMainView(activeView);
+}
+
+function openMcpPage(): void {
+  clearSkillsChrome();
+  mcpPageOpen = true;
+  mcpPage.hidden = false;
+  btnMcp.classList.add("is-current");
+  btnMcp.setAttribute("aria-pressed", "true");
   mainTitle.classList.remove("active");
   mainTitle.setAttribute("aria-selected", "false");
   clearLogsSelection();
@@ -1291,7 +1361,7 @@ function updateChrome(): void {
 }
 
 function syncTaskChrome(): void {
-  const chat = !composerDock.hidden && !skillsPageOpen;
+  const chat = !composerDock.hidden && !libraryOpen();
   const hasTasks = taskPanel.rows.length > 0 || taskPanel.unreadable.length > 0;
   btnTasks.hidden = !chat || !hasTasks;
   const open = chat && taskPanelOpen && hasTasks;
@@ -2300,6 +2370,7 @@ btnNew.onclick = () => {
 };
 
 attachSkillLibrary(btnSkills, skillsPage, { onOpen: openSkillsPage, onClose: closeSkillsPage });
+attachMcpLibrary(btnMcp, mcpPage, { onOpen: openMcpPage, onClose: closeMcpPage });
 attachSkillMenu(inputEl, skillMenu);
 
 document.getElementById("btn-config")!.onclick = async () => {
@@ -2919,6 +2990,7 @@ function findUi(): { bar: HTMLElement; input: HTMLInputElement; count: HTMLEleme
 
 function findRoot(): HTMLElement {
   if (findScope === "explain" && explainApi?.searchRoot()) return explainApi.searchRoot()!;
+  if (mcpPageOpen) return mcpPage;
   if (skillsPageOpen) return skillsPage;
   return activeView === "chat" ? messagesEl : storeView;
 }
@@ -3001,7 +3073,7 @@ function runFind(resetIndex: boolean, scroll = true): void {
   const ui = findUi();
   const query = ui.input.value;
   ui.input.placeholder =
-    findScope === "explain" || activeView === "chat" && !skillsPageOpen ? "搜索对话内容" : "搜索当前页";
+    findScope === "explain" || activeView === "chat" && !libraryOpen() ? "搜索对话内容" : "搜索当前页";
   if (!query) {
     clearFindPaint();
     return;
@@ -3026,7 +3098,7 @@ function openFindBar(): void {
   const ui = findUi();
   ui.bar.hidden = false;
   ui.input.placeholder =
-    findScope === "explain" || (activeView === "chat" && !skillsPageOpen) ? "搜索对话内容" : "搜索当前页";
+    findScope === "explain" || (activeView === "chat" && !libraryOpen()) ? "搜索对话内容" : "搜索当前页";
   ui.input.focus();
   ui.input.select();
   if (ui.input.value) runFind(false);
@@ -3102,6 +3174,7 @@ function paintPrompt(run: RunPaint): void {
       tool: prompt.tool,
       summary: prompt.summary,
       command: prompt.command,
+      once: prompt.once,
       onAllow: () => {
         clearAnsweredPermission(run);
         if (run.gate.isRunning) showRunStatus(PHASE_LABEL.tool, run);
@@ -3140,6 +3213,7 @@ function recordLivePrompt(
     tool?: string;
     summary?: string;
     command?: string;
+    grant?: "once";
     question?: string;
     options?: string[];
   },
@@ -3155,6 +3229,7 @@ function recordLivePrompt(
       tool: e.tool ?? "",
       summary: e.summary ?? "",
       command: e.command,
+      once: e.grant === "once",
     };
     showRunStatus("等待确认权限…", run);
   } else {
@@ -3336,7 +3411,7 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
       bundle.context = null;
       resetStoreLabels();
     }
-    if (isFileTab(activeView) && !skillsPageOpen) void refreshStorePart(currentSessionId, activeView);
+    if (isFileTab(activeView) && !libraryOpen()) void refreshStorePart(currentSessionId, activeView);
   }
   syncTaskbarAttention();
   updateChrome();

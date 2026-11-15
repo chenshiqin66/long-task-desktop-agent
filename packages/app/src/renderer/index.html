@@ -40,6 +40,7 @@
         </div>
 
         <div class="sidebar-foot">
+          <button type="button" id="btn-mcp" class="btn btn-ghost" aria-pressed="false">连接</button>
           <button type="button" id="btn-skills" class="btn btn-ghost" aria-pressed="false">技能</button>
           <button type="button" id="btn-config" class="btn btn-ghost" aria-label="配置模型">模型</button>
         </div>
@@ -131,6 +132,53 @@
             </header>
             <p id="skills-note" class="skills-note" hidden></p>
             <div id="skills-list" class="skills-grid"></div>
+          </section>
+
+          <section id="mcp-page" class="skills-page" hidden aria-label="连接">
+            <header class="skills-page-head">
+              <h2>连接</h2>
+              <span id="mcp-count" class="skills-count">已配置(0)</span>
+              <button type="button" id="mcp-add" class="btn btn-primary skills-add">+ 添加</button>
+            </header>
+            <p id="mcp-note" class="skills-note" hidden></p>
+            <form id="mcp-form" class="mcp-form" hidden>
+              <label class="field">名称
+                <input id="mcp-name" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">传输
+                <select id="mcp-transport">
+                  <option value="stdio">本机命令</option>
+                  <option value="http">远程地址</option>
+                </select>
+              </label>
+              <div id="mcp-stdio-fields">
+                <label class="field">命令
+                  <input id="mcp-command" spellcheck="false" placeholder="npx" />
+                </label>
+                <label class="field">参数，每行一个
+                  <textarea id="mcp-args" rows="3" spellcheck="false"></textarea>
+                </label>
+                <label class="field">环境变量，每行 KEY=VALUE。密钥放这里，不要写进参数。
+                  <textarea id="mcp-env" rows="3" spellcheck="false" placeholder="AMAP_MAPS_API_KEY=你的Key"></textarea>
+                </label>
+                <label class="field">工作目录，可空
+                  <input id="mcp-cwd" spellcheck="false" />
+                </label>
+              </div>
+              <div id="mcp-http-fields" hidden>
+                <label class="field">Streamable HTTP 地址
+                  <input id="mcp-url" spellcheck="false" placeholder="https://mcp.amap.com/mcp?key=你的Key" />
+                </label>
+                <p id="mcp-url-hint" class="mcp-hint">高德把密钥放在 key 参数里。列表和报错会打码，配置文件里仍保留原文。</p>
+              </div>
+              <label class="mcp-check"><input id="mcp-enabled" type="checkbox" checked /> 启用</label>
+              <label class="mcp-check"><input id="mcp-auto" type="checkbox" /> 自动放行这个 server 的工具。写文件、命令和其他 server 仍要确认。查询类服务（例如高德）适合打开。</label>
+              <div class="config-actions">
+                <button type="button" id="mcp-cancel" class="btn btn-ghost">取消</button>
+                <button type="submit" class="btn btn-accent">保存</button>
+              </div>
+            </form>
+            <div id="mcp-list" class="skills-grid"></div>
           </section>
         </div>
 

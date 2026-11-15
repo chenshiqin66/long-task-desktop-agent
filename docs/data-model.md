@@ -1,6 +1,6 @@
 # 数据模型
 
-数据落在两处，互不写入。用户目录 `~/.long-task-agent/` 放配置和技能，跟着人走。工作区下的 `.agent/` 放会话，跟着项目走。换工作区不会串历史，密钥也不会进项目目录。
+数据落在两处，互不写入。用户目录 `~/.long-task-agent/` 放配置、技能和 MCP server，跟着人走。工作区下的 `.agent/` 放会话，跟着项目走。换工作区不会串历史，密钥也不会进项目目录。
 
 每个会话有三份日志，各回答一个问题：模型下次能看见什么（`messages.jsonl`）、发生过什么（`trace.jsonl`）、某次请求到底发了什么（`context.jsonl`）。三者用 id 互相指认。
 
@@ -9,6 +9,7 @@
 ```text
 ~/.long-task-agent/
   config.json                    模型配置、工作区列表、可选限额。POSIX 上目录 0700、文件 0600
+  mcp-servers.json               MCP server 清单和密钥，见 mcp.md
   skills/<name>/                 已安装的技能，见 skills.md
   skills/.skill-settings.json    停用的技能名单
 

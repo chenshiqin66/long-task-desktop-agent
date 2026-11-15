@@ -917,23 +917,26 @@ export function appendPermissionCard(
     tool: string;
     summary: string;
     command?: string;
+    once?: boolean;
     onAllow: () => void;
     onDeny: () => void;
     onStop: () => void;
   },
 ): HTMLElement {
   const card = el("div", { class: "permission-card", "data-request-id": opts.requestId });
-  const title = el("div", { class: "permission-title" }, "需要确认才能执行");
+  const title = el("div", { class: "permission-title" }, opts.once ? "需要确认这次 MCP 调用" : "需要确认才能执行");
   const hint = el(
     "p",
     { class: "permission-hint" },
-    "允许后，这一轮剩下的写操作和命令不再逐条询问。停止会打断这一轮，但不会中止已经在后台运行的子代理。认得出的删盘根、格式化磁盘命令始终不执行。",
+    opts.once
+      ? "只允许这一次调用。这一轮里的写操作、命令，以及其他 MCP 调用，仍会再问。停止会打断这一轮，但不会中止已经在后台运行的子代理。"
+      : "允许后，这一轮剩下的写操作和命令不再逐条询问。停止会打断这一轮，但不会中止已经在后台运行的子代理。认得出的删盘根、格式化磁盘命令始终不执行。",
   );
   const body = el("pre", { class: "permission-body" }, permissionCommandText(opts));
 
   const actions = el("div", { class: "permission-actions" });
-  const allowBtn = el("button", { type: "button", class: "perm-allow" }, "允许这一轮");
-  allowBtn.setAttribute("aria-label", "允许这一轮剩下的写操作");
+  const allowBtn = el("button", { type: "button", class: "perm-allow" }, opts.once ? "允许这一次" : "允许这一轮");
+  allowBtn.setAttribute("aria-label", opts.once ? "只允许这一次 MCP 调用" : "允许这一轮剩下的写操作");
   const denyBtn = el("button", { type: "button", class: "perm-deny" }, "拒绝");
   const stopBtn = el("button", { type: "button", class: "perm-stop" }, "停止");
   const dismiss = () => {

@@ -21,6 +21,7 @@ import {
 } from "../store/inboxStore.js";
 import { shouldRemindTasks, taskReminderText } from "../context/taskReminder.js";
 import { ToolHost } from "../tools/host.js";
+import type { McpToolSource } from "../mcp/source.js";
 import { classifyToolCall } from "../tools/policy.js";
 import {
   AGENT_TOOL_NAME,
@@ -197,7 +198,9 @@ export class AgentRuntime {
   private readonly store: SessionStore;
   private readonly traces: TraceStore;
   private readonly contexts: ContextStore;
-  private readonly tools: ToolHost;
+  private readonly baseTools: ToolHost;
+  private tools: ToolHost;
+  private readonly mcp?: McpToolSource;
   private readonly provider: LlmProvider;
   private readonly config: AgentConfig;
   private readonly systemPrompt: string;
@@ -258,6 +261,8 @@ export class AgentRuntime {
     asks?: AskGate;
     /** Installed-skill root. Tests pass a temporary directory. */
     skillsRoot?: string;
+    /** Shared MCP pool. Absent in tests that do not connect servers. */
+    mcp?: McpToolSource;
   }) {
     this.workspacePath = opts.workspacePath;
     this.config = opts.config;
@@ -267,7 +272,9 @@ export class AgentRuntime {
     this.traces = opts.traces ?? new TraceStore(opts.workspacePath);
     this.inbox = new InboxStore(opts.workspacePath);
     this.contexts = opts.contexts ?? new ContextStore(opts.workspacePath);
-    this.tools = opts.tools ?? new ToolHost();
+    this.baseTools = opts.tools ?? new ToolHost();
+    this.tools = this.baseTools;
+    this.mcp = opts.mcp;
     this.permissions = opts.permissions ?? new AutoAllowGate();
     this.asks = opts.asks ?? new ClosedAskGate();
     this.skillsRoot = opts.skillsRoot ?? defaultSkillsRoot();
@@ -853,8 +860,15 @@ export class AgentRuntime {
     }
   }
 
+  /** Freeze this turn's tool list. A later connect or disconnect shows up on the next turn. */
+  private pinTurnTools(): void {
+    const extra = this.mcp?.currentTools() ?? [];
+    this.tools = extra.length ? this.baseTools.merge(extra) : this.baseTools;
+  }
+
   /** One model loop. The caller has already appended the user message this request should answer. */
   private async runModelLoop(sessionId: string, turn_id: string): Promise<void> {
+    this.pinTurnTools();
     let steps = 0;
     while (true) {
         if (!this.abort) return;
@@ -1559,7 +1573,9 @@ export class AgentRuntime {
     if (tc.function.name === ASK_USER_TOOL_NAME) {
       return this.runAskUser(sessionId, turn_id, tc);
     }
-    const verdict = classifyToolCall(tc.function.name, tc.function.arguments);
+    const verdict = classifyToolCall(tc.function.name, tc.function.arguments, {
+      mcpAutoAllow: (toolName) => this.mcp?.autoAllows(toolName) ?? false,
+    });
 
     if (verdict.risk === "blocked") {
       return this.persistToolOutcome(sessionId, turn_id, tc, {
@@ -1568,7 +1584,8 @@ export class AgentRuntime {
       }, { blocked: true });
     }
 
-    if (verdict.risk === "write" && !this.turnWritesAllowed) {
+    const ask = verdict.risk === "write" && (verdict.grant === "once" || !this.turnWritesAllowed);
+    if (ask) {
       const request_id = newId("perm");
       this.emit({ type: "status", turn_id, phase: "awaiting_permission" });
       this.emit({
@@ -1580,6 +1597,7 @@ export class AgentRuntime {
         risk: "write",
         summary: verdict.summary,
         command: verdict.command,
+        ...(verdict.grant === "once" ? { grant: "once" as const } : {}),
       });
       const decision = await this.permissions.request({
         request_id,
@@ -1589,9 +1607,10 @@ export class AgentRuntime {
         risk: "write",
         summary: verdict.summary,
         command: verdict.command,
+        ...(verdict.grant === "once" ? { grant: "once" as const } : {}),
         signal: this.abort?.signal,
       });
-      if (decision === "allow" && !this.abort?.signal.aborted) {
+      if (decision === "allow" && !this.abort?.signal.aborted && verdict.grant !== "once") {
         this.turnWritesAllowed = true;
       }
       if (this.abort?.signal.aborted || decision === "deny") {
