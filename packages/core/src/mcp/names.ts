@@ -9,6 +9,47 @@ export function isMcpServerName(name: string): boolean {
   return name.length >= 1 && name.length <= MCP_SERVER_NAME_MAX && MCP_SERVER_NAME_RE.test(name);
 }
 
+const SLUG_SKIP = new Set(["index", "main", "dist", "src", "bin", "cmd", "npx", "npm", "pnpm", "yarn", "node"]);
+
+/** `https://mcp.amap.com/mcp` → `amap`. IPs keep every octet. */
+export function serverNameFromUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  let host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (!host) return null;
+  if (host.includes(":") || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return slugify(host);
+  if (host.startsWith("www.")) host = host.slice(4);
+  if (host.startsWith("mcp.")) host = host.slice(4);
+  return slugify(host.split(".")[0] ?? "");
+}
+
+/** Prefer the package or project directory over `npx` and `index.js`. */
+export function serverNameFromCommand(command: string, args: readonly string[]): string | null {
+  const parts: string[] = [];
+  for (const arg of [command, ...args]) {
+    if (!arg || arg.startsWith("-")) continue;
+    for (const piece of arg.replace(/^@/, "").split(/[/\\]/)) {
+      parts.push(piece.replace(/\.(cmd|exe|js|mjs|cjs)$/i, ""));
+    }
+  }
+  const picked = [...parts].reverse().find((part) => part && !SLUG_SKIP.has(part.toLowerCase()));
+  return slugify(picked ?? "");
+}
+
+function slugify(raw: string): string | null {
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MCP_SERVER_NAME_MAX)
+    .replace(/-+$/g, "");
+  return isMcpServerName(slug) ? slug : null;
+}
+
 /** `mcp__amap__maps_geo` → `amap / maps_geo`. */
 export function mcpToolLabel(toolName: string): string {
   if (!toolName.startsWith("mcp__")) return toolName;

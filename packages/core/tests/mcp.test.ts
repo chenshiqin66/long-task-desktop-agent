@@ -12,6 +12,7 @@ import { AgentRuntime } from "../src/runtime/agentRuntime.js";
 import type { PermissionGate, PermissionDecision } from "../src/runtime/permission.js";
 import { McpPool, type McpSnapshot } from "../src/mcp/pool.js";
 import { redactUrl } from "../src/mcp/redact.js";
+import { serverNameFromCommand, serverNameFromUrl } from "../src/mcp/names.js";
 import type { OpenedMcp } from "../src/mcp/connect.js";
 import type { McpServerConfig } from "../src/mcp/store.js";
 import { classifyToolCall } from "../src/tools/policy.js";
@@ -36,6 +37,14 @@ describe("MCP names, redaction, and permission", () => {
     const raw = "https://mcp.amap.com/mcp?key=supersecret";
     expect(redactUrl(raw)).toContain("key=***");
     expect(redactUrl(raw)).not.toContain("supersecret");
+  });
+
+  it("derives a connection id from the host or the command", () => {
+    expect(serverNameFromUrl("https://mcp.amap.com/mcp?key=supersecret")).toBe("amap");
+    expect(serverNameFromUrl("https://example.com/mcp")).toBe("example");
+    expect(serverNameFromUrl("http://127.0.0.1:9/mcp")).toBe("127-0-0-1");
+    expect(serverNameFromCommand("npx", ["-y", "@amap/amap-maps-mcp-server"])).toBe("amap-maps-mcp-server");
+    expect(serverNameFromCommand("node", ["D:/svc/notes-mcp/dist/index.js"])).toBe("notes-mcp");
   });
 
   it("asks once for an MCP tool and skips the card when that server auto-allows", () => {
@@ -73,7 +82,7 @@ describe("MCP pool", () => {
     expect(view.summary).not.toContain("supersecret");
     expect(view.summary).toContain("key=");
     const connected = await waitFor(pool, (snap) => snap.servers[0]?.state === "connected");
-    expect(connected.servers[0]?.tools).toEqual(["ping"]);
+    expect(connected.servers[0]?.tools).toEqual([{ name: "ping", description: "pong" }]);
     expect(pool.autoAllows("mcp__amap__ping")).toBe(true);
     const [tool] = pool.currentTools();
     const result = await tool!.execute({}, toolCtx());

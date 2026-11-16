@@ -169,7 +169,7 @@ export function capSubagentResult(summary: string, files: readonly string[]): st
 }
 
 export function exploreSystemPrompt(workspacePath: string, toolRounds: number): string {
-  return `You are an explore subagent. You only search and read. You do not write files, run a shell, or ask the user.
+  return `You are an explore subagent. You only search and read. You do not write files, run a shell, call a tool whose name starts with mcp__, or ask the user.
 The workspace is:
 ${workspacePath}
 
@@ -192,7 +192,7 @@ You may create and edit files only under this workspace-relative directory:
 ${outputDir}
 
 You have ${toolRounds} tool rounds. One response that calls tools is one round.
-Use write_file and str_replace for those files. Do not use a shell. Do not ask the user. Do not write anywhere else.
+Use write_file and str_replace for those files. Do not use a shell. Do not call a tool whose name starts with mcp__. Do not ask the user. Do not write anywhere else.
 Read only the paths the task names. Call keyword_search with path and every term in one call.
 If the task tells you to fix or extend something without the fault, the behavior to produce, and how the parent will check it, do not invent a broader change. Say what was missing.
 The parent agent cannot see your tool results. Your last message is a short receipt: the paths you wrote, roughly how long each file is, the section titles, and anything you did not finish.
@@ -216,9 +216,9 @@ export const agentTool: Tool = {
       "If the user asks you to run a command, make it your first tool call, alone. If it fails, hand its output to explore to locate the file and line number; do not diagnose it yourself.",
       "Write the task in the language the user is writing in. The subagent reads the task, not this conversation.",
       "You may call subagent more than once in the same response. Those subagents run at the same time. Their output_dir values must not overlap or contain one another.",
-      "Do not use subagent to ask the user a question. Do not use it to run a shell command. Do not put a tool allowlist in the task: explore and worker already fix the tools.",
+      "Do not use subagent to ask the user a question. Do not use it to run a shell command or any tool whose name starts with mcp__. Do not put a tool allowlist in the task: explore and worker already fix the tools, and naming an MCP tool there does not give them that tool.",
       "Subagents can list, get, claim, and complete tasks on this session's list. They cannot create, update, or delete tasks, and they cannot message each other.",
-      "To assign a listed task, pass task_id. The runtime claims it as that subagent before the run. Do not claim it yourself first. If it is blocked or already claimed, the subagent does not start. Once work is on the task list, assign each investigation step to explore and each writing step to worker instead of doing it in the parent.",
+      "To assign a listed task, pass task_id. The runtime claims it as that subagent before the run. Do not claim it yourself first. If it is blocked or already claimed, the subagent does not start. Once work is on the task list, assign each investigation step to explore and each writing step to worker instead of doing it in the parent. A shell command or any mcp__ tool stays in the parent: claim that step yourself and call the tool. If the worker needs those facts, put them in the task. Do not tell the subagent to call MCP.",
       "delivery defaults to joined: this turn waits, and the tool result is the receipt. Pass deferred when the user says this turn need not wait for the result, or asks only for the agent id and output_dir. Deferred returns an acceptance at once; it names the agent id and output_dir, so use those instead of reading the directory or .agent/ to find them. The receipt arrives later as a task-notification, including after this turn ends. Do not edit files or use a deferred explore as evidence until that notification arrives. A deferred worker's output_dir stays locked until then.",
     ].join(" "),
     parameters: {

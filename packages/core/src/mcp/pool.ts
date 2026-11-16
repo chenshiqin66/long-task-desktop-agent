@@ -19,14 +19,20 @@ export type { McpToolSource } from "./source.js";
 
 export type McpOpener = (config: McpServerConfig, signal?: AbortSignal) => Promise<OpenedMcp>;
 
+export interface McpToolView {
+  name: string;
+  description?: string;
+}
+
 export interface McpServerView {
   name: string;
+  label: string;
   enabled: boolean;
   autoAllow: boolean;
   transport: "stdio" | "http";
   summary: string;
   state: "disabled" | "connecting" | "connected" | "error";
-  tools: string[];
+  tools: McpToolView[];
   error?: string;
   note?: string;
   command?: string;
@@ -307,12 +313,13 @@ export class McpPool implements McpToolSource {
     const state = slot?.state ?? (config.enabled ? "connecting" : "disabled");
     const view: McpServerView = {
       name: config.name,
+      label: config.label,
       enabled: config.enabled,
       autoAllow: config.autoAllow,
       transport: config.transport,
       summary: summaryOf(config),
       state,
-      tools: slot ? [...slot.exposed.values()] : [],
+      tools: this.toolViews(slot),
     };
     if (slot?.error) view.error = slot.error;
     if (slot?.note) view.note = slot.note;
@@ -323,6 +330,15 @@ export class McpPool implements McpToolSource {
       if (config.cwd) view.cwd = config.cwd;
     }
     return view;
+  }
+
+  private toolViews(slot: Slot | undefined): McpToolView[] {
+    if (!slot) return [];
+    const described = new Map(slot.opened?.tools.map((tool) => [tool.name, tool.description]) ?? []);
+    return [...slot.exposed.values()].map((name) => {
+      const description = described.get(name)?.replace(/\s+/g, " ").trim();
+      return description ? { name, description } : { name };
+    });
   }
 
   private asTool(

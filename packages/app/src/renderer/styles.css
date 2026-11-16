@@ -3178,6 +3178,19 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   color: inherit;
 }
 
+#mcp-id-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-id-value {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
 .mcp-hint,
 .mcp-check {
   font-family: var(--font-ui);
@@ -3191,25 +3204,49 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   align-items: flex-start;
 }
 
-.mcp-card {
+.mcp-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 14px;
+  gap: 8px;
+}
+
+.mcp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 12px;
   background: #fff;
 }
 
-.mcp-card.is-off {
+.mcp-row.is-off {
   background: color-mix(in srgb, var(--paper) 78%, #fff);
 }
 
-.mcp-card-head {
+.mcp-row-main {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.mcp-row-title {
+  display: flex;
   align-items: baseline;
+  gap: 8px;
+  min-width: 9rem;
+}
+
+.mcp-label {
+  font-family: var(--font-ui);
+  font-weight: 650;
+}
+
+.mcp-id {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
 }
 
 .mcp-state.is-ok {
@@ -3222,7 +3259,6 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .mcp-summary,
-.mcp-tools,
 .mcp-note-line,
 .mcp-error,
 .mcp-state {
@@ -3233,18 +3269,52 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow-wrap: anywhere;
 }
 
-.mcp-summary,
-.mcp-tools,
+.mcp-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-muted);
+}
+
 .mcp-note-line {
   color: var(--ink-muted);
+}
+
+.mcp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-tools li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.mcp-tool-name {
+  flex: 0 0 16rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.mcp-tool-desc {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-muted);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.45;
 }
 
 .mcp-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  margin-top: 4px;
+  margin-left: auto;
 }
 
 .mcp-actions .skill-switch {
@@ -3266,14 +3336,25 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   left: 18px;
 }
 
-.mcp-actions .mcp-text,
-.mcp-actions .skill-card-remove {
-  border: none;
-  background: transparent;
-  padding: 0;
+.mcp-btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 5px 10px;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
+  color: var(--ink);
   cursor: pointer;
+}
+
+.mcp-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
+  background: var(--teal-soft);
+}
+
+.mcp-btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
 }
 
 .mcp-actions button:disabled {
