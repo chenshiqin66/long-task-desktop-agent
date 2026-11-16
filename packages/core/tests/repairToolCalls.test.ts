@@ -87,7 +87,6 @@ describe("repairToolCallPairs", () => {
     });
     const { messages } = assembleContext({
       systemPrompt: "sys",
-      toolDefinitions: [],
       history,
       currentUser,
       contextCharLimit: 50_000,

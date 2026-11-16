@@ -272,7 +272,6 @@ describe("read_skill tool and assemble", () => {
     };
     const assembled = assembleContext({
       systemPrompt: "sys",
-      toolDefinitions: [],
       history: [...history, currentTool],
       currentUser: current,
       contextCharLimit: 100_000,
@@ -281,7 +280,8 @@ describe("read_skill tool and assemble", () => {
     });
     const system = String(assembled.messages[0]?.content);
     expect(system).toContain("# Installed skills");
-    expect(system.indexOf("# Installed skills")).toBeLessThan(system.indexOf("# Tools"));
+    expect(system.indexOf("# Installed skills")).toBeLessThan(system.indexOf("# Skill body: demo"));
+    expect(system).not.toContain("# Tools");
     expect(system).toContain("# Skill body: demo");
     expect(system).toContain("Skill directory: C:\\skills\\demo");
     expect(system).toContain("Do the thing.");

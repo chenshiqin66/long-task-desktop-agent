@@ -197,7 +197,6 @@ export class ExplainRuntime {
       if (!currentUser) return;
       const assembled = assembleContext({
         systemPrompt: EXPLAIN_SYSTEM_PROMPT,
-        toolDefinitions: this.tools.listDefinitions(),
         history: history.slice(0, -1),
         currentUser,
         contextCharLimit: this.config.contextCharLimit,

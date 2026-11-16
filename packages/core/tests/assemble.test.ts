@@ -1,14 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { assembleContext } from "../src/context/assemble.js";
 import type { Message, ToolCall } from "../src/types.js";
-import type { ToolDefinition } from "../src/tools/types.js";
-
-const tools: ToolDefinition[] = [
-  { name: "bash", description: "run", parameters: { type: "object", properties: {} } },
-];
 
 describe("assembleContext", () => {
-  it("orders system (with tools), history, current user", () => {
+  it("orders system, history, current user", () => {
     const history: Message[] = [
       {
         id: "1",
@@ -37,14 +32,13 @@ describe("assembleContext", () => {
     };
     const assembled = assembleContext({
       systemPrompt: "You are a coding agent.",
-      toolDefinitions: tools,
       history,
       currentUser: current,
       contextCharLimit: 100_000,
     });
     expect(assembled.messages[0].role).toBe("system");
-    expect(assembled.messages[0].content).toContain("You are a coding agent.");
-    expect(assembled.messages[0].content).toContain("bash");
+    expect(assembled.messages[0].content).toBe("You are a coding agent.");
+    expect(assembled.messages[0].content).not.toContain("# Tools");
     expect(assembled.messages.at(-1)?.content).toBe("now");
     expect(assembled.messages.some((m) => m.content === "old")).toBe(true);
   });
@@ -82,7 +76,6 @@ describe("assembleContext", () => {
     };
     const assembled = assembleContext({
       systemPrompt: "sys",
-      toolDefinitions: tools,
       history: [assistant],
       currentUser: tool,
       contextCharLimit: 100_000,
@@ -125,7 +118,6 @@ describe("assembleContext", () => {
     };
     const sentFailed = assembleContext({
       systemPrompt: "sys",
-      toolDefinitions: [],
       history: [assistant],
       currentUser: failed,
       contextCharLimit: 100_000,
@@ -134,7 +126,6 @@ describe("assembleContext", () => {
 
     const sentOpen = assembleContext({
       systemPrompt: "sys",
-      toolDefinitions: [],
       history: [assistant],
       currentUser: {
         id: "u",
@@ -166,7 +157,6 @@ describe("assembleContext", () => {
     };
     const assembled = assembleContext({
       systemPrompt: "sys",
-      toolDefinitions: [],
       history: [
         assistant,
         {

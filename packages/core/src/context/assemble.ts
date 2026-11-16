@@ -1,5 +1,4 @@
 import type { ImageAttachment, Message, ToolCall } from "../types.js";
-import type { ToolDefinition } from "../tools/types.js";
 import {
   readSkillHistoryStub,
   renderInstalledSkills,
@@ -41,7 +40,6 @@ export interface AssembledContext {
 
 export function assembleContext(opts: {
   systemPrompt: string;
-  toolDefinitions: ToolDefinition[];
   history: Message[];
   currentUser: Message;
   contextCharLimit: number;
@@ -50,19 +48,13 @@ export function assembleContext(opts: {
   /** Attached for this request only. Not written into the session transcript. */
   extraSystem?: string;
 }): AssembledContext {
-  const toolsBlock = opts.toolDefinitions
-    .map(
-      (t) =>
-        `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`,
-    )
-    .join("\n");
   const preface = [
     opts.systemPrompt,
     renderInstalledSkills(opts.installedSkills ?? []),
     renderSkillBodies(opts.skillBodies ?? []),
     opts.extraSystem ?? "",
   ].filter((part) => part.length > 0);
-  const systemContent = `${preface.join("\n\n")}\n\n# Tools\n${toolsBlock}`;
+  const systemContent = preface.join("\n\n");
   const budget = Math.max(
     1000,
     opts.contextCharLimit - systemContent.length - opts.currentUser.content.length - 100,

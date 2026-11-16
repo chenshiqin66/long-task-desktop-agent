@@ -43,8 +43,6 @@
 
 拆成三份，是因为它们的用途不同：`messages` 是模型的工作记忆，发出前会在副本上压缩和省略；`trace` 记录动作本身；`context` 存下压缩之后实际发出的样子，压缩出了问题能对回去。三份文件本身都只追加。
 
-<!-- 待作者确认：拆三份的理由是推测，请按你的原意改。 -->
-
 ### `messages.jsonl`
 
 一行一条 `Message`：`id`、`session_id`、`turn_id`、`role`、`content`、`created_at`，以及按需出现的 `images`、`name`、`tool_call_id`、`tool_calls`、`is_error`、`trace_id`、`interrupted`。
@@ -73,7 +71,7 @@
 - `{type: "tools", sha256, tools}`：一份工具定义，同一个哈希只写一次。
 - `{type: "request", id, turn_id, model, tools_sha256, messages}`：一次请求。每条消息记角色、正文、`name`、`tool_call_id`、`tool_calls`；图片只记路径和字节数，不存像素。
 
-system 正文里的 `# Tools` 说明每行都会出现，去重只省掉了 API `tools` 参数那一份。
+工具定义不写进 system 正文。同一份定义按 sha256 只在 `{type: "tools"}` 行写一次，请求行用 `tools_sha256` 指向它。
 
 ## 标识与关系
 

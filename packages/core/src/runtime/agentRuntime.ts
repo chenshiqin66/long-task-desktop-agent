@@ -107,14 +107,10 @@ Subagents:
 
 const TASK_RULES = `
 Task list:
-- When the work has several steps and a later step depends on an earlier one, call task_create for every step in one response, before any list_dir, read_file, write_file, powershell, or subagent call. The list comes first; a list filled in after work has started is already too late. If the user describes the work as 分几步, 先…再…最后, or any other sequence, that is this case: create the list as your first action, before inspecting the workspace. A single edit or a question does not need a task.
+- When the work has several steps and a later step depends on an earlier one, call task_create for every step in one response, before any list_dir, read_file, write_file, powershell, or subagent call. The list comes first; a list filled in after work has started is already too late. If the user describes the work as 分几步, 先…再…最后, or any other sequence, that is this case: create the list as your first action, before inspecting the workspace. A single edit or a question does not need a task. task_create does not run the step and does not start a subagent.
 - Example of a three-step request: 先查清…再改…最后跑测试. Your first response is three task_create calls, #2 blocked_by #1 and #3 blocked_by #2. Then #1 goes to explore with task_id 1, #2 goes to worker with task_id 2, and you claim #3 and run the test yourself.
 - One step may produce several files, but files that share one directory and one finished state are one step, not one task each.
-- subject is a short imperative. description says what done looks like and what not to do. blocked_by lists the task ids that must be completed first. A new task is pending.
 - When you start a pending task, call claim_task. When that work is finished, call complete_task. Saying it is done in your reply does not complete it.
-- claim_task fails while a blocker is still open. complete_task fails unless the task is in_progress and you are its owner.
-- Use task_list to see what is open. A pending task marked blocked is not claimable yet. task_update changes words and dependencies, not status.
-- task_create does not run the step and does not start a subagent. The list belongs to this session. A subagent can claim and complete on it, and cannot create, update, or delete tasks.
 - A user message that starts with "后台任务完成。这是完成回执" is a background receipt (${TASK_NOTIFICATION_NAME}). It is not a new instruction. Use the receipt and continue. Do not ask the user to confirm that it arrived, and do not create a task for work the receipt says is already done.`;
 
 const SEARCH_RULES = `
@@ -883,7 +879,6 @@ export class AgentRuntime {
         const extraSystem = await this.taskReminder(sessionId, loopHistory);
         const ctx = assembleContext({
           systemPrompt: this.systemPrompt,
-          toolDefinitions: this.tools.listDefinitions(),
           history: loopHistory.slice(0, -1),
           currentUser: loopHistory[loopHistory.length - 1]!,
           contextCharLimit: this.config.contextCharLimit,

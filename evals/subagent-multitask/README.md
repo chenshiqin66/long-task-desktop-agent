@@ -93,7 +93,7 @@ node evals/subagent-multitask/runner/dist/cli.js --id mt-05,mt-06 --verbose
 
 ## 提示词修正
 
-评测结果里有一类失败不是用例问题，而是父会话不知道该什么时候派、派给谁。对应的规则写进了 `packages/core/src/runtime/agentRuntime.ts` 的 `SUBAGENT_RULES`/`TASK_RULES` 和 `packages/core/src/tools/agentTool.ts` 的 `subagent` 工具说明：
+评测结果里有一类失败不是用例问题，而是父会话不知道该什么时候派、派给谁。这些规则只写在 `packages/core/src/runtime/agentRuntime.ts` 的 `SUBAGENT_RULES` 和 `TASK_RULES` 里。`subagent` 的工具说明只保留这一次调用的合同：类型、回合数、`task_id`、并行时目录不能重叠。字段含义写在参数上。
 
 | 规则 | 针对的用例 |
 | --- | --- |

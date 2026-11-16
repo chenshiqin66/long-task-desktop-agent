@@ -29,17 +29,20 @@ flowchart LR
     sub["子代理循环<br/>subagentRun.ts"]
     explain["ExplainRuntime<br/>解释侧栏"]
     tools["ToolHost + policy"]
+    mcp["McpPool<br/>进程内一份"]
     stores["Session / Trace / Context<br/>Task / Inbox 存储"]
     provider["OpenAICompatibleProvider"]
   end
   disk["{workspace}/.agent/"]
-  home["~/.long-task-agent/<br/>config.json、skills/"]
+  home["~/.long-task-agent/<br/>config.json、skills/、mcp-servers.json"]
   llm["OpenAI 兼容接口<br/>+ DeepSeek 搜索接口"]
 
   renderer <-->|"invoke / agent:event"| preload
   preload <-->|"ipcMain.handle"| main
   main --> pool["SessionRuntimePool<br/>最多 5 个"]
   pool --> runtime
+  main --> mcp
+  runtime --> mcp
   main --> explain
   main --> home
   runtime --> sub
@@ -64,14 +67,13 @@ flowchart LR
 - **一个 runtime 对象同时只跑一轮。** 正在跑时再向同一条会话发送，得到 `busy`。续跑轮例外：第一条发送先暂存，排在回执后面，第二条才是 `busy`。不同会话各用各的对象，同时最多 5 个。
 - **磁盘上的对话只追加，已有的行不改。** 压缩和省略只作用在这一次请求的副本上。悬空的工具调用有两道补齐：一轮开始、续跑和停止时，往 `messages.jsonl` 追加合成的 tool 消息；组请求时，再在副本上补一次。
 - **一轮内不换模型配置。** 一轮开始时定下 Base URL、模型和密钥，这一轮里后面的每次模型调用都用这一份。
+- **MCP 连接池是进程内一份。** 五个 runtime 共用。工具定义在每轮开始时拍进这一轮；子代理和解释侧栏不拿这些工具。见 [MCP](mcp.md)。
 
 ## Runtime 的生命周期
 
 每个 `AgentRuntime` 在构造时绑定一个工作区。会话目录、沙箱和 shell 的工作目录都随这个对象定下来。同一工作区可以同时有多个对象，各管一条正在执行的会话；换工作区不再拆掉其他会话的对象。
 
 在「配置模型」对话框（左下角的「模型」按钮）里保存，只重写 `~/.long-task-agent/config.json`，不碰正在跑的 runtime：权限确认和「等你回答」继续挂在原对象上。下一次点发送时，主进程比较 9 个字段：Base URL、模型、密钥，加 6 项限额。有变化、且这一条既没有轮次在跑、也没有后台子代理，才丢掉旧对象，按新配置再建。模型和供应商是建对象时定的，所以生效方式是换对象，不是在跑着的对象上改字段。
-
-<!-- 待作者确认：选择「换对象」而不是热更新字段，是为了让一轮内的配置天然不可变、不需要加锁。 -->
 
 解释侧栏用另一个对象 `ExplainRuntime`，全局一份，按「工作区 + 配置」复用。它和主会话可以同时跑，见 [解释侧栏](#解释侧栏)。
 
@@ -94,9 +96,7 @@ flowchart LR
 
 `assembleContext`（`packages/core/src/context/assemble.ts`）组出这一次请求。主会话、子代理、解释侧栏三套循环共用它。
 
-**system 的顺序：** 系统提示 → 已安装技能目录和技能使用规则 → 这一轮附上的技能正文 → 任务提醒 → `# Tools` 工具说明。工具定义同时作为 API 的 `tools` 参数发送，所以每次请求里有两份。
-
-<!-- 待作者确认：system 里重复一份工具说明是有意的吗？若是为了兼容不认 tools 参数的网关，值得写一句；否则可以去掉，省下每次请求的字符预算。 -->
+**system 的顺序：** 系统提示 → 已安装技能目录和技能使用规则 → 这一轮附上的技能正文 → 任务提醒。工具的名字、说明和参数只放在请求体的 `tools` 数组里，不写入 system 正文。
 
 **历史的处理，全部只在发出去的副本上做，按这个顺序：**
 
@@ -108,11 +108,9 @@ flowchart LR
 | 字数上限 | 预算 = `contextCharLimit` − system 长度 − 最后一条消息长度 − 100，至少 1000。只数各条消息的正文，不数 `tool_calls` 里的参数。先缩摘要，再从最早的消息往后缩；最后一条消息从不截断 |
 | 补齐 | 没有结果的工具调用补一条合成的 tool 消息，避免请求因调用和结果不成对而失败。补出来的消息不计入预算 |
 
-所以 `contextCharLimit` 是历史正文的预算，不是整个请求的硬上限：system、最后一条消息、工具参数和补齐出来的消息都可能让实际请求超过它。
+所以 `contextCharLimit` 是历史正文的预算，不是整个请求的硬上限：system、最后一条消息、`tools` 数组、工具参数和补齐出来的消息都可能让实际请求超过它。`tools` 数组不从这笔预算里扣。
 
 摘要是机械截取，不另调模型。这样压缩不花钱、不增加延迟、结果可预测，代价是摘要质量一般。
-
-<!-- 待作者确认：选机械摘要而不是 LLM 摘要的理由，上面是推测。 -->
 
 **图片：** 消息里只记图片的相对路径。组请求时，只有最后一条用户消息上的图片会变成像素，以 base64 data URL 发出。
 

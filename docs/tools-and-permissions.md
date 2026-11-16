@@ -14,8 +14,6 @@
 
 允许一次，这一轮后面的写操作、命令、`run_skill_script` 和 `worker` 子代理都不再询问。MCP 调用不在这张通行证里，见 [MCP](mcp.md)。「一轮」指一次发送带起的整段模型循环；完成通知开出的续跑轮重新计。拒绝只否定这一次调用：写成一条 `Cancelled: user denied permission` 工具结果，模型可以换个做法继续。`blocked` 不受「允许这一轮」影响。`ask_user` 不经过许可门，它本身就是停下来等人。
 
-<!-- 待作者确认：为什么按轮放行，而不是逐条确认？推测：长任务里逐条确认会把人钉在屏幕前；按轮放行是打扰和控制之间的折中，「停止」按钮兜底。 -->
-
 ## 工具一览
 
 内置 19 个工具，都在 `createBuiltinTools()`（`packages/core/src/tools/host.ts`）里注册。shell 工具的名字随平台变：Windows 上叫 `powershell`，启动 `powershell.exe`；其他系统叫 `bash`，用 `bash -lc`。

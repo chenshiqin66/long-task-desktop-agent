@@ -112,7 +112,6 @@ export async function runIsolatedSubagent(opts: {
 
       const ctx = assembleContext({
         systemPrompt,
-        toolDefinitions: opts.tools.listDefinitions(),
         history: messages.slice(0, -1),
         currentUser: messages[messages.length - 1]!,
         contextCharLimit: opts.config.contextCharLimit,
