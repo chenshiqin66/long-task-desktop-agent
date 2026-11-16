@@ -145,8 +145,8 @@
             </header>
             <p id="mcp-note" class="skills-note" hidden></p>
             <form id="mcp-form" class="mcp-form" hidden>
-              <label class="field">名称
-                <input id="mcp-name" autocomplete="off" spellcheck="false" />
+              <label class="field">显示名
+                <input id="mcp-label" autocomplete="off" />
               </label>
               <label class="field">传输
                 <select id="mcp-transport">
@@ -162,7 +162,7 @@
                   <textarea id="mcp-args" rows="3" spellcheck="false"></textarea>
                 </label>
                 <label class="field">环境变量，每行 KEY=VALUE。密钥放这里，不要写进参数。
-                  <textarea id="mcp-env" rows="3" spellcheck="false" placeholder="AMAP_MAPS_API_KEY=你的Key"></textarea>
+                  <textarea id="mcp-env" rows="3" spellcheck="false" placeholder="API_KEY=你的密钥"></textarea>
                 </label>
                 <label class="field">工作目录，可空
                   <input id="mcp-cwd" spellcheck="false" />
@@ -170,18 +170,28 @@
               </div>
               <div id="mcp-http-fields" hidden>
                 <label class="field">Streamable HTTP 地址
-                  <input id="mcp-url" spellcheck="false" placeholder="https://mcp.amap.com/mcp?key=你的Key" />
+                  <input id="mcp-url" spellcheck="false" />
                 </label>
-                <p id="mcp-url-hint" class="mcp-hint">高德把密钥放在 key 参数里。列表和报错会打码，配置文件里仍保留原文。</p>
+                <p id="mcp-url-hint" class="mcp-hint">查询参数里的 key、token、secret、password 会在列表和报错里打码，配置文件仍保留原文。</p>
+              </div>
+              <div id="mcp-id-block" hidden>
+                <div id="mcp-id-derived" class="field">
+                  <span>连接标识</span>
+                  <p id="mcp-slug" class="mcp-id-value"></p>
+                </div>
+                <label class="field" id="mcp-name-field" hidden>连接标识
+                  <input id="mcp-name" autocomplete="off" spellcheck="false" />
+                </label>
+                <p id="mcp-id-hint" class="mcp-hint"></p>
               </div>
               <label class="mcp-check"><input id="mcp-enabled" type="checkbox" checked /> 启用</label>
-              <label class="mcp-check"><input id="mcp-auto" type="checkbox" /> 自动放行这个 server 的工具。写文件、命令和其他 server 仍要确认。查询类服务（例如高德）适合打开。</label>
+              <label class="mcp-check"><input id="mcp-auto" type="checkbox" /> 自动放行这个 server 的工具。写文件、命令和其他 server 仍要确认。只读查询适合打开。</label>
               <div class="config-actions">
                 <button type="button" id="mcp-cancel" class="btn btn-ghost">取消</button>
                 <button type="submit" class="btn btn-accent">保存</button>
               </div>
             </form>
-            <div id="mcp-list" class="skills-grid"></div>
+            <div id="mcp-list" class="mcp-list"></div>
           </section>
         </div>
 

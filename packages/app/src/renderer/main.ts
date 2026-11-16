@@ -147,12 +147,13 @@ declare global {
       listMcpServers(): Promise<{
         servers: Array<{
           name: string;
+          label: string;
           enabled: boolean;
           autoAllow: boolean;
           transport: "stdio" | "http";
           summary: string;
           state: "disabled" | "connecting" | "connected" | "error";
-          tools: string[];
+          tools: Array<{ name: string; description?: string }>;
           error?: string;
           note?: string;
           command?: string;

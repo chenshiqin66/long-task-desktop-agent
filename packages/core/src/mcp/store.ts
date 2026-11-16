@@ -6,6 +6,8 @@ import { isMcpServerName } from "./names.js";
 
 export interface McpServerInput {
   name: string;
+  /** Human title. Not part of the tool name. */
+  label?: string;
   enabled?: boolean;
   autoAllow?: boolean;
   transport: "stdio" | "http";
@@ -18,6 +20,7 @@ export interface McpServerInput {
 
 export interface McpStdioServer {
   name: string;
+  label: string;
   enabled: boolean;
   autoAllow: boolean;
   transport: "stdio";
@@ -29,6 +32,7 @@ export interface McpStdioServer {
 
 export interface McpHttpServer {
   name: string;
+  label: string;
   enabled: boolean;
   autoAllow: boolean;
   transport: "http";
@@ -37,6 +41,7 @@ export interface McpHttpServer {
 
 export type McpServerConfig = McpStdioServer | McpHttpServer;
 
+const LABEL_MAX = 40;
 const ARG_MAX = 32;
 const ARG_LEN = 2000;
 const ENV_MAX = 32;
@@ -60,13 +65,24 @@ export function normalizeMcpServer(input: McpServerInput, previous?: McpServerCo
     throw new Error("名称须是 1–32 位小写字母、数字和单个连字符");
   }
   if (previous && previous.name !== name) throw new Error("不能改服务器名称");
+  const label = displayLabel(input, name, previous);
   const enabled = typeof input.enabled === "boolean" ? input.enabled : (previous?.enabled ?? true);
   const autoAllow = typeof input.autoAllow === "boolean" ? input.autoAllow : (previous?.autoAllow ?? false);
-  if (input.transport === "http") return { name, enabled, autoAllow, transport: "http", url: httpUrl(input, previous) };
+  if (input.transport === "http") return { name, label, enabled, autoAllow, transport: "http", url: httpUrl(input, previous) };
   if (input.transport === "stdio") {
-    return { name, enabled, autoAllow, transport: "stdio", ...stdioFields(input, previous) };
+    return { name, label, enabled, autoAllow, transport: "stdio", ...stdioFields(input, previous) };
   }
   throw new Error("传输只能是本机命令或远程地址");
+}
+
+function displayLabel(input: McpServerInput, name: string, previous?: McpServerConfig): string {
+  if (typeof input.label !== "string") return previous?.label ?? name;
+  const label = input.label.trim();
+  if (!label) return name;
+  if (label.length > LABEL_MAX || label.includes("\0") || /[\r\n]/.test(label)) {
+    throw new Error("显示名最长 40 字，不能换行");
+  }
+  return label;
 }
 
 function httpUrl(input: McpServerInput, previous?: McpServerConfig): string {
