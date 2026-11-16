@@ -10,6 +10,8 @@ export interface StoredConfig {
   workspaceCollapsed?: string[];
   /** Workspace the agent runs in. Restored on launch. */
   lastWorkspacePath?: string;
+  /** Directories pinned in the workbench. Opening one shows the folder, and does not add a workspace. */
+  favoriteFolders?: string[];
   bashTimeoutMs?: number;
   maxSteps?: number;
   contextCharLimit?: number;

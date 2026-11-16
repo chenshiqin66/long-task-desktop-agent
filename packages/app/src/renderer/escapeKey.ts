@@ -1,5 +1,5 @@
 /** What the window-level Esc handler does. */
-export type EscapeAction = "none" | "close-find" | "close-tasks" | "stop";
+export type EscapeAction = "none" | "close-workbench" | "close-find" | "close-tasks" | "stop";
 
 export interface EscapeState {
   /** Another handler already used this Esc: the rename box, the skill menu, the context menu. */
@@ -8,6 +8,8 @@ export interface EscapeState {
   composing: boolean;
   /** A modal dialog closes itself on Esc. */
   dialogOpen: boolean;
+  /** The workbench sheet covers the window. */
+  workbenchOpen: boolean;
   /** The main find bar or the explain pane's find bar. */
   findOpen: boolean;
   taskPanelOpen: boolean;
@@ -18,6 +20,7 @@ export interface EscapeState {
 /** Esc closes the nearest open thing. Stopping the run is the last resort, never a side effect. */
 export function escapeAction(state: EscapeState): EscapeAction {
   if (state.handled || state.composing || state.dialogOpen) return "none";
+  if (state.workbenchOpen) return "close-workbench";
   if (state.findOpen) return "close-find";
   if (state.taskPanelOpen) return "close-tasks";
   return state.viewingRun ? "stop" : "none";

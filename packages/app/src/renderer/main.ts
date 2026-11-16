@@ -22,6 +22,7 @@ import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
 import { attachMcpLibrary } from "./mcp.js";
 import { escapeAction } from "./escapeKey.js";
+import { mountFavoriteFolders, mountWorkbench } from "./workbench.js";
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { mountQuestionNav } from "./questionNav.js";
 
@@ -194,6 +195,9 @@ declare global {
       saveConfig(cfg: any): Promise<void>;
       localTargetsExist(targets: string[]): Promise<Record<string, boolean>>;
       openExternal(target: string): Promise<{ ok: boolean; error?: string }>;
+      addFavoriteFolder(): Promise<string[] | null>;
+      removeFavoriteFolder(path: string): Promise<string[]>;
+      reorderFavoriteFolders(paths: string[]): Promise<string[]>;
       popupAppMenu(index: number, x: number, y: number): Promise<void>;
       setTaskbarPrompt(open: boolean, inView: boolean): Promise<void>;
       onEvent(cb: (e: any) => void): () => void;
@@ -237,6 +241,24 @@ const skillsPage = document.getElementById("skills-page") as HTMLElement;
 const btnSkills = document.getElementById("btn-skills") as HTMLButtonElement;
 const mcpPage = document.getElementById("mcp-page") as HTMLElement;
 const btnMcp = document.getElementById("btn-mcp") as HTMLButtonElement;
+const favoriteFolders = mountFavoriteFolders(
+  document.getElementById("workbench-view") as HTMLElement,
+  document.getElementById("folder-add") as HTMLButtonElement,
+  document.getElementById("folder-note") as HTMLElement,
+);
+const workbench = mountWorkbench(
+  document.getElementById("btn-workbench") as HTMLButtonElement,
+  document.getElementById("workbench-sheet") as HTMLElement,
+  document.getElementById("workbench-close") as HTMLButtonElement,
+  () => {
+    void favoriteFolders.reload().catch((err: unknown) => {
+      const note = document.getElementById("folder-note");
+      if (!note) return;
+      note.hidden = false;
+      note.textContent = err instanceof Error ? err.message : "读不到常用文件夹";
+    });
+  },
+);
 const skillMenu = document.getElementById("skill-menu") as HTMLElement;
 const pageCtxMenu = document.getElementById("page-ctx-menu")!;
 const pageCtxCopy = pageCtxMenu.querySelector('[data-ctx="copy"]') as HTMLButtonElement;
@@ -2938,6 +2960,7 @@ messagesEl.addEventListener("click", (ev) => {
 
 window.addEventListener("keydown", (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f") {
+    if (workbench.isOpen()) return;
     ev.preventDefault();
     findScope = explainApi?.focusInside() ? "explain" : "main";
     openFindBar();
@@ -2948,13 +2971,16 @@ window.addEventListener("keydown", (ev) => {
     handled: ev.defaultPrevented,
     composing: ev.isComposing,
     dialogOpen: configDialog.open,
+    workbenchOpen: workbench.isOpen(),
     findOpen: !findBar.hidden || Boolean(explainApi && !explainApi.findBar.hidden),
     taskPanelOpen: taskPanelOpen && !taskPanelEl.hidden,
     viewingRun: Boolean(pageRun()?.gate.isRunning),
   });
   if (action === "none") return;
   ev.preventDefault();
-  if (action === "close-find") {
+  if (action === "close-workbench") {
+    workbench.close();
+  } else if (action === "close-find") {
     closeFindBar();
   } else if (action === "close-tasks") {
     taskPanelOpen = false;

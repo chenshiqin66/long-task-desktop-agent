@@ -107,6 +107,9 @@ contextBridge.exposeInMainWorld("agent", {
   saveConfig: (cfg: unknown) => ipcRenderer.invoke("agent:saveConfig", cfg),
   localTargetsExist: (targets: string[]) => ipcRenderer.invoke("agent:localTargetsExist", targets),
   openExternal: (target: string) => ipcRenderer.invoke("agent:openExternal", target),
+  addFavoriteFolder: () => ipcRenderer.invoke("agent:addFavoriteFolder"),
+  removeFavoriteFolder: (path: string) => ipcRenderer.invoke("agent:removeFavoriteFolder", path),
+  reorderFavoriteFolders: (paths: string[]) => ipcRenderer.invoke("agent:reorderFavoriteFolders", paths),
   popupAppMenu: (index: number, x: number, y: number) =>
     ipcRenderer.invoke("agent:popupAppMenu", index, x, y),
   setTaskbarPrompt: (open: boolean, inView: boolean) =>

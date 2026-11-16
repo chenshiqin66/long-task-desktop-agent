@@ -180,6 +180,22 @@ function samePath(a: string, b: string): boolean {
   return cleanPath(a).toLowerCase() === cleanPath(b).toLowerCase();
 }
 
+const MAX_FAVORITE_FOLDERS = 40;
+
+function favoriteFoldersOf(stored: StoredConfig | null): string[] {
+  const raw = stored?.favoriteFolders;
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const path = cleanPath(item.trim());
+    if (!path || path.length > 4096) continue;
+    if (out.some((known) => samePath(known, path))) continue;
+    out.push(path);
+  }
+  return out.slice(0, MAX_FAVORITE_FOLDERS);
+}
+
 function isDisplayName(name: string): boolean {
   return name.length > 0 && name.length <= 80 && !/[\r\n]/.test(name);
 }
@@ -853,6 +869,7 @@ app.whenReady().then(() => {
       workspaceLabels: cfg.workspaceLabels ?? prev?.workspaceLabels,
       workspaceCollapsed: cfg.workspaceCollapsed ?? prev?.workspaceCollapsed,
       lastWorkspacePath: cfg.lastWorkspacePath ?? prev?.lastWorkspacePath,
+      favoriteFolders: cfg.favoriteFolders ?? prev?.favoriteFolders,
     });
   });
   ipcMain.handle("agent:localTargetsExist", async (_e, targets: unknown) => {
@@ -862,5 +879,40 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:openExternal", async (_e, target: string) => {
     if (typeof target !== "string") return { ok: false, error: "Invalid target" };
     return openTarget(target, workspacePath);
+  });
+  ipcMain.handle("agent:addFavoriteFolder", async () => {
+    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const current = favoriteFoldersOf(stored);
+    if (current.length >= MAX_FAVORITE_FOLDERS) throw new Error("常用文件夹最多 40 个");
+    const picked = await pickSkillFolder("添加常用文件夹");
+    if (!picked) return null;
+    if (current.some((item) => samePath(item, picked))) return current;
+    const next = [...current, picked];
+    await saveStoredConfig({ ...stored, favoriteFolders: next });
+    return next;
+  });
+  ipcMain.handle("agent:removeFavoriteFolder", async (_e, raw: unknown) => {
+    if (typeof raw !== "string" || !raw.trim()) throw new Error("路径无效");
+    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const next = favoriteFoldersOf(stored).filter((item) => !samePath(item, raw));
+    await saveStoredConfig({ ...stored, favoriteFolders: next });
+    return next;
+  });
+  ipcMain.handle("agent:reorderFavoriteFolders", async (_e, raw: unknown) => {
+    if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string")) throw new Error("顺序无效");
+    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const current = favoriteFoldersOf(stored);
+    const next: string[] = [];
+    for (const item of raw) {
+      const match = current.find(
+        (known) => samePath(known, item) && !next.some((kept) => samePath(kept, known)),
+      );
+      if (match) next.push(match);
+    }
+    for (const item of current) {
+      if (!next.some((kept) => samePath(kept, item))) next.push(item);
+    }
+    await saveStoredConfig({ ...stored, favoriteFolders: next });
+    return next;
   });
 });
