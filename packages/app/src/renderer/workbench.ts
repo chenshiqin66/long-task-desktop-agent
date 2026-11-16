@@ -23,8 +23,14 @@ function pinWorkbenchButton(button: HTMLButtonElement, sheetSpace: HTMLElement):
   const place = (): void => {
     const height = button.offsetHeight;
     slot.style.height = `${height}px`;
+    slot.style.width = "100%";
     sheetSpace.style.height = `${height}px`;
-    const rect = slot.getBoundingClientRect();
+    const foot = slot.parentElement;
+    const row = foot?.querySelector(".sidebar-tools");
+    if (row instanceof HTMLElement) row.style.width = "100%";
+    const slotRect = slot.getBoundingClientRect();
+    const footRect = foot?.getBoundingClientRect();
+    const rect = slotRect.width > 0 ? slotRect : (footRect ?? slotRect);
     button.style.left = `${rect.left}px`;
     button.style.top = `${rect.top}px`;
     button.style.width = `${rect.width}px`;
@@ -34,6 +40,22 @@ function pinWorkbenchButton(button: HTMLButtonElement, sheetSpace: HTMLElement):
   observer.observe(slot);
   observer.observe(button);
   window.addEventListener("resize", place);
+
+  // side-in translates #sidebar by -12px and app-in drops #app by 8px.
+  // ResizeObserver does not see a transform, so one sample during those
+  // animations leaves the button 12px left of 连接/技能/模型.
+  const watchUntil = performance.now() + 800;
+  const follow = (): void => {
+    place();
+    if (performance.now() < watchUntil) requestAnimationFrame(follow);
+  };
+  requestAnimationFrame(follow);
+  const onEnter = (ev: AnimationEvent): void => {
+    if (ev.animationName !== "app-in" && ev.animationName !== "side-in") return;
+    requestAnimationFrame(place);
+  };
+  document.getElementById("app")?.addEventListener("animationend", onEnter);
+  document.getElementById("sidebar")?.addEventListener("animationend", onEnter);
 }
 
 /** Full-window sheet. The left column is the menu; the right column is the page for the current item. */

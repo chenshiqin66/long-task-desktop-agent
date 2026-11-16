@@ -27,7 +27,6 @@
   --text-btn: 0.75rem;
   --text-btn-lg: 0.8125rem;
   --text-title: 1rem;
-  --text-brand: 1.05rem;
   --shadow-soft: 0 1px 0 rgba(26, 35, 50, 0.04);
 }
 
@@ -245,53 +244,6 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   background: var(--teal-soft);
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 2px 8px;
-}
-
-.brand-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-  background:
-    linear-gradient(135deg, var(--teal-bright), var(--teal)),
-    var(--teal);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
-  position: relative;
-}
-
-.brand-mark::after {
-  content: "";
-  position: absolute;
-  inset: 9px;
-  border: 2px solid rgba(255, 255, 255, 0.85);
-  border-radius: 3px;
-  border-right-color: transparent;
-  transform: rotate(45deg);
-}
-
-.brand-name {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: var(--text-brand);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-}
-
-.brand-sub {
-  margin: 2px 0 0;
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-}
-
 .eyebrow {
   display: block;
   font-family: var(--font-ui);
@@ -309,8 +261,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   gap: 8px;
 }
 
-.sidebar-actions .btn,
-.sidebar-tools .btn {
+.sidebar-actions .btn {
   flex: 1;
   min-width: 0;
   width: auto;
@@ -326,25 +277,35 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .sidebar-foot {
   flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
   gap: 8px;
+  width: 100%;
 }
 
 .sidebar-tools {
-  display: flex;
-  flex-flow: row wrap;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  justify-items: stretch;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
-#btn-workbench {
+.sidebar-tools .btn,
+.workbench-slot,
+#btn-workbench:not(.is-pinned) {
   width: 100%;
+  max-width: none;
+  justify-self: stretch;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 #btn-workbench.is-pinned {
   position: fixed;
   z-index: 120;
-  width: auto;
   margin: 0;
 }
 
