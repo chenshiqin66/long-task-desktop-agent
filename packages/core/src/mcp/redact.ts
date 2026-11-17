@@ -1,5 +1,5 @@
-const SECRET_PARAM = /^(?:key|api_key|apikey|token|access_token|secret|password)$/i;
-const SECRET_IN_TEXT = /([?&](?:key|api_key|apikey|token|access_token|secret|password)=)[^&\s#]+/gi;
+export const SECRET_PARAM = /^(?:key|api_key|apikey|token|access_token|secret|password)$/i;
+export const SECRET_IN_TEXT = /([?&](?:key|api_key|apikey|token|access_token|secret|password)=)[^&\s#]+/gi;
 
 /** Display form of a URL. Query secrets and userinfo are masked; the path stays. */
 export function redactUrl(raw: string): string {

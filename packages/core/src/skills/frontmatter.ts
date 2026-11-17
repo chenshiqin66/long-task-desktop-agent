@@ -12,12 +12,11 @@ export function isSkillName(name: string): boolean {
   return name.length >= 1 && name.length <= 64 && SKILL_NAME_RE.test(name);
 }
 
-export function parseSkillMarkdown(raw: string): SkillFrontmatter {
+/** Fields and body of Markdown that opens with a `---` fence. Error messages carry no prefix. */
+export function splitFrontmatter(raw: string): { fields: Record<string, string>; body: string } {
   const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
   const lines = text.split(/\r?\n/);
-  if ((lines[0] ?? "").trim() !== "---") {
-    throw new Error("技能说明无效：缺少 frontmatter");
-  }
+  if ((lines[0] ?? "").trim() !== "---") throw new Error("缺少 frontmatter");
   let end = -1;
   for (let i = 1; i < lines.length; i++) {
     if ((lines[i] ?? "").trim() === "---") {
@@ -25,14 +24,24 @@ export function parseSkillMarkdown(raw: string): SkillFrontmatter {
       break;
     }
   }
-  if (end < 0) throw new Error("技能说明无效：frontmatter 没有结束");
+  if (end < 0) throw new Error("frontmatter 没有结束");
   const fields = parseFields(lines.slice(1, end));
-  const name = (fields.name ?? "").trim();
-  const description = (fields.description ?? "").trim();
+  const body = lines.slice(end + 1).join("\n").replace(/^\n/, "");
+  return { fields, body };
+}
+
+export function parseSkillMarkdown(raw: string): SkillFrontmatter {
+  let parts: { fields: Record<string, string>; body: string };
+  try {
+    parts = splitFrontmatter(raw);
+  } catch (err) {
+    throw new Error(`技能说明无效：${err instanceof Error ? err.message : String(err)}`);
+  }
+  const name = (parts.fields.name ?? "").trim();
+  const description = (parts.fields.description ?? "").trim();
   if (!name || !description) throw new Error("技能说明无效：缺少 name 或 description");
   if (!isSkillName(name)) throw new Error(`技能名字不合法：${name}`);
-  const body = lines.slice(end + 1).join("\n").replace(/^\n/, "");
-  return { name, description, body };
+  return { name, description, body: parts.body };
 }
 
 function parseFields(lines: string[]): Record<string, string> {
@@ -45,7 +54,7 @@ function parseFields(lines: string[]): Record<string, string> {
       continue;
     }
     const matched = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!matched) throw new Error("技能说明无效：无法解析 frontmatter");
+    if (!matched) throw new Error("无法解析 frontmatter");
     const key = matched[1]!;
     const indicator = (matched[2] ?? "").trim();
     if (indicator === ">" || indicator === ">-" || indicator === "|" || indicator === "|-") {
