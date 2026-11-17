@@ -26,7 +26,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
   private async *openStream(
     req: LlmChatRequest,
     includeUsage: boolean,
-  ): AsyncGenerator<LlmStreamChunk, boolean> {
+  ): AsyncGenerator<LlmStreamChunk, boolean | undefined> {
     const url = `${this.baseUrl}/chat/completions`;
     const tools = req.tools.map((t) => ({
       type: "function",
