@@ -2,11 +2,6 @@
 
 日期：2026-11-05
 
-> **这是当时的设计记录，不再随代码更新。** 现行行为以 [技能](../../skills.md) 为准。已知和代码不一致的地方：
->
-> - 「脚本」一节说不新增脚本工具、用 shell 执行脚本。现在有专门的 `run_skill_script`，提示词反而要求模型不要用 shell 跑技能脚本。
-> - 文件表里说 preload 暴露 `replaceSkill`。现在 preload 暴露的是 `listSkills`、`installSkill`、`uninstallSkill`、`setSkillEnabled`、`openSkillFolder`；`replaceSkill` 只留在 core 里，界面没有入口。
-
 安装把一份技能复制到本机用户目录，让每次模型请求都带上它的名字和 description。用户在输入框用 `/name` 点名，或模型调用 `read_skill`，才会在这一次发送里带上正文。下一次发送不再附上正文。
 
 ## 已定行为
@@ -54,7 +49,7 @@
 | --- | --- | --- |
 | `name` 与 `description` | 已安装且开启之后的每一次模型请求 | 只在当次 system 里，不写 `messages.jsonl` |
 | `SKILL.md` 正文 | 这次发送的用户文本含 `/name`，或模型调用 `read_skill` | 见下文 |
-| `references/`、`scripts/`、`assets/` | 模型按路径去读或用 shell 执行 | 留在副本里 |
+| `references/`、`scripts/`、`assets/` | 模型按路径去读，或用 `run_skill_script` 执行脚本 | 留在副本里 |
 
 「一次发送」指一次 `submit`，包含其中每一次组装和工具调用，不是单次 HTTP。
 
@@ -62,9 +57,9 @@
 
 发送中途改了副本或拨了开关：已附上的正文仍是发送开始时的那一份。`read_skill` 读的是调用当时的磁盘。
 
-`context.jsonl` 继续记录实际发出的 messages。因此这次发送的每一步都会含有正文。沿用现有审计，不另做摘要。
+`context.jsonl` 记录实际发出的 messages。这一轮每一次请求都带上当时附进 system 的正文；超过 8000 字的只带前 8000 字和截断说明。
 
-system 的顺序：原有系统提示、已安装技能目录、这次发送附上的正文、工具表。目录和正文计入 `contextCharLimit` 已有的预算扣减，不新增截断规则。单份正文或单个引用文件超过 `maxReadChars`（默认 50000）时，按 `read_file` 的方式截断并注明已截断。
+system 的顺序：系统提示、已安装技能目录、这一轮附上的正文、任务提醒。工具定义只在请求的 `tools` 数组里，不写入 system。目录和正文的长度会从 `contextCharLimit` 的历史预算里扣掉。单次 `read_skill` 或引用文件超过 `maxReadChars`（默认 50000）时，按 `read_file` 的方式截断。附进 system 的正文另有 8000 字上限。
 
 ### 输入「/」
 
@@ -83,19 +78,17 @@ system 的顺序：原有系统提示、已安装技能目录、这次发送附�
 - `name`：已安装技能名，必填。
 - `path`：副本内的相对路径，可省略。
 
-省略 `path` 时返回 frontmatter 之后的正文。这次发送已经附上了该正文时，只返回「已在上下文中」，不再把正文写入工具结果。
+省略 `path` 时返回 frontmatter 之后的正文。这次请求里该正文已经完整附上时，只返回「已在上下文中」。正文被 8000 字上限截断时，不回这句，再读会拿到完整正文。
 
 给出 `path` 时返回文本。解析后的 `realpath` 必须仍在该技能目录内，符号链接逃逸拒绝。非文本文件返回字节数和绝对路径，不返回字节。
 
-下一次及以后的发送在组装出站副本时，把更早 `turn_id` 上的 `read_skill` 结果收成一句：`此前读过技能 <name> 的正文。需要时再调用 read_skill。` 带路径时把「正文」换成该相对路径。`messages.jsonl` 保持全文。同一次发送里的结果保持全文。
+更早用户轮次上的 `read_skill` 结果，以及同一轮里已经不是最后一批、且超过 500 字的结果，在出站副本上收成一句：`此前读过技能 <name> 的正文。需要时再调用 read_skill。` 带路径时把「正文」换成该相对路径。`messages.jsonl` 保持全文。最后一批里的结果保持全文。
 
 ### 脚本
 
-不新增脚本工具，不把脚本注册进工具表。目录说明要求模型用 `powershell`（其他系统用 `bash`）执行副本里的绝对路径，工作目录仍是当前工作区。
+`run_skill_script` 跑技能目录里的一个脚本。参数是技能名、相对该技能的路径，以及可选的 `args` 数组。`.py` 用 `python`，`.js`、`.mjs`、`.cjs` 用 `node`。参数最多 32 个，每个最长 2000 字，不能含 NUL，不经 shell。工作目录是当前工作区，超时用 `bashTimeoutMs`，输出受 `maxToolOutputChars` 限制。真实路径必须留在该技能目录内。分级是 `write`，要确认。脚本以用户权限运行，不受路径沙箱限制。子代理没有这个工具。
 
-文件工具不能写技能目录，因为路径在工作区外。shell 仍然可以改副本。这一版不加第二套 shell 沙箱。副本被改乱后，在技能目录里改回，或卸载后重新添加。
-
-本机是 Windows 时，技能里的 `bash scripts/foo.sh` 不会执行。系统提示继续禁止启动 `bash.exe` 和 WSL。这一点不在本设计里解决。
+`.sh` 和其他扩展名不执行。使用规则要求模型不要用 `powershell` 或 `bash` 读技能目录、跑脚本，也不要改技能目录。这是提示词约束。文件工具写不出技能目录，因为路径在工作区外；点过允许之后，shell 和 `run_skill_script` 仍可以改副本。不加第二套 shell 沙箱。副本被改乱后，在技能目录里改回，或卸载后重新添加。
 
 ## 组件
 
@@ -106,10 +99,11 @@ system 的顺序：原有系统提示、已安装技能目录、这次发送附�
 | `packages/core/src/skills/tokens.ts` | 从用户文本提取 `/name` |
 | `packages/core/src/context/assemble.ts` | 把目录和这次发送的正文放进 system；出站时收束旧的 `read_skill` 结果 |
 | `packages/core/src/tools/readSkill.ts` | `read_skill` 工具 |
-| `packages/core/src/tools/policy.ts` | 把 `read_skill` 标为 `read` |
+| `packages/core/src/tools/runSkillScript.ts` | `run_skill_script` 工具 |
+| `packages/core/src/tools/policy.ts` | `read_skill` 标为 `read`，`run_skill_script` 标为 `write` |
 | `packages/core/src/runtime/agentRuntime.ts` | 发送前校验标记；在这次 `submit` 的循环内把正文传给组装 |
 | `packages/app/electron/main.ts` | 目录对话框与 IPC |
-| `packages/app/electron/preload.ts` | 暴露 `listSkills`、`installSkill`、`replaceSkill`、`uninstallSkill` |
+| `packages/app/electron/preload.ts` | 暴露 `listSkills`、`installSkill`、`uninstallSkill`、`setSkillEnabled`、`openSkillFolder`。`replaceSkill` 只留在 core，界面没有入口 |
 | `packages/app/src/renderer/skills.ts` | 技能页与 `/` 菜单 |
 
 `main.ts` 已经超过两千行。对话框和菜单不继续写进该文件，只在那里接线。
@@ -132,8 +126,11 @@ IPC 沿用 `agent:` 前缀。主进程用与「增加工作区」相同的 `show
 ...
 Skill use:
 - The catalog above is always present. The body is not, until this user message contains /<name> or you call read_skill.
-- If /<name> is in the user message, that body is already in this request. Do not call read_skill for the body again. Call read_skill with path to read a reference or asset.
-- Run a script with the shell tool and the absolute path inside the skill directory. The shell working directory stays the workspace. Do not edit the skill directory.
+- When a skill body section in this request is complete, do not call read_skill for that body again. Call read_skill with path to read a reference or asset.
+- When a skill body section says it was cut off, call read_skill without path to read the rest of that body. path reads a different file in the skill, not the rest of this body.
+- To read, list, or search inside a skill, call read_file, list_dir, or keyword_search. Pass skill plus a path relative to that skill, or pass an absolute path that is already inside that skill. An absolute path is accepted only when it lands in one installed skill, and the tool stays inside that skill.
+- Run a skill script with run_skill_script. Pass the skill name, a path relative to that skill, and an args array. The program starts python or node on that file. Do not use powershell or bash to read the skill directory or to run its scripts.
+- Do not edit the skill directory.
 ```
 
 这次发送附上的每份正文前加一行 `# Skill body: <name>`。
@@ -159,7 +156,7 @@ Skill use:
 - 复制时跳过 `node_modules`，源目录外的符号链接使安装失败。
 - `read_skill` 拒绝目录穿越和指向目录外的符号链接；非文本返回大小和绝对路径。
 - 组装时目录始终在；正文只在调用方传入的那一份里出现。
-- 更早 `turn_id` 的 `read_skill` 正文和引用文件，在出站副本上收成短句；同一次 `turn_id` 保持全文；磁盘消息不变。
+- 更早 `turn_id` 的 `read_skill` 正文和引用文件，以及同一轮里已经不是最后一批、且超过 500 字的结果，在出站副本上收成短句；最后一批保持全文；磁盘消息不变。
 - 未知 `/name` 在 `persistMessage` 之前抛出。
 
 界面的菜单开合不进 core 测试。
@@ -171,4 +168,4 @@ Skill use:
 - 不把每个脚本注册成工具。
 - 不在安装后监视源文件夹。
 - 不为技能目录增加 shell 沙箱。
-- 不解决 Windows 上技能脚本要求 bash 的问题。
+- 不执行 `.sh`。脚本只跑 `python` 和 `node` 能跑的那四种扩展名。

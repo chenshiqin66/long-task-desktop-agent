@@ -1,6 +1,6 @@
 import { assembleContext } from "../context/assemble.js";
-import { projectAuditMessages, toolsFingerprint } from "../context/auditContext.js";
-import { countOutboundImages, outboundTextChars, prepareOutbound } from "../context/images.js";
+import { projectAuditMessages, requestApproxChars, toolsFingerprint } from "../context/auditContext.js";
+import { countOutboundImages, prepareOutbound } from "../context/images.js";
 import {
   SYNTHETIC_INTERRUPTED_TOOL,
   findMissingToolResults,
@@ -228,7 +228,7 @@ export class ExplainRuntime {
         detail: {
           model: this.config.model,
           message_count: prepared.messages.length,
-          approx_chars: prepared.messages.reduce((n, m) => n + outboundTextChars(m.content), 0),
+          approx_chars: requestApproxChars(prepared.messages, fingerprint.tools),
           image_count: countOutboundImages(prepared.messages),
           context_id: requestId,
         },

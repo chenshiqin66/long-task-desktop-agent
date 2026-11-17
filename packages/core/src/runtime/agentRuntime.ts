@@ -35,8 +35,8 @@ import {
 import { outputDirsOverlap } from "../tools/writeScope.js";
 import type { ToolResult } from "../tools/types.js";
 import { assembleContext } from "../context/assemble.js";
-import { projectAuditMessages, toolsFingerprint } from "../context/auditContext.js";
-import { countOutboundImages, outboundTextChars, prepareOutbound } from "../context/images.js";
+import { projectAuditMessages, requestApproxChars, toolsFingerprint } from "../context/auditContext.js";
+import { countOutboundImages, prepareOutbound } from "../context/images.js";
 import {
   SYNTHETIC_INTERRUPTED_TOOL,
   canAppendToolRepair,
@@ -55,7 +55,7 @@ import {
   listInstalledSkills,
   readInstalledSkillFile,
 } from "../skills/installedSkills.js";
-import type { SkillBodyAttachment } from "../skills/prompt.js";
+import { fullyAttachedSkillNames, type SkillBodyAttachment } from "../skills/prompt.js";
 import { AutoAllowGate, type PermissionGate } from "./permission.js";
 import { ClosedAskGate, type AskGate } from "./askGate.js";
 import { ASK_USER_TOOL_NAME, parseAskUserArgs } from "../tools/askUserTool.js";
@@ -912,7 +912,7 @@ export class AgentRuntime {
         ) {
           return;
         }
-        const approxChars = apiMessages.reduce((n, m) => n + outboundTextChars(m.content), 0);
+        const approxChars = requestApproxChars(apiMessages, fingerprint.tools);
         const imageCount = countOutboundImages(apiMessages);
         if (
           !(await this.persistTrace(turn_id, {
@@ -1639,7 +1639,7 @@ export class AgentRuntime {
       apiKey: this.config.apiKey,
       llmBaseUrl: this.config.baseUrl,
       skillsRoot: this.skillsRoot,
-      attachedSkillNames: new Set(this.skillBodies.map((skill) => skill.name)),
+      attachedSkillNames: fullyAttachedSkillNames(this.skillBodies),
       blockedOutputDirs: [...this.batchOutputDirs, ...this.deferredOutputDirs],
       sessionId,
     });

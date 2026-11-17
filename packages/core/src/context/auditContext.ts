@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { AssembledMessage } from "./assemble.js";
-import type { SentImage } from "./images.js";
+import type { AssembledMessage, OutboundContent } from "./assemble.js";
+import { outboundTextChars, type SentImage } from "./images.js";
 import type { ToolCall } from "../types.js";
 import type { ToolDefinition } from "../tools/types.js";
 
@@ -50,6 +50,18 @@ export function toolsFingerprint(tools: ToolDefinition[]): { sha256: string; too
   }));
   const sha256 = createHash("sha256").update(JSON.stringify(wire)).digest("hex");
   return { sha256, tools: wire };
+}
+
+/** Characters the provider is asked to read: message text, tool arguments, and the tools array. */
+export function requestApproxChars(
+  messages: Array<{ content: OutboundContent; tool_calls?: Array<{ function: { arguments: string } }> }>,
+  tools: WireTool[],
+): number {
+  const messageChars = messages.reduce((total, message) => {
+    const args = message.tool_calls?.reduce((sum, call) => sum + call.function.arguments.length, 0) ?? 0;
+    return total + outboundTextChars(message.content) + args;
+  }, 0);
+  return messageChars + JSON.stringify(tools).length;
 }
 
 function textOf(content: AssembledMessage["content"]): string {

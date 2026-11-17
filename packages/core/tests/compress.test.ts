@@ -31,30 +31,63 @@ describe("compressMessages", () => {
     expect(compressMessages(makeTurns(10))).toHaveLength(20);
   });
 
-  it("keeps first 3 and last 10 turns when user turns > 10", () => {
+  it("keeps every user turn when no character limit is set", () => {
     const out = compressMessages(makeTurns(15));
-    expect(out.some((m) => m.content.startsWith("[summary"))).toBe(true);
-    const userContents = out
-      .filter((m) => m.role === "user" && !m.content.startsWith("[summary"))
-      .map((m) => m.content);
-    expect(userContents).toContain("u1");
-    expect(userContents).toContain("u3");
-    expect(userContents).toContain("u6");
-    expect(userContents).toContain("u15");
-    expect(userContents).not.toContain("u4");
-    expect(userContents).not.toContain("u5");
-  });
-
-  it("when first3 and last10 overlap, keeps all without summary", () => {
-    const out = compressMessages(makeTurns(12));
+    expect(out).toHaveLength(30);
     expect(out.some((m) => m.content.startsWith("[summary"))).toBe(false);
-    expect(out).toHaveLength(24);
+    expect(out.map((m) => m.content)).toContain("u4");
+    expect(out.map((m) => m.content)).toContain("u15");
   });
 
-  it("applies character limit", () => {
+  it("drops whole messages instead of slicing them when over the character limit", () => {
     const input = makeTurns(15).map((m) => ({ ...m, content: m.content + "x".repeat(200) }));
     const out = compressMessages(input, { contextCharLimit: 2500 });
     const total = out.reduce((n, m) => n + m.content.length, 0);
     expect(total).toBeLessThanOrEqual(2500);
+    const firstUser = out.find((m) => m.role === "user" && !m.content.startsWith("[summary"));
+    expect(firstUser?.content.startsWith("u1")).toBe(true);
+    expect(firstUser?.content.length).toBeGreaterThan(200);
+    expect(out.some((m) => m.content.endsWith("…"))).toBe(false);
+  });
+
+  it("keeps a protected tool result intact when it alone exceeds the limit", () => {
+    const user = msg("t", "user", "u", "user");
+    const tool = msg("t", "tool", "R".repeat(2000), "tool");
+    const out = compressMessages([user, tool], {
+      contextCharLimit: 100,
+      protectIds: new Set(["tool"]),
+    });
+    expect(out.find((m) => m.id === "tool")?.content).toHaveLength(2000);
+    expect(out.find((m) => m.id === "user")?.content).toBe("u");
+  });
+
+  it("counts tool-call arguments and drops the oldest tool round as a pair", () => {
+    const user = msg("t", "user", "u", "user");
+    const oldAssistant: Message = {
+      ...msg("t", "assistant", "old", "old_a"),
+      tool_calls: [
+        { id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } },
+      ],
+    };
+    const oldTool: Message = { ...msg("t", "tool", "R".repeat(100), "old_tool"), tool_call_id: "c1" };
+    const keep: Message = {
+      ...msg("t", "assistant", "keep", "keep_a"),
+      tool_calls: [
+        { id: "c2", type: "function", function: { name: "read_file", arguments: "x".repeat(500) } },
+      ],
+    };
+    const out = compressMessages([user, oldAssistant, oldTool, keep], {
+      contextCharLimit: "u".length + "keep".length + 500,
+      protectIds: new Set(["keep_a"]),
+    });
+    expect(out.map((m) => m.id)).toEqual(["user", "keep_a"]);
+    expect(out[1]?.tool_calls?.[0]?.function.arguments).toHaveLength(500);
+  });
+
+  it("does not slice the only user message when it exceeds the limit", () => {
+    const user = msg("t", "user", "u".repeat(500), "user");
+    const out = compressMessages([user], { contextCharLimit: 50 });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.content).toHaveLength(500);
   });
 });

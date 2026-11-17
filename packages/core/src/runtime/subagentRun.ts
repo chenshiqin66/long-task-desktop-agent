@@ -6,12 +6,12 @@ export type SubagentToolEvent =
   | { type: "tool_call"; tool_call: ToolCall }
   | { type: "tool_result"; tool_call_id: string; content: string; is_error: boolean };
 import { assembleContext } from "../context/assemble.js";
-import { projectAuditMessages, toolsFingerprint } from "../context/auditContext.js";
+import { projectAuditMessages, requestApproxChars, toolsFingerprint } from "../context/auditContext.js";
 import { prepareOutbound } from "../context/images.js";
 import type { LlmProvider } from "../provider/types.js";
 import { extractSkillTokens } from "../skills/tokens.js";
 import { listInstalledSkills, readInstalledSkillFile } from "../skills/installedSkills.js";
-import type { SkillBodyAttachment } from "../skills/prompt.js";
+import { fullyAttachedSkillNames, type SkillBodyAttachment } from "../skills/prompt.js";
 import {
   capSubagentResult,
   exploreSystemPrompt,
@@ -75,7 +75,7 @@ export async function runIsolatedSubagent(opts: {
       : exploreSystemPrompt(opts.workspacePath, toolRounds);
   const installed = (await listInstalledSkills(opts.skillsRoot)).filter((skill) => skill.enabled);
   const skillBodies = await bodiesForTask(opts.task, opts.skillsRoot, opts.config.maxReadChars);
-  const attached = new Set(skillBodies.map((skill) => skill.name));
+  const attached = fullyAttachedSkillNames(skillBodies);
   const messages: Message[] = [
     {
       id: newId("msg"),
@@ -124,6 +124,8 @@ export async function runIsolatedSubagent(opts: {
       await trace(store, opts.sessionId, turnId, "llm_request", {
         model: opts.config.model,
         context_id: requestId,
+        message_count: prepared.messages.length,
+        approx_chars: requestApproxChars(prepared.messages, fingerprint.tools),
       });
       await store.appendContext(fingerprint.sha256, fingerprint.tools, {
         type: "request",

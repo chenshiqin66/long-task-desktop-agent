@@ -13,6 +13,7 @@ import {
   uninstallSkill,
 } from "../src/skills/installedSkills.js";
 import { extractSkillTokens } from "../src/skills/tokens.js";
+import { fullyAttachedSkillNames, renderSkillBodies, SKILL_BODY_ATTACH_MAX } from "../src/skills/prompt.js";
 import { readSkillTool } from "../src/tools/readSkill.js";
 import type { ToolContext } from "../src/tools/types.js";
 import type { Message } from "../src/types.js";
@@ -205,6 +206,26 @@ describe("installed skills", () => {
       await rm(source, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("renderSkillBodies", () => {
+  it("attaches a body that fits, and that name still counts as already in context", () => {
+    const body = "Do the thing.";
+    const text = renderSkillBodies([{ name: "demo", directory: "C:\\skills\\demo", body }]);
+    expect(text).toContain("# Skill body: demo");
+    expect(text).toContain(body);
+    expect(text).not.toContain("正文在此截断");
+    expect([...fullyAttachedSkillNames([{ name: "demo", directory: "C:\\skills\\demo", body }])]).toEqual(["demo"]);
+  });
+
+  it("keeps the first 8000 characters of a longer body and does not treat it as fully attached", () => {
+    const body = "A".repeat(SKILL_BODY_ATTACH_MAX) + "TAIL";
+    const text = renderSkillBodies([{ name: "demo", directory: "C:\\skills\\demo", body }]);
+    expect(text).toContain("A".repeat(SKILL_BODY_ATTACH_MAX));
+    expect(text).not.toContain("TAIL");
+    expect(text).toContain("正文在此截断。后面还有 4 字。需要后文时调用 read_skill，不要带 path。");
+    expect(fullyAttachedSkillNames([{ name: "demo", directory: "C:\\skills\\demo", body }]).size).toBe(0);
   });
 });
 

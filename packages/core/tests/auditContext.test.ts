@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRuntime } from "../src/runtime/agentRuntime.js";
+import { requestApproxChars } from "../src/context/auditContext.js";
 import { imageOmissionNote } from "../src/context/images.js";
 import type { LlmProvider } from "../src/provider/types.js";
 import { DEFAULT_AGENT_CONFIG } from "../src/types.js";
@@ -105,5 +106,25 @@ describe("outbound context audit", () => {
 
     const artifacts = await rt.loadSessionArtifacts(meta.session_id);
     expect(artifacts.context).toEqual(rows);
+  });
+});
+
+describe("requestApproxChars", () => {
+  it("counts message text, tool arguments, and the tools array", () => {
+    const tools = [
+      { type: "function" as const, function: { name: "read_file", description: "d", parameters: {} } },
+    ];
+    const count = requestApproxChars(
+      [
+        {
+          content: "hi",
+          tool_calls: [
+            { id: "1", type: "function", function: { name: "read_file", arguments: "abcd" } },
+          ],
+        },
+      ],
+      tools,
+    );
+    expect(count).toBe("hi".length + "abcd".length + JSON.stringify(tools).length);
   });
 });
