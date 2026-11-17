@@ -12,6 +12,8 @@ export interface StoredConfig {
   lastWorkspacePath?: string;
   /** Directories pinned in the workbench. Opening one shows the folder, and does not add a workspace. */
   favoriteFolders?: string[];
+  /** Extract memory notes after each completed turn. Missing means on. Saved notes stay in context either way. */
+  autoMemory?: boolean;
   bashTimeoutMs?: number;
   maxSteps?: number;
   contextCharLimit?: number;

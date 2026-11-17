@@ -61,6 +61,11 @@ export async function saveStoredConfig(
   await chmod(path, 0o600).catch(() => undefined);
 }
 
+/** autoMemory is on unless the file says false. */
+export function autoMemoryOf(stored: StoredConfig | null): boolean {
+  return stored?.autoMemory !== false;
+}
+
 export function toAgentConfig(stored: StoredConfig): AgentConfig {
   return {
     // Trim: prompt()/hand-edited JSON often leave leading spaces that break fetch URLs.
