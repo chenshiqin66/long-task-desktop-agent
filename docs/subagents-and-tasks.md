@@ -15,7 +15,7 @@
 | `explore` | 不写工作区文件：`list_dir`、`read_file`、`keyword_search`、`web_search`、`read_skill`，加上清单的 `task_list`、`task_get`、`claim_task`、`complete_task`。不接受 `output_dir` | 8 |
 | `worker` | 上面这些，再加 `write_file`、`str_replace`、`delete_file`，写入只能落在 `output_dir` 里 | 16 |
 
-两种都不能跑 shell、不能调用 `mcp__` 工具、不能 `ask_user`、不能再派 `subagent`、不能跑 `run_skill_script`，也不能创建、修改或删除任务，只能领取和完成。任务正文里再写一份工具清单不会生效，选类型就是选工具：子代理调用子集以外的工具时，宿主找不到实现，返回一条错误结果；`subagent` 和 `ask_user` 两个名字例外，会让整个子代理失败（见 [已知问题](roadmap.md#已知问题)）。
+两种都不能跑 shell、不能调用 `mcp__` 工具、不能 `ask_user`、不能再派 `subagent`、不能跑 `run_skill_script`，也不能创建、修改或删除任务，只能领取和完成。任务正文里再写一份工具清单不会生效，选类型就是选工具：子代理调用子集以外的工具时，宿主返回一条错误结果，循环继续。`subagent` 和 `ask_user` 也是这条，要求子代理把问题或结果写进最终回执。
 
 这里的回合数的是「子代理一次回复里带了工具调用」，同一回复里的多次搜索只算一回合。父会话的 `maxSteps` 更小时，子代理跟着用更小的数。每条工具结果开头写着还剩几回合；用完之后，再来的工具调用被跳过，子代理停住。
 

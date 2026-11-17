@@ -11,6 +11,7 @@ import {
   truncateOutput,
 } from "../src/tools/host.js";
 import type { ToolContext } from "../src/tools/types.js";
+import { toolsForSubagent } from "../src/tools/agentTool.js";
 import { rmWorkspace } from "./rmWorkspace.js";
 
 describe("tools", () => {
@@ -46,6 +47,20 @@ describe("tools", () => {
     ).rejects.toThrow(/not a local command/);
     expect(host.listDefinitions().some((d) => d.name === "ask_user")).toBe(true);
     expect(host.listDefinitions().some((d) => d.name === "subagent")).toBe(true);
+  });
+
+  it("returns an error when a subagent host is asked to ask or delegate", async () => {
+    const sub = host.subset(toolsForSubagent("worker"));
+    const ask = await sub.execute("ask_user", JSON.stringify({ question: "继续？" }), ctx);
+    const delegated = await sub.execute(
+      "subagent",
+      JSON.stringify({ description: "x", subagent_type: "explore", task: "y" }),
+      ctx,
+    );
+    expect(ask.is_error).toBe(true);
+    expect(delegated.is_error).toBe(true);
+    expect(ask.content).toMatch(/final reply/i);
+    expect(delegated.content).toMatch(/final reply/i);
   });
 
   it("lists builtin tool definitions", () => {

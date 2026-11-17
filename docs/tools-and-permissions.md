@@ -32,7 +32,7 @@
 | `subagent` | explore 自动；worker 确认 | 派一个子代理，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
 | `powershell` / `bash` | 看命令 | 命令最长 8000 字；超时 `bashTimeoutMs`；输出超过 `maxToolOutputChars` 时结束进程，返回带截断标记的输出，不算失败 |
 
-未知工具按 `write` 分级；宿主找不到实现，返回错误结果。工具参数解析失败、工具内部抛错，都变成 `is_error` 的工具结果交还模型，不打断循环。有一个例外：子代理里调用 `subagent` 或 `ask_user` 时，整个子代理以失败结束，见 [已知问题](roadmap.md#已知问题)。
+未知工具按 `write` 分级；宿主找不到实现，返回错误结果。工具参数解析失败、工具内部抛错，都变成 `is_error` 的工具结果交还模型，不打断循环。子代理的工具表里没有 `subagent` 和 `ask_user`，调用它们也返回错误结果，循环继续。父会话仍由 runtime 接住这两个名字。
 
 shell 命令的执行环境：Windows 上以 `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动，命令按 UTF-16LE 编码传入，不经过命令行的引号转义。外层包装把输出编码设为 UTF-8，并把外部程序的非零退出码当作工具失败。其他系统用 `bash -lc`。工作目录是当前工作区，环境变量继承应用进程。输出按块解码，一个多字节字符恰好落在两块交界时，这个字会变成乱码。
 

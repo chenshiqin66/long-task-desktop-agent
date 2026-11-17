@@ -67,11 +67,15 @@ export class ToolHost {
   }
 
   async execute(name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
-    if (name === ASK_USER_TOOL_NAME) {
-      throw new Error(ASK_USER_NOT_LOCAL);
-    }
-    if (name === AGENT_TOOL_NAME) {
-      throw new Error(AGENT_NOT_LOCAL);
+    if (name === ASK_USER_TOOL_NAME || name === AGENT_TOOL_NAME) {
+      if (this.byName.has(name)) {
+        throw new Error(name === ASK_USER_TOOL_NAME ? ASK_USER_NOT_LOCAL : AGENT_NOT_LOCAL);
+      }
+      const content =
+        name === ASK_USER_TOOL_NAME
+          ? "ask_user is not available in this agent. State the question in your final reply."
+          : "subagent is not available in this agent. Do not delegate. State the result in your final reply.";
+      return { content, is_error: true };
     }
     if (process.platform === "win32" && name === "bash") {
       return {
