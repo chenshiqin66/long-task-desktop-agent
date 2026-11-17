@@ -1,4 +1,5 @@
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { replaceFile, withDirLock } from "./fileLock.js";
 import { join } from "node:path";
 import { nowIso } from "../ids.js";
 import { sessionDir } from "./sessionStore.js";
@@ -7,8 +8,7 @@ import { sessionDir } from "./sessionStore.js";
  * One JSON file per task, under the session:
  * `{workspace}/.agent/sessions/{sessionId}/tasks/{id}.json`
  *
- * Claude Code keeps a task list outside the repo, one directory per session.
- * This project already stores session state in `.agent`, which list_dir and
+ * The list lives under the session in `.agent`, which list_dir and
  * keyword_search skip. A `tasks/` directory at the workspace root would be
  * shared by every session and editable with write_file, which skips
  * claim_task / complete_task.
@@ -35,8 +35,6 @@ const TASK_ID_RE = /^[1-9][0-9]{0,8}$/;
 const SUBJECT_MAX = 200;
 const DESCRIPTION_MAX = 8_000;
 const OWNER_MAX = 120;
-const LOCK_WAIT_MS = 5_000;
-const STALE_LOCK_MS = 15_000;
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
 
@@ -364,7 +362,7 @@ export class TaskStore {
   private async mutate<T>(
     fn: (all: Map<string, TaskRecord>, unreadable: ReadonlySet<string>) => Promise<TaskResult<T>>,
   ): Promise<TaskResult<T>> {
-    return withTaskLock(this.dir, async () => {
+    return withDirLock(this.dir, "Task list", async () => {
       const loaded = await loadTasks(this.dir);
       return fn(loaded.tasks, new Set(loaded.unreadable));
     });
@@ -499,26 +497,7 @@ function parseTask(raw: string): TaskRecord | null {
 }
 
 async function writeTask(dir: string, task: TaskRecord): Promise<void> {
-  const json = `${JSON.stringify(task, null, 2)}\n`;
-  const path = taskPath(dir, task.id);
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, json, "utf8");
-  try {
-    await rename(tmp, path);
-  } catch (err) {
-    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
-    if (code !== "EEXIST" && code !== "EPERM") {
-      await rm(tmp, { force: true });
-      throw err;
-    }
-    await rm(path, { force: true });
-    try {
-      await rename(tmp, path);
-    } catch (renameErr) {
-      await rm(tmp, { force: true });
-      throw renameErr;
-    }
-  }
+  await replaceFile(taskPath(dir, task.id), `${JSON.stringify(task, null, 2)}\n`);
 }
 
 async function readHighWaterMark(dir: string): Promise<number> {
@@ -534,39 +513,4 @@ async function readHighWaterMark(dir: string): Promise<number> {
 
 async function writeHighWaterMark(dir: string, value: number): Promise<void> {
   await writeFile(join(dir, ".highwatermark"), `${value}\n`, "utf8");
-}
-
-async function withTaskLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
-  await mkdir(dir, { recursive: true });
-  const lockPath = join(dir, ".lock");
-  const started = Date.now();
-  for (;;) {
-    try {
-      const handle = await open(lockPath, "wx");
-      try {
-        await handle.writeFile(`${process.pid} ${Date.now()}\n`, "utf8");
-      } finally {
-        await handle.close();
-      }
-      try {
-        return await fn();
-      } finally {
-        await rm(lockPath, { force: true });
-      }
-    } catch (err) {
-      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
-      if (code !== "EEXIST") throw err;
-      if (Date.now() - started > LOCK_WAIT_MS) throw new Error("Task list lock timed out");
-      try {
-        const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > STALE_LOCK_MS) {
-          await rm(lockPath, { force: true });
-          continue;
-        }
-      } catch {
-        // The holder released the lock between the failed create and this stat.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 15));
-    }
-  }
 }
