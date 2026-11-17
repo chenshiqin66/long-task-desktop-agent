@@ -3,9 +3,13 @@ import { AgentError } from "./errors.js";
 /** How many sessions may be inside `submit` or a deferred subagent at once. */
 export const MAX_CONCURRENT_RUNS = 5;
 
+/** Lowercase, forward slashes, no trailing slash. Run keys and memory project keys use it. */
+export function normalizeWorkspacePath(path: string): string {
+  return path.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+}
+
 export function sessionRunKey(workspace: string, sessionId: string): string {
-  const dir = workspace.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
-  return `${dir}\0${sessionId}`;
+  return `${normalizeWorkspacePath(workspace)}\0${sessionId}`;
 }
 
 /**
@@ -124,7 +128,7 @@ export class SessionRuntimePool<T extends PooledRuntime> {
   }
 
   async discardWorkspace(workspace: string): Promise<void> {
-    const dir = workspace.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+    const dir = normalizeWorkspacePath(workspace);
     const prefix = `${dir}\0`;
     const doomed = [...this.slots.entries()].filter(([key]) => key.startsWith(prefix));
     for (const [, slot] of doomed) {
