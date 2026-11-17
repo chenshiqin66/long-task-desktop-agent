@@ -189,8 +189,9 @@ function runBash(command: string, ctx: ToolContext): Promise<ToolResult> {
       const content = [stdout, stderr].filter(Boolean).join("\n");
       // Capped kills are non-zero exits; still return truncated payload as success-of-capture.
       if (capped) {
+        const body = content || `(exit ${code ?? "?"})`;
         finish({
-          content: content || `(exit ${code ?? "?"})`,
+          content: body.endsWith("\n...[truncated]") ? body : `${body}\n...[truncated]`,
           is_error: false,
         });
         return;

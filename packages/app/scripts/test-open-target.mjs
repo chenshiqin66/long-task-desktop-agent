@@ -19,6 +19,16 @@ assert(
   `mnt path got ${mnt.value}`,
 );
 
+const mntLinux = normalizeOpenTarget(
+  "/mnt/c/Users/陈仕勤/Desktop/temp-20261029/shanghai-country-parks.html",
+  "linux",
+);
+assert(mntLinux.kind === "path", "mnt linux kind");
+assert(
+  mntLinux.value === "/mnt/c/Users/陈仕勤/Desktop/temp-20261029/shanghai-country-parks.html",
+  `mnt linux path got ${mntLinux.value}`,
+);
+
 const https = normalizeOpenTarget("https://example.com/x", "win32");
 assert(https.kind === "url" && https.value === "https://example.com/x", "https");
 

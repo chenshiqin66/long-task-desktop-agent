@@ -7,7 +7,7 @@ export const readSkillTool: Tool = {
   definition: {
     name: READ_SKILL_TOOL_NAME,
     description:
-      "Read an installed skill. Omit path to read the SKILL.md instructions. Set path to a file inside that skill, such as a reference. The result includes the skill directory so scripts can be run by absolute path.",
+      "Read an installed skill. Omit path to read the SKILL.md instructions. Set path to a file inside that skill, such as a reference. The result includes the skill directory. To run a script, call run_skill_script with the skill name and a path relative to that skill. Do not use powershell or bash.",
     parameters: {
       type: "object",
       properties: {

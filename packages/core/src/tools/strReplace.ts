@@ -67,7 +67,7 @@ export const strReplaceTool: Tool = {
       }
       const after = replaceAll
         ? before.split(oldString).join(newString)
-        : before.replace(oldString, newString);
+        : before.replace(oldString, () => newString);
       if (after.length > MAX_WRITE_CHARS) {
         return {
           content: `Resulting file too large (${after.length} chars; max ${MAX_WRITE_CHARS})`,

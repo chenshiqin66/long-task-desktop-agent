@@ -232,6 +232,8 @@ describe("renderSkillBodies", () => {
 describe("read_skill tool and assemble", () => {
   it("auto-allows read_skill and skips a body already attached to this submit", async () => {
     expect(classifyToolCall("read_skill", '{"name":"demo"}').risk).toBe("read");
+    expect(readSkillTool.definition.description).toContain("run_skill_script");
+    expect(readSkillTool.definition.description).not.toContain("absolute path");
     const root = await tempDir("skills-root-");
     const source = await tempDir("skills-src-");
     try {

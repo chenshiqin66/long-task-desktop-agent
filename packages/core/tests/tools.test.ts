@@ -164,6 +164,25 @@ describe("tools", () => {
     expect(read.content).toContain("hello agent");
   });
 
+  it("str_replace writes $ sequences literally", async () => {
+    await writeFile(join(workspace, "price.txt"), "cost\n", "utf8");
+    const r = await host.execute(
+      "str_replace",
+      JSON.stringify({
+        path: "price.txt",
+        old_string: "cost",
+        new_string: "cost $& $$ $' $`",
+      }),
+      ctx,
+    );
+    expect(r.is_error).toBe(false);
+    const read = await host.execute("read_file", JSON.stringify({ path: "price.txt" }), {
+      ...ctx,
+      maxReadChars: 1000,
+    });
+    expect(read.content).toContain("cost $& $$ $' $`");
+  });
+
   it("str_replace errors when old_string is missing or ambiguous", async () => {
     const missing = await host.execute(
       "str_replace",
@@ -365,8 +384,10 @@ describe("tools", () => {
       );
       const elapsed = Date.now() - started;
       expect(elapsed).toBeLessThan(5_000);
-      expect(r.content.length).toBeLessThanOrEqual(500 + "\n...[truncated]".length + 5);
+      expect(r.is_error).toBe(false);
       expect(r.content).toMatch(/x/);
+      expect(r.content.endsWith("\n...[truncated]")).toBe(true);
+      expect(r.content.length).toBeLessThanOrEqual(500 + "\n...[truncated]".length + 5);
     },
     15_000,
   );

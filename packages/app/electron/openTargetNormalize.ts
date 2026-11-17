@@ -36,7 +36,7 @@ export function normalizeOpenTarget(
   }
 
   const mnt = s.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
-  if (mnt) {
+  if (mnt && platform === "win32") {
     const drive = mnt[1]!.toUpperCase();
     const rest = mnt[2]!.replace(/\//g, "\\");
     return { kind: "path", value: `${drive}:\\${rest}` };

@@ -27,10 +27,10 @@
 | `read_skill` | 自动 | 读已安装技能的正文或附件，见 [技能](skills.md) |
 | `task_create`、`task_list`、`task_get`、`task_update`、`task_delete`、`claim_task`、`complete_task` | 自动 | 只改本会话 `.agent` 里的任务清单，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
 | `ask_user` | 不经许可门 | 问题最长 2000 字。选项最多 6 个、每个最长 200 字，每条都是用户可能给出的回答，不是模型自己的下一步。回答最长 8000 字，只作为工具结果，界面不画成用户气泡 |
-| `write_file`、`str_replace`、`delete_file` | 确认 | 结果文件最长 500,000 字；`str_replace` 要求唯一匹配，否则传 `replace_all`；`delete_file` 不删目录 |
+| `write_file`、`str_replace`、`delete_file` | 确认 | 结果文件最长 500,000 字；`str_replace` 要求唯一匹配，否则传 `replace_all`，`new_string` 按字面写入；`delete_file` 不删目录 |
 | `run_skill_script` | 确认 | 只跑技能目录里的 `.py`、`.js`、`.mjs`、`.cjs`；参数是数组，最多 32 个、每个最长 2000 字，不经 shell |
 | `subagent` | explore 自动；worker 确认 | 派一个子代理，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
-| `powershell` / `bash` | 看命令 | 命令最长 8000 字；超时 `bashTimeoutMs`；输出超过 `maxToolOutputChars` 时结束进程，返回截断的输出，不算失败 |
+| `powershell` / `bash` | 看命令 | 命令最长 8000 字；超时 `bashTimeoutMs`；输出超过 `maxToolOutputChars` 时结束进程，返回带截断标记的输出，不算失败 |
 
 未知工具按 `write` 分级；宿主找不到实现，返回错误结果。工具参数解析失败、工具内部抛错，都变成 `is_error` 的工具结果交还模型，不打断循环。有一个例外：子代理里调用 `subagent` 或 `ask_user` 时，整个子代理以失败结束，见 [已知问题](roadmap.md#已知问题)。
 
