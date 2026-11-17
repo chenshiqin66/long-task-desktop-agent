@@ -14,14 +14,36 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
+/** Set when a config file could not be parsed. Cleared by takeConfigQuarantine. */
+let pendingQuarantine: { movedTo: string } | { stillAt: string } | null = null;
+
+/** One-shot notice for the app. Missing files do not set this. */
+export function takeConfigQuarantine(): { movedTo: string } | { stillAt: string } | null {
+  const notice = pendingQuarantine;
+  pendingQuarantine = null;
+  return notice;
+}
+
 export async function loadStoredConfig(
   path = getDefaultConfigPath(),
 ): Promise<StoredConfig | null> {
+  let text: string;
   try {
-    // Windows editors / PowerShell -Encoding utf8 often write a UTF-8 BOM;
-    // Node JSON.parse then fails and the app silently falls back to OpenAI defaults.
-    return JSON.parse(stripBom(await readFile(path, "utf8"))) as StoredConfig;
+    text = await readFile(path, "utf8");
   } catch {
+    return null;
+  }
+  try {
+    // Windows editors / PowerShell -Encoding utf8 often write a UTF-8 BOM.
+    return JSON.parse(stripBom(text)) as StoredConfig;
+  } catch {
+    const backup = `${path}.broken-${Date.now()}`;
+    try {
+      await rename(path, backup);
+      pendingQuarantine = { movedTo: backup };
+    } catch {
+      pendingQuarantine = { stillAt: path };
+    }
     return null;
   }
 }

@@ -17,6 +17,7 @@ import {
   OpenAICompatibleProvider,
   loadStoredConfig,
   saveStoredConfig,
+  takeConfigQuarantine,
   toAgentConfig,
   assertValidSessionId,
   DeferredPermissionGate,
@@ -427,14 +428,29 @@ async function readSessionArtifacts(workspace: string, sessionId: string, part?:
   return { meta, messages, traces, context };
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
   registerMcpHandlers(ipcMain, mcpPool);
   mcpPool.onStatus((snapshot) => {
     if (!win?.isDestroyed()) win?.webContents.send("agent:mcpStatus", snapshot);
   });
+  await loadStoredConfig();
+  const notice = takeConfigQuarantine();
   createWindow();
+  if (notice) {
+    const moved = "movedTo" in notice;
+    const options = {
+      type: "warning" as const,
+      title: "配置文件无法读取",
+      message: moved
+        ? "config.json 不是合法的 JSON，已经改名备份。应用按默认值启动，密钥是空的。把备份改回 config.json 后重启即可恢复。"
+        : "config.json 不是合法的 JSON，而且没能改名。应用按默认值启动，密钥是空的。在修好这个文件之前不要保存配置，否则会盖掉它。",
+      detail: moved ? notice.movedTo : notice.stillAt,
+    };
+    if (win && !win.isDestroyed()) await dialog.showMessageBox(win, options);
+    else await dialog.showMessageBox(options);
+  }
   void mcpPool.start();
 
   app.on("before-quit", (event) => {

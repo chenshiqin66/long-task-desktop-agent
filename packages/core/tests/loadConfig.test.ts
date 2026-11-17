@@ -6,6 +6,7 @@ import {
   getDefaultConfigPath,
   loadStoredConfig,
   saveStoredConfig,
+  takeConfigQuarantine,
   toAgentConfig,
 } from "../src/config/loadConfig.js";
 
@@ -51,9 +52,28 @@ describe("loadConfig", () => {
     expect(raw).not.toContain("sk-first");
   });
 
+  it("renames corrupt JSON aside so a later save does not erase it", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, "{ not json", "utf8");
+    expect(await loadStoredConfig(path)).toBeNull();
+    await expect(readFile(path, "utf8")).rejects.toThrow();
+    const notice = takeConfigQuarantine();
+    expect(notice && "movedTo" in notice ? notice.movedTo : "").toMatch(/config\.json\.broken-\d+$/);
+    const backup = notice && "movedTo" in notice ? notice.movedTo : "";
+    expect(await readFile(backup, "utf8")).toBe("{ not json");
+    expect(takeConfigQuarantine()).toBeNull();
+    await saveStoredConfig(
+      { baseUrl: "https://api.example.com/v1", model: "gpt-x", apiKey: "sk-new" },
+      path,
+    );
+    expect(await readFile(backup, "utf8")).toBe("{ not json");
+    expect(await readFile(path, "utf8")).toContain("sk-new");
+  });
+
   it("returns null when config file missing", async () => {
     const loaded = await loadStoredConfig(join(dir, "missing.json"));
     expect(loaded).toBeNull();
+    expect(takeConfigQuarantine()).toBeNull();
   });
 
   it("loads config even when file has UTF-8 BOM", async () => {
