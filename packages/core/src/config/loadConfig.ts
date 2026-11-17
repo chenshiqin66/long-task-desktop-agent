@@ -114,7 +114,7 @@ function legacyModel(stored: StoredConfig): StoredModel | null {
     baseUrl,
     model,
     apiKey,
-    kind: modelKindOf(stored),
+    kind: modelKindOf(undefined),
   };
 }
 
