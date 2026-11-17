@@ -39,6 +39,21 @@ describe("loadConfig", () => {
     expect(agent.maxSteps).toBe(50);
     expect(agent.bashTimeoutMs).toBe(60_000);
     expect(agent.apiKey).toBe("sk-secret");
+    expect(agent.searchBaseUrl).toBeUndefined();
+    expect(agent.searchApiKey).toBeUndefined();
+    await saveStoredConfig(
+      {
+        baseUrl: " https://api.example.com/v1 ",
+        model: "gpt-x",
+        apiKey: "sk-secret",
+        searchBaseUrl: " https://search.example/v1 ",
+        searchApiKey: "  ",
+      },
+      path,
+    );
+    const searched = toAgentConfig((await loadStoredConfig(path))!);
+    expect(searched.searchBaseUrl).toBe("https://search.example/v1");
+    expect(searched.searchApiKey).toBeUndefined();
   });
 
   it("replaces config.json and leaves no temp file", async () => {

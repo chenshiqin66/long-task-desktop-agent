@@ -23,7 +23,7 @@
 | `read_file` | 自动 | 整个文件读进来，按 `maxReadChars` 截断 |
 | `list_dir` | 自动 | 跳过名为 `node_modules`、`.git`、`.agent` 的子项 |
 | `keyword_search` | 自动 | 一次最多 8 个词，按字面、区分大小写；跳过大于 1,000,000 字节的文件；条数上限 `maxSearchResults` |
-| `web_search` | 自动 | 调 DeepSeek 搜索接口，复用聊天的 API key；`count` 默认 8、最大 50；查询超过 128 字截断 |
+| `web_search` | 自动 | 调 DeepSeek 搜索接口。`searchApiKey` 空着就用聊天的 API key；`count` 默认 8、最大 50；查询超过 128 字截断 |
 | `read_skill` | 自动 | 读已安装技能的正文或附件，见 [技能](skills.md) |
 | `task_create`、`task_list`、`task_get`、`task_update`、`task_delete`、`claim_task`、`complete_task` | 自动 | 只改本会话 `.agent` 里的任务清单，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
 | `ask_user` | 不经许可门 | 问题最长 2000 字。选项最多 6 个、每个最长 200 字，每条都是用户可能给出的回答，不是模型自己的下一步。回答最长 8000 字，只作为工具结果，界面不画成用户气泡 |
@@ -36,7 +36,7 @@
 
 shell 命令的执行环境：Windows 上以 `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动，命令按 UTF-16LE 编码传入，不经过命令行的引号转义。外层包装把输出编码设为 UTF-8，并把外部程序的非零退出码当作工具失败。其他系统用 `bash -lc`。工作目录是当前工作区，环境变量继承应用进程。标准输出和标准错误按 UTF-8 流解码。超时或取消时，已经拿到的输出留在结果里，这一次仍算失败。`run_skill_script` 同样如此。
 
-`web_search` 的地址由聊天的 Base URL 推出来：以 `/v1` 结尾时拼 `/tools/search`，否则拼 `/v1/tools/search`。这是 DeepSeek 的搜索接口；Base URL 指向别家服务商时，这个工具多半会报错。返回给模型的是编号的纯文本结果，工具说明要求模型用 `[n]` 标注来源。
+`web_search` 的地址：`searchBaseUrl` 有值时用它（以 `/tools/search` 或 `/v1` 结尾就直接接上，否则补 `/v1/tools/search`）；空着则由聊天的 Base URL 推出来，以 `/v1` 结尾时拼 `/tools/search`，否则拼 `/v1/tools/search`。密钥同样先看 `searchApiKey`，空着再用聊天的 API key。返回体只认 DeepSeek 的 JSON；对不上时这个工具报错。返回给模型的是编号的纯文本结果，工具说明要求模型用 `[n]` 标注来源。这两项写在 `config.json` 里，没有单独的设置界面。
 
 ## 文件工具的路径沙箱
 

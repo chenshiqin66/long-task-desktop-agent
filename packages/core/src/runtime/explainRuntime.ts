@@ -346,6 +346,8 @@ export class ExplainRuntime {
       maxSearchResults: this.config.maxSearchResults,
       apiKey: this.config.apiKey,
       llmBaseUrl: this.config.baseUrl,
+      searchBaseUrl: this.config.searchBaseUrl,
+      searchApiKey: this.config.searchApiKey,
       fetchImpl: this.fetchImpl,
       sessionId,
     };

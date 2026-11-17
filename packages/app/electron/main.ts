@@ -280,6 +280,8 @@ function agentConfigKey(config: AgentConfig): string {
     config.maxToolOutputChars,
     config.maxReadChars,
     config.maxSearchResults,
+    config.searchBaseUrl ?? "",
+    config.searchApiKey ?? "",
   ]);
 }
 

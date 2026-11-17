@@ -92,5 +92,7 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
       stored.maxToolOutputChars ?? DEFAULT_AGENT_CONFIG.maxToolOutputChars,
     maxReadChars: stored.maxReadChars ?? DEFAULT_AGENT_CONFIG.maxReadChars,
     maxSearchResults: stored.maxSearchResults ?? DEFAULT_AGENT_CONFIG.maxSearchResults,
+    ...(stored.searchBaseUrl?.trim() ? { searchBaseUrl: stored.searchBaseUrl.trim() } : {}),
+    ...(stored.searchApiKey?.trim() ? { searchApiKey: stored.searchApiKey.trim() } : {}),
   };
 }

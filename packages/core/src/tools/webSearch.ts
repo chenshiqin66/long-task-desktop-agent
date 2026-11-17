@@ -71,7 +71,7 @@ export const webSearchTool: Tool = {
     },
   },
   async execute(args, ctx): Promise<ToolResult> {
-    const apiKey = ctx.apiKey?.trim();
+    const apiKey = ctx.searchApiKey?.trim() || ctx.apiKey?.trim();
     if (!apiKey) {
       return {
         content: "web_search requires an API key in agent config",

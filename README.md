@@ -155,11 +155,11 @@ npm start
 3. 点左下角的「模型」，填 Base URL、Model 和 API Key。密钥只存在本机用户目录。
 4. 点「新建会话」，输入任务，按 Enter 发送。
 
-`web_search` 是按 DeepSeek 的搜索接口实现的，地址由 Base URL 推出来：Base URL 填 `https://api.deepseek.com` 时，搜索请求发往 `https://api.deepseek.com/v1/tools/search`，复用同一个 API Key。Base URL 指向别家服务商时，主会话、子代理和解释侧栏里的搜索都会报错；不用搜索的功能不受影响。
+`web_search` 是按 DeepSeek 的搜索接口实现的。`searchBaseUrl` 空着时，地址由 Base URL 推出来：Base URL 填 `https://api.deepseek.com` 时，搜索请求发往 `https://api.deepseek.com/v1/tools/search`。`searchApiKey` 空着时复用同一个 API Key。填了这两项就用填写的地址和密钥。返回体仍然只认 DeepSeek 的 JSON；别家形状对不上时，主会话、子代理和解释侧栏里的搜索都会报错。不用搜索的功能不受影响。
 
 ## 配置
 
-配置文件是 `~/.long-task-agent/config.json`。「模型」对话框只改前三项，工作区那四项由侧栏维护，常用文件夹由工作台维护。后六项限额没有界面，要直接编辑这个文件；应用保存配置时会保留它们，下次发送时生效。文件不存在时按默认值启动。文件在但不是合法 JSON 时，会改名为 `config.json.broken-<时间>`，启动时弹出备份路径；应用仍以空密钥启动，把备份改回原名后重启即可恢复。
+配置文件是 `~/.long-task-agent/config.json`。「模型」对话框只改前三项，工作区那四项由侧栏维护，常用文件夹由工作台维护。限额和下面两项搜索配置没有界面，要直接编辑这个文件；应用保存配置时会保留它们，下次发送时生效。文件不存在时按默认值启动。文件在但不是合法 JSON 时，会改名为 `config.json.broken-<时间>`，启动时弹出备份路径；应用仍以空密钥启动，把备份改回原名后重启即可恢复。
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -177,6 +177,8 @@ npm start
 | `maxToolOutputChars` | 20000 | shell、技能脚本、搜索、目录列表和 MCP 工具输出的字符上限 |
 | `maxReadChars` | 50000 | `read_file` 和 `read_skill` 单次返回的字符上限。附进 `system` 的技能正文另有 8000 字上限 |
 | `maxSearchResults` | 50 | `keyword_search` 一次最多返回的条数 |
+| `searchBaseUrl` | 空 | `web_search` 的地址。空着就用 `baseUrl` 按 DeepSeek 的规则拼出来 |
+| `searchApiKey` | 空 | `web_search` 的密钥。空着就用 `apiKey` |
 
 ## 连接 MCP
 

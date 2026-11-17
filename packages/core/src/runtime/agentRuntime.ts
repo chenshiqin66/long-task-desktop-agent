@@ -1640,6 +1640,8 @@ export class AgentRuntime {
       maxSearchResults: this.config.maxSearchResults,
       apiKey: this.config.apiKey,
       llmBaseUrl: this.config.baseUrl,
+      searchBaseUrl: this.config.searchBaseUrl,
+      searchApiKey: this.config.searchApiKey,
       skillsRoot: this.skillsRoot,
       attachedSkillNames: fullyAttachedSkillNames(this.skillBodies),
       blockedOutputDirs: [...this.batchOutputDirs, ...this.deferredOutputDirs],

@@ -142,6 +142,9 @@ export interface AgentConfig {
   maxToolOutputChars: number;
   maxReadChars: number;
   maxSearchResults: number;
+  /** Set only when config.json has a non-empty value. Empty keeps the chat URL and key. */
+  searchBaseUrl?: string;
+  searchApiKey?: string;
 }
 
 export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, "baseUrl" | "model" | "apiKey"> = {
