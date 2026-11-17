@@ -1,5 +1,6 @@
 export interface Workbench {
   isOpen(): boolean;
+  open(): void;
   close(): void;
 }
 
@@ -134,8 +135,54 @@ export function mountWorkbench(
 
   return {
     isOpen: () => open || closing,
+    open: () => setOpen(true),
     close: () => setOpen(false),
   };
+}
+
+export type WorkbenchPage = "folders" | "memory";
+
+export interface WorkbenchNav {
+  current(): WorkbenchPage;
+  /** Switches without loading, for a caller that opens the sheet next. */
+  select(page: WorkbenchPage): void;
+  show(page: WorkbenchPage): void;
+}
+
+/** Menu buttons carry data-page. Parts of the stage carry data-workbench-page and show only on that page. */
+export function mountWorkbenchNav(opts: {
+  nav: HTMLElement;
+  stage: HTMLElement;
+  title: HTMLElement;
+  onShow(page: WorkbenchPage): void;
+}): WorkbenchNav {
+  let page: WorkbenchPage = "folders";
+  const buttons = Array.from(opts.nav.querySelectorAll<HTMLButtonElement>("button[data-page]"));
+
+  function select(next: WorkbenchPage): void {
+    page = next;
+    buttons.forEach((button) => {
+      if (button.dataset.page === next) {
+        button.setAttribute("aria-current", "page");
+        opts.title.textContent = button.textContent;
+      } else {
+        button.removeAttribute("aria-current");
+      }
+    });
+    opts.stage.querySelectorAll<HTMLElement>("[data-workbench-page]").forEach((part) => {
+      part.hidden = part.dataset.workbenchPage !== next;
+    });
+  }
+
+  function show(next: WorkbenchPage): void {
+    select(next);
+    opts.onShow(next);
+  }
+
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => show(button.dataset.page === "memory" ? "memory" : "folders"));
+  });
+  return { current: () => page, select, show };
 }
 
 function folderLabel(path: string): string {

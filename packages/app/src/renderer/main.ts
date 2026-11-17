@@ -22,7 +22,15 @@ import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
 import { attachMcpLibrary } from "./mcp.js";
 import { escapeAction } from "./escapeKey.js";
-import { mountFavoriteFolders, mountWorkbench } from "./workbench.js";
+import { mountFavoriteFolders, mountWorkbench, mountWorkbenchNav, type WorkbenchPage } from "./workbench.js";
+import { appendMemorySaved, mountMemoryPage } from "./memory.js";
+import {
+  plainError,
+  type MemoryActionResult,
+  type MemoryPageData,
+  type MemorySavedEvent,
+  type MemoryScope,
+} from "./memoryView.js";
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { mountQuestionNav } from "./questionNav.js";
 
@@ -205,10 +213,23 @@ declare global {
       addFavoriteFolder(): Promise<string[] | null>;
       removeFavoriteFolder(path: string): Promise<string[]>;
       reorderFavoriteFolders(paths: string[]): Promise<string[]>;
+      memoryLoad(workspace: string | null): Promise<MemoryPageData>;
+      memorySave(
+        workspace: string | null,
+        scope: MemoryScope,
+        name: string,
+        change: { description: string; body: string },
+      ): Promise<MemoryActionResult>;
+      memoryDelete(workspace: string | null, scope: MemoryScope, name: string): Promise<MemoryActionResult>;
+      memoryUndo(workspace: string | null, scope: MemoryScope, journalId: string): Promise<MemoryActionResult>;
+      memoryOpenDir(workspace: string | null, scope: MemoryScope): Promise<void>;
+      memoryRevealInstructions(workspace: string | null, scope: MemoryScope): Promise<void>;
+      setAutoMemory(on: boolean): Promise<void>;
       popupAppMenu(index: number, x: number, y: number): Promise<void>;
       setTaskbarPrompt(open: boolean, inView: boolean): Promise<void>;
       onEvent(cb: (e: any) => void): () => void;
       onSkillsChanged(cb: () => void): () => void;
+      onMemoryEvent(cb: (e: MemorySavedEvent) => void): () => void;
     };
   }
 }
@@ -253,19 +274,62 @@ const favoriteFolders = mountFavoriteFolders(
   document.getElementById("folder-add") as HTMLButtonElement,
   document.getElementById("folder-note") as HTMLElement,
 );
+const memoryPage = mountMemoryPage(
+  document.getElementById("memory-view") as HTMLElement,
+  document.getElementById("memory-note") as HTMLElement,
+  {
+    workspace: () => activeWorkspace,
+    knownWorkspaces: () => workspacePaths,
+    openSession: (workspace, sessionId) => openMemorySource(workspace, sessionId),
+  },
+);
+const workbenchNav = mountWorkbenchNav({
+  nav: document.getElementById("workbench-nav") as HTMLElement,
+  stage: document.getElementById("workbench-stage") as HTMLElement,
+  title: document.getElementById("workbench-title") as HTMLElement,
+  onShow: (page) => reloadWorkbenchPage(page),
+});
 const workbench = mountWorkbench(
   document.getElementById("btn-workbench") as HTMLButtonElement,
   document.getElementById("workbench-sheet") as HTMLElement,
   document.getElementById("workbench-close") as HTMLButtonElement,
-  () => {
-    void favoriteFolders.reload().catch((err: unknown) => {
-      const note = document.getElementById("folder-note");
-      if (!note) return;
-      note.hidden = false;
-      note.textContent = err instanceof Error ? err.message : "读不到常用文件夹";
-    });
-  },
+  () => reloadWorkbenchPage(workbenchNav.current()),
 );
+
+function reloadWorkbenchPage(page: WorkbenchPage): void {
+  if (page === "memory") {
+    void memoryPage.open();
+    return;
+  }
+  void favoriteFolders.reload().catch((err: unknown) => {
+    const note = document.getElementById("folder-note");
+    if (!note) return;
+    note.hidden = false;
+    note.textContent = err instanceof Error ? err.message : "读不到常用文件夹";
+  });
+}
+
+/** From the 已记住 line. The sheet covers the window, so it is closed whenever this runs. */
+function openMemoryPage(): void {
+  workbenchNav.select("memory");
+  workbench.open();
+}
+
+document.getElementById("btn-memory")!.addEventListener("click", () => openMemoryPage());
+
+async function openMemorySource(workspace: string, sessionId: string): Promise<string | null> {
+  let title = "";
+  try {
+    const found = (await window.agent.listWorkspaceSessions(workspace)).find((session) => session.session_id === sessionId);
+    if (!found) return "这条会话已经不在了";
+    title = found.title ?? "";
+  } catch (err) {
+    return plainError(err);
+  }
+  workbench.close();
+  await showSession(workspace, sessionId, title);
+  return null;
+}
 const skillMenu = document.getElementById("skill-menu") as HTMLElement;
 const pageCtxMenu = document.getElementById("page-ctx-menu")!;
 const pageCtxCopy = pageCtxMenu.querySelector('[data-ctx="copy"]') as HTMLButtonElement;
@@ -3532,6 +3596,17 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
   updateChrome();
   void refreshSessions();
 }
+
+window.agent.onMemoryEvent((e) => {
+  if (e.type !== "memory_saved") return;
+  if (workbench.isOpen() && workbenchNav.current() === "memory") void memoryPage.refresh();
+  const key = sessionViewKey(e.workspace, e.session_id);
+  const onScreen = e.session_id === currentSessionId && sameWorkspace(e.workspace, viewWorkspace);
+  const container = onScreen ? messagesEl : key ? sessionViews.get(key)?.holder : undefined;
+  if (!container) return;
+  const turnRunning = Boolean(key && runs.get(key)?.gate.isRunning);
+  appendMemorySaved(container, e, { turnRunning, openMemory: openMemoryPage });
+});
 
 window.agent.onEvent((e) => {
   if (e.type === "session_title") {

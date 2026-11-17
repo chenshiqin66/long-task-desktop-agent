@@ -432,6 +432,25 @@ function placeTranscript(container: HTMLElement, node: HTMLElement, startsTurn: 
   appendTranscriptNode(container, node);
 }
 
+/**
+ * Appends to the last turn, or to the one before it while the last turn is
+ * still running, so a note about a finished turn does not land mid-stream.
+ */
+export function appendAfterFinishedTurn(container: HTMLElement, node: HTMLElement, lastTurnRunning: boolean): void {
+  if (!lastTurnRunning) {
+    placeTranscript(container, node, false);
+    return;
+  }
+  const turns = Array.from(container.children).filter(
+    (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("turn"),
+  );
+  const running = turns[turns.length - 1];
+  const finished = turns[turns.length - 2];
+  if (finished) finished.append(node);
+  else if (running) container.insertBefore(node, running);
+  else placeTranscript(container, node, false);
+}
+
 export function removeLastTranscriptNodes(container: HTMLElement, count: number): void {
   for (let i = 0; i < count; i++) {
     const nodes = container.querySelectorAll(".msg");

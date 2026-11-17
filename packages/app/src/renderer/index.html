@@ -36,6 +36,7 @@
           <div class="sidebar-tools">
             <button type="button" id="btn-mcp" class="btn btn-ghost" aria-pressed="false">连接</button>
             <button type="button" id="btn-skills" class="btn btn-ghost" aria-pressed="false">技能</button>
+            <button type="button" id="btn-memory" class="btn btn-ghost">记忆</button>
             <button type="button" id="btn-config" class="btn btn-ghost" aria-label="配置模型">模型</button>
           </div>
           <button type="button" id="btn-workbench" class="btn btn-ghost" aria-pressed="false" aria-expanded="false" aria-controls="workbench-sheet">我的工作台</button>
@@ -285,17 +286,24 @@
     <div id="workbench-sheet" class="workbench-sheet" hidden role="dialog" aria-modal="true" aria-label="我的工作台">
       <aside class="workbench-menu">
         <nav id="workbench-nav" class="workbench-nav" aria-label="工作台菜单">
-          <button type="button" id="workbench-folders" aria-current="page">常用文件夹</button>
+          <button type="button" id="workbench-folders" data-page="folders" aria-current="page">常用文件夹</button>
+          <button type="button" id="workbench-memory" data-page="memory">记忆</button>
         </nav>
         <div id="workbench-foot-space" class="workbench-foot-space" aria-hidden="true"></div>
       </aside>
-      <section class="workbench-stage" aria-label="工作台内容">
+      <section id="workbench-stage" class="workbench-stage" aria-label="工作台内容">
         <header class="workbench-bar">
           <h2 id="workbench-title" class="workbench-title">常用文件夹</h2>
-          <button type="button" id="folder-add" class="workbench-plus" aria-label="添加文件夹">+</button>
+          <button type="button" id="folder-add" class="workbench-plus" aria-label="添加文件夹" data-workbench-page="folders">+</button>
         </header>
-        <p id="folder-note" class="skills-note" hidden></p>
-        <div id="workbench-view" class="workbench-view"></div>
+        <div class="workbench-page" data-workbench-page="folders">
+          <p id="folder-note" class="skills-note" hidden></p>
+          <div id="workbench-view" class="workbench-view"></div>
+        </div>
+        <div class="workbench-page" data-workbench-page="memory" hidden>
+          <p id="memory-note" class="skills-note" hidden></p>
+          <div id="memory-view" class="workbench-view memory-view"></div>
+        </div>
       </section>
       <button type="button" id="workbench-close" class="workbench-x" aria-label="关闭工作台">
         <svg viewBox="0 0 10 10" aria-hidden="true">

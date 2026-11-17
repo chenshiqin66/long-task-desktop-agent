@@ -11,6 +11,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = [
   ["test-run-event-gate.mjs"],
   ["test-escape-key.mjs"],
+  ["test-memory-view.mjs"],
   ["test-taskbar-attention.mjs"],
   ["test-taskbar-icon-win.mjs", "--experimental-test-module-mocks"],
 ];

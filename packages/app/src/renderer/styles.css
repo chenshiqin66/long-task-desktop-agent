@@ -286,7 +286,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .sidebar-tools {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   justify-items: stretch;
   gap: 8px;
   width: 100%;
@@ -592,6 +592,228 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   min-height: 0;
   overflow: auto;
   padding: 20px 24px;
+}
+
+.workbench-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  color: var(--ink);
+}
+
+.memory-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.memory-section-title {
+  margin: 0;
+  font-size: var(--text);
+  font-weight: 650;
+}
+
+.memory-type {
+  margin: 6px 0 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.memory-muted {
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+}
+
+.memory-empty {
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+.memory-switch-row,
+.memory-file-row,
+.memory-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  padding: 10px 12px;
+}
+
+.memory-switch-row,
+.memory-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.memory-switch-text,
+.memory-file-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memory-switch-title,
+.memory-file-scope,
+.memory-card-name {
+  font-weight: 650;
+}
+
+.memory-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.memory-switch-row .skill-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid #c3ccd4;
+  border-radius: 999px;
+  background: #d5dee6;
+  cursor: pointer;
+}
+
+.memory-switch-row .skill-switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent-ink);
+}
+
+.memory-switch-row .skill-switch[aria-checked="true"] .skill-switch-knob {
+  left: 18px;
+}
+
+.memory-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-card-head,
+.memory-journal-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.memory-card-desc,
+.memory-card-body {
+  margin: 0;
+}
+
+.memory-card-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.memory-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.memory-action {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--accent-ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.memory-action:hover {
+  text-decoration: underline;
+}
+
+.memory-action.is-danger {
+  color: var(--danger);
+}
+
+.memory-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text);
+}
+
+.memory-textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.memory-journal-row {
+  font-size: var(--text-sm);
+}
+
+.memory-saved {
+  margin: 6px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--ink-muted);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+}
+
+.memory-saved-name,
+.memory-saved-undo {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.memory-saved-name {
+  color: var(--accent-ink);
+}
+
+.memory-saved-undo {
+  margin-left: 4px;
+  color: var(--ink-muted);
+  text-decoration: underline;
+}
+
+.memory-saved-error {
+  margin-left: 4px;
+  color: var(--danger);
 }
 
 .btn {

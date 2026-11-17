@@ -215,7 +215,7 @@ npm start
 npm test                      # core 的 vitest，含文档一致性检查
 npm run build                 # 构建 core 和 app
 npm start                     # 构建 core，再构建 app 并启动 Electron
-npm run smoke -w @agent/app   # 构建 app，跑事件门、Esc 优先级和任务栏的四个脚本
+npm run smoke -w @agent/app   # 构建 app，跑事件门、Esc 优先级、任务栏和记忆页的五个脚本
 npm run eval                  # 构建 core 和评测器，跑 subagent-multitask 的 16 条用例
 ```
 
