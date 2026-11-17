@@ -15,6 +15,10 @@ class FakeRuntime implements PooledRuntime {
     return this.deferred;
   }
 
+  replay(sessionId: string): Promise<void> {
+    return this.submit(sessionId);
+  }
+
   submit(sessionId: string): Promise<void> {
     if (this.isTurnRunning) throw new AgentError("A turn is already running", "busy");
     this.isTurnRunning = true;

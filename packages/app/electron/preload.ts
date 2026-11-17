@@ -54,6 +54,12 @@ contextBridge.exposeInMainWorld("agent", {
     images?: Array<{ mime: string; base64: string }>,
     workspace?: string,
   ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, workspace),
+  replay: (
+    sessionId: string,
+    text: string,
+    images: Array<{ id: string; mime: string; path: string }>,
+    workspace?: string,
+  ) => ipcRenderer.invoke("agent:replay", sessionId, text, images, workspace),
   watchSession: (sessionId: string | null, workspace?: string) =>
     ipcRenderer.invoke("agent:watchSession", sessionId, workspace),
   listSkills: () => ipcRenderer.invoke("agent:listSkills"),

@@ -54,8 +54,10 @@ export function isCancelledNotice(content: string): boolean {
 }
 
 /** Right-aligned control under a user question. The caller decides when it may send. */
+const messageRoot = new WeakMap<HTMLElement, HTMLElement>();
+
 export function appendReaskButton(messageBody: HTMLElement, onClick: () => void): void {
-  const msg = messageBody.parentElement;
+  const msg = messageBody.parentElement ?? messageRoot.get(messageBody);
   if (!msg) return;
   const btn = document.createElement("button");
   btn.type = "button";
@@ -202,6 +204,7 @@ export function appendMessage(
     div.append(row);
   }
   const body = el("div", { class: "msg-body" });
+  messageRoot.set(body, div);
   if (role === "assistant" && opts?.rich !== false) {
     setRichText(body, content, true);
   } else {
@@ -211,7 +214,7 @@ export function appendMessage(
   if (role !== "user" && role !== "assistant") {
     div.append(el("span", { class: "msg-role" }, ROLE_LABEL[role] ?? role));
   }
-  if (content || role !== "user") div.append(body);
+  if (content || role !== "user" || opts?.images?.length) div.append(body);
   placeTranscript(container, div, role === "user");
   stampVisibleBubble(div, role, content, opts?.at, opts?.images);
   return body;

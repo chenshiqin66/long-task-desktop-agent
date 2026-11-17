@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRuntime } from "../src/runtime/agentRuntime.js";
@@ -58,6 +58,58 @@ describe("prompt images", () => {
     expect(row?.content).toBe("这是什么");
     expect(row?.images?.[0]?.path).toMatch(/^images\/img_[a-f0-9]+\.png$/);
     expect(JSON.stringify(row)).not.toContain(PNG);
+  });
+
+  it("sends the original picture again from the same file", async () => {
+    const calls: LlmChatRequest["messages"][] = [];
+    const provider: LlmProvider = {
+      chatStream(req) {
+        calls.push(req.messages);
+        return (async function* () {
+          yield { type: "text" as const, text: "看到了" };
+        })();
+      },
+    };
+    const rt = new AgentRuntime({
+      workspacePath: workspace,
+      config: {
+        baseUrl: "http://localhost",
+        model: "test",
+        apiKey: "sk-test",
+        ...DEFAULT_AGENT_CONFIG,
+      },
+      provider,
+    });
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "这是什么", [{ mime: "image/png", base64: PNG }]);
+    const first = (await rt.loadMessages(meta.session_id)).find((message) => message.role === "user");
+    const image = first?.images?.[0];
+    expect(image?.path).toMatch(/^images\/img_[a-f0-9]+\.png$/);
+    const dir = join(workspace, ".agent", "sessions", meta.session_id, "images");
+    const before = await readdir(dir);
+
+    await rt.replay(meta.session_id, "这是什么", [image!]);
+    await rt.replay(meta.session_id, "", [image!]);
+
+    expect(await readdir(dir)).toEqual(before);
+    const users = (await rt.loadMessages(meta.session_id)).filter((message) => message.role === "user");
+    expect(users.map((message) => message.content)).toEqual(["这是什么", "这是什么", ""]);
+    expect(users.every((message) => message.images?.[0]?.path === image?.path)).toBe(true);
+
+    const latest = [...(calls[2] ?? [])].reverse().find((message) => message.role === "user");
+    expect(Array.isArray(latest?.content)).toBe(true);
+    if (!Array.isArray(latest?.content)) return;
+    expect(latest.content[1]).toMatchObject({ type: "image_url" });
+    const older = (calls[2] ?? []).find((message) => message.role === "user");
+    expect(older?.content).toContain(imageOmissionNote(1));
+
+    await expect(
+      rt.replay(meta.session_id, "再问", [{ id: image!.id, mime: "image/png", path: "images/../../meta.json" }]),
+    ).rejects.toThrow(/invalid image path/i);
+    await expect(
+      rt.replay(meta.session_id, "再问", [{ id: "img_deadbeef", mime: "image/png", path: "images/img_deadbeef.png" }]),
+    ).rejects.toThrow(/missing/i);
+    expect((await rt.loadMessages(meta.session_id)).filter((message) => message.role === "user")).toHaveLength(3);
   });
 
   it("refuses a path that escapes the session image folder", async () => {

@@ -38,7 +38,7 @@ import {
   buildTaskPanel,
   McpPool,
 } from "@agent/core";
-import type { AgentConfig, ImageMime, PermissionDecision, StoredConfig, SubmittedImage } from "@agent/core";
+import type { AgentConfig, ImageAttachment, ImageMime, PermissionDecision, StoredConfig, SubmittedImage } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 import { registerMcpHandlers } from "./mcpIpc.js";
@@ -315,6 +315,22 @@ async function resetAllRuntimes(): Promise<void> {
 }
 
 const IMAGE_MIMES = new Set<ImageMime>(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+function normalizeReusedImages(raw: unknown): ImageAttachment[] {
+  if (!Array.isArray(raw)) throw new Error("Invalid images");
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Invalid image");
+    const mime = (item as { mime?: unknown }).mime;
+    const id = (item as { id?: unknown }).id;
+    const path = (item as { path?: unknown }).path;
+    if (typeof mime !== "string" || !IMAGE_MIMES.has(mime as ImageMime)) {
+      throw new Error("Unsupported image type");
+    }
+    if (typeof id !== "string" || !id.length) throw new Error("Invalid image");
+    if (typeof path !== "string" || !path.length) throw new Error("Invalid image");
+    return { id, mime: mime as ImageMime, path };
+  });
+}
 
 function normalizeSubmittedImages(raw: unknown): SubmittedImage[] | undefined {
   if (raw == null) return undefined;
@@ -744,6 +760,23 @@ app.whenReady().then(async () => {
         sessionId,
         text,
         normalizeSubmittedImages(images),
+        await currentConfigKey(),
+      );
+    },
+  );
+  ipcMain.handle(
+    "agent:replay",
+    async (_e, sessionId: string, text: string, images?: unknown, workspaceRaw?: unknown) => {
+      assertValidSessionId(sessionId);
+      const workspace =
+        typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
+      if (!workspace) throw new Error("No workspace selected");
+      if (typeof text !== "string") throw new Error("Invalid message");
+      await runPool.replay(
+        workspace,
+        sessionId,
+        text,
+        normalizeReusedImages(images ?? []),
         await currentConfigKey(),
       );
     },
