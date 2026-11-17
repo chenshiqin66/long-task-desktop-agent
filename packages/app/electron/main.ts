@@ -33,6 +33,7 @@ import {
   uninstallSkill,
   listSubagentToolRows,
   listSubagentStatuses,
+  releaseTasksInterruptedByRestart,
   TaskStore,
   buildTaskPanel,
   McpPool,
@@ -244,6 +245,7 @@ async function existingWorkspaces(paths: string[]): Promise<string[]> {
 }
 
 async function readTaskPanel(workspace: string, sessionId: string) {
+  await releaseTasksInterruptedByRestart(workspace, sessionId);
   const snapshot = await TaskStore.forSession(workspace, sessionId).list();
   const statuses = await listSubagentStatuses(workspace, sessionId);
   return buildTaskPanel(snapshot, statuses);

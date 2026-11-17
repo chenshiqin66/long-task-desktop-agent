@@ -13,6 +13,7 @@ import { MAX_IMAGES_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
 import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
 import { TaskStore } from "../store/taskStore.js";
+import { releaseTasksInterruptedByRestart } from "../store/subagentStore.js";
 import {
   InboxStore,
   planDrain,
@@ -787,6 +788,7 @@ export class AgentRuntime {
     if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
       throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
     }
+    await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
     const held = await this.beginUserTurn(sessionId, trimmed, incoming);
     if (held) return;
     try {

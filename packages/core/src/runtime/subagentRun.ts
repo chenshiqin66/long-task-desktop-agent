@@ -22,7 +22,7 @@ import {
 } from "../tools/agentTool.js";
 import { ToolHost } from "../tools/host.js";
 import type { ToolResult } from "../tools/types.js";
-import { SubagentStore, subagentDir, type SubagentMeta } from "../store/subagentStore.js";
+import { SubagentStore, subagentDir, processStartId, type SubagentMeta } from "../store/subagentStore.js";
 
 const CANCELLED = "Cancelled: subagent stopped.";
 
@@ -64,6 +64,7 @@ export async function runIsolatedSubagent(opts: {
     description: opts.description,
     ...(opts.outputDir ? { output_dir: opts.outputDir } : {}),
     status: "running",
+    process_id: processStartId,
     created_at: now,
     updated_at: now,
   };
