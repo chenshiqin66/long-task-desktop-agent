@@ -532,6 +532,21 @@ describe("tools", () => {
     expect(isDangerousBash("Remove-Item -Recurse -Force .\\build")).toBe(false);
     expect(isDangerousBash("Remove-Item -Recurse -Force C:\\Users\\x")).toBe(false);
     expect(isDangerousBash("Get-ChildItem C:\\")).toBe(false);
+    expect(isDangerousBash("rm -rf ~")).toBe(true);
+    expect(isDangerousBash("rm -rf $HOME")).toBe(true);
+    expect(isDangerousBash('rm -rf "$HOME/*"')).toBe(true);
+    expect(isDangerousBash("Remove-Item -Recurse $env:USERPROFILE")).toBe(true);
+    expect(isDangerousBash("Remove-Item -Recurse %USERPROFILE%")).toBe(true);
+    expect(isDangerousBash("Remove-Item -Recurse C:\\Windows")).toBe(true);
+    expect(isDangerousBash("Remove-Item -Recurse 'C:\\Program Files\\*'")).toBe(true);
+    expect(isDangerousBash("rm -rf /etc")).toBe(true);
+    expect(isDangerousBash("rm -rf /usr/*")).toBe(true);
+    expect(isDangerousBash('rm -rf "$DIR/"')).toBe(true);
+    expect(isDangerousBash('rm -rf "$DIR/*"')).toBe(true);
+    expect(isDangerousBash('rm -rf "$DIR/build"')).toBe(false);
+    expect(isDangerousBash("rm -rf ~/code")).toBe(false);
+    expect(isDangerousBash("rm -rf /usr/bin")).toBe(false);
+    expect(isDangerousBash("cd /tmp; rm -rf *")).toBe(false);
   });
 
   it("isDangerousBash sees through other spellings of a root wipe", () => {

@@ -98,6 +98,62 @@ function isRootTarget(raw: string): boolean {
   return parts.every((part) => /^\*+(?:\.\*)?$/.test(part));
 }
 
+const STAR = /^\*+(?:\.\*)?$/;
+
+/** `~`, `$HOME`, `$env:USERPROFILE`, `%USERPROFILE%`, each alone or with only a trailing slash or star. */
+function isHomeTarget(raw: string): boolean {
+  const path = raw.replace(/\\/g, "/").replace(/\/+$/, "");
+  return [
+    /^~(?:\/\*+)?$/i,
+    /^\$\{?home\}?(?:\/\*+)?$/i,
+    /^\$\{?env:userprofile\}?(?:\/\*+)?$/i,
+    /^%userprofile%(?:\/\*+)?$/i,
+  ].some((pattern) => pattern.test(path));
+}
+
+/** `"$DIR/"` and `"$DIR/*"`. `"$DIR/build"` still has a real path segment. */
+function isLoneVariableRoot(raw: string): boolean {
+  const path = raw.replace(/\\/g, "/");
+  return /^\$\{?[A-Za-z_][\w]*(?::[A-Za-z_][\w]*)?\}?\/+(?:\*+)?$/.test(path);
+}
+
+const DRIVE_DIRS = [["windows"], ["users"], ["program files"], ["program files (x86)"]];
+const POSIX_DIRS = [["etc"], ["usr"]];
+
+/** `C:\Windows`, `C:\Users\*`, `/etc`, `/usr/*`. A further segment such as `C:\Users\x` is not these. */
+function isSystemDirTarget(raw: string): boolean {
+  let path = raw
+    .replace(/^(?:[\w.]+\\)?filesystem::/i, "")
+    .replace(/^\\\\[?.]\\/, "")
+    .replace(/^(?:\$\{?env:systemdrive\}?|%systemdrive%)/i, "C:")
+    .replace(/\\/g, "/");
+  let roots = POSIX_DIRS;
+  if (path.startsWith("/")) {
+    path = path.slice(1);
+  } else if (/^[a-z]:/i.test(path)) {
+    roots = DRIVE_DIRS;
+    path = path.slice(2).replace(/^\/+/, "");
+  } else {
+    return false;
+  }
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return roots.some((root) => {
+    const same = root.every((segment, index) => parts[index]?.toLowerCase() === segment);
+    if (!same) return false;
+    if (parts.length === root.length) return true;
+    return parts.length === root.length + 1 && STAR.test(parts[parts.length - 1] ?? "");
+  });
+}
+
+function isSensitiveTarget(raw: string): boolean {
+  return isRootTarget(raw) || isHomeTarget(raw) || isLoneVariableRoot(raw) || isSystemDirTarget(raw);
+}
+
 /** `-r`, `-rf`, `-R`, `--recursive`, `/s`, and `-Recurse` or any prefix of it. */
 function isRecursiveFlag(word: string): boolean {
   const flag = word.toLowerCase();
@@ -131,17 +187,18 @@ function wipesRoot(stages: string[][]): boolean {
     const args = words.slice(at + 1);
     const paramValues = args.flatMap((arg) => /^-[a-z]+:(.+)$/i.exec(arg)?.[1] ?? []);
     const targets = [...args.filter((arg) => !isOption(arg)), ...paramValues];
-    if (args.some(isRecursiveFlag) && targets.some(isRootTarget)) return true;
+    if (args.some(isRecursiveFlag) && targets.some(isSensitiveTarget)) return true;
     // `Get-ChildItem C:\ | Remove-Item`: the root comes in through the pipe.
     const fed = targets.every(isPipelineItem);
-    return fed && stages.slice(0, index).some((stage) => stage.slice(1).some((word) => !isOption(word) && isRootTarget(word)));
+    return fed && stages.slice(0, index).some((stage) => stage.slice(1).some((word) => !isOption(word) && isSensitiveTarget(word)));
   });
 }
 
 /**
  * Commands that are never run, approved or not: recursive deletion of a
- * filesystem or drive root, and disk-level formatting or wiping. A path built
- * from a variable, such as `rm -rf "$DIR/"`, is not recognised.
+ * filesystem root, a home directory, or a system directory, and disk-level
+ * formatting or wiping. `"$DIR/"` is blocked. `"$DIR/build"`, `cd` then
+ * `rm -rf *`, and a delete inside a script are not recognised.
  */
 export function isDangerousBash(command: string): boolean {
   const trimmed = command.trim();
