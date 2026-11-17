@@ -60,7 +60,7 @@ shell 是最难管的工具：一条命令可能读、可能写，也可能在�
 
 1. **拦截**：两类命令直接 `blocked`，点过允许也不执行（`packages/core/src/tools/dangerous.ts`）。
    - 磁盘级工具：`mkfs`、`dd of=/dev/…`、`Format-Volume`、`Clear-Disk`、`Initialize-Disk`、`Remove-Partition`、`format X:`、`diskpart`、`wipefs`、`blkdiscard`，以及用 `shred`、`fdisk`、`parted` 这类工具或重定向写 `/dev/` 下的磁盘设备。
-   - 递归删除整个盘、根目录、用户目录或系统目录。这一步不按固定写法匹配，而是把命令拆成语句、管道阶段和词，去掉引号（包括 PowerShell 认的弯引号），`bash -c '…'`、`cmd /c "…"` 里的命令再拆一遍。删除命令（`rm`、`rmdir`、`rd`、`del`、`erase`、`Remove-Item`、`ri`）带了递归参数（`-r`、`--recursive`、`/s`、`-Recurse` 及其缩写），目标归一化之后是下面这些，就拦：`/`、`//`、`/*`、`/tmp/..`、`C:\`、`C:/`、`C:\*`、`$env:SystemDrive\`；`~`、`$HOME`、`$env:USERPROFILE`、`%USERPROFILE%`，以及它们后面只跟 `/` 或 `/*`；`C:\Windows`、`C:\Users`、`C:\Program Files`、`/etc`、`/usr`，以及它们后面只跟 `*`；单独一个变量再加 `/` 或 `/*`，比如 `"$DIR/"`。这些目录经管道送进删除命令也算。
+   - 递归删除整个盘、根目录、用户目录或系统目录。这一步不按固定写法匹配，而是把命令拆成语句、管道阶段和词，去掉引号（包括 PowerShell 认的弯引号），`bash -c '…'`、`cmd /c "…"` 里的命令再拆一遍。删除命令（`rm`、`rmdir`、`rd`、`del`、`erase`、`Remove-Item`、`ri`）带了递归参数（`-r`、`--recursive`、`/s`、`-Recurse` 及其缩写），目标归一化之后是下面这些，就拦：`/`、`//`、`/*`、`/tmp/..`、`C:\`、`C:/`、`C:\*`、`$env:SystemDrive\`；`~`、`$HOME`、`$env:USERPROFILE`、`%USERPROFILE%`，以及它们后面只跟 `/` 或 `/*`；`C:\Windows`、`C:\Users`、`C:\Program Files`、`C:\Program Files (x86)`、`/etc`、`/usr`，以及它们后面只跟 `*`；单独一个变量再加 `/` 或 `/*`，比如 `"$DIR/"`。这些目录经管道送进删除命令也算。
 
    `"$DIR/build"`、先 `cd` 再 `rm -rf *`、写在脚本文件里的删除，以及 `C:\Users\x`、`~/code` 这种再往下的一层，都认不出。这些落到后面的步骤，按写操作要确认，见 [已知问题](roadmap.md#已知问题)。
 2. **扫描**：按每种 shell 自己的规则，标出引号、转义、注释之外还在起作用的字符。遇到这次不建模的语法就要求确认：命令替换 `$(...)` 和反引号、圆括号和花括号、bash 的 heredoc（`<<`）、PowerShell 的 here-string（`@'`、`@"`）、块注释 `<#`、停止解析符 `--%`、词中间的 `#`。命令里有控制字符也要确认。
