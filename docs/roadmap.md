@@ -41,4 +41,3 @@
 - **`web_search` 只认 DeepSeek 的返回格式。** `config.json` 里可以填 `searchBaseUrl` 和 `searchApiKey`，空着就用聊天的地址和密钥。别家的 JSON 对不上，结果仍然是一次失败。
 - **配置文件的可靠性。** 坏的 `config.json` 会改名为 `config.json.broken-<时间>`，启动时说明备份路径。应用仍以空密钥启动，要自己把备份改回去。改名失败时文件留在原地，之后的保存会盖掉它。
 - **界面。** 「重新问」会覆盖当前草稿，并带上草稿里的图片。
-- **`scripts/test-markdown.mjs` 跑不起来。** `ui.ts` 在模块顶层创建 `ResizeObserver`，还给 `document`、`window` 挂监听，纯 Node 里没有这些对象，一导入就报错。这个脚本没有接进 npm 脚本，所以一直没人发现。
