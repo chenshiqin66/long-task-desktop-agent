@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, readdir, appendFile, access, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { newId, nowIso } from "../ids.js";
-import type { ImageAttachment, ImageMime, Message, SessionMeta } from "../types.js";
+import type { ImageAttachment, ImageMime, Message, SessionMeta, VideoAttachment, VideoMime } from "../types.js";
 
 /** Session ids must be a single path segment — no separators or traversal. */
 const SESSION_ID_RE = /^[A-Za-z0-9_-]+$/;
@@ -21,6 +21,21 @@ export const MAX_IMAGES_PER_MESSAGE = 4;
 
 export function extForImageMime(mime: string): string | null {
   return IMAGE_MIME_EXT[mime as ImageMime] ?? null;
+}
+
+const VIDEO_MIME_EXT: Record<VideoMime, "mp4" | "webm" | "mov"> = {
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+};
+
+const VIDEO_REL_RE = /^videos\/vid_[a-f0-9]+\.(mp4|webm|mov)$/;
+
+export const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
+export const MAX_VIDEOS_PER_MESSAGE = 1;
+
+export function extForVideoMime(mime: string): "mp4" | "webm" | "mov" | null {
+  return VIDEO_MIME_EXT[mime as VideoMime] ?? null;
 }
 
 export function assertValidSessionId(sessionId: string): void {
@@ -131,6 +146,43 @@ export class SessionStore {
 
   async readImageDataUrl(sessionId: string, relativePath: string): Promise<string> {
     return (await this.readImageForSend(sessionId, relativePath)).dataUrl;
+  }
+
+  async saveVideo(sessionId: string, mime: VideoMime, base64: string): Promise<VideoAttachment> {
+    const ext = extForVideoMime(mime);
+    if (!ext) throw new Error(`Unsupported video type: ${mime}`);
+    const cleaned = base64.replace(/\s/g, "");
+    const bytes = Buffer.from(cleaned, "base64");
+    if (!bytes.length || bytes.length > MAX_VIDEO_BYTES) {
+      throw new Error(`Video is empty or larger than ${MAX_VIDEO_BYTES} bytes`);
+    }
+    const id = newId("vid");
+    const fileName = `${id}.${ext}`;
+    const path = `videos/${fileName}`;
+    const dir = sessionDir(this.workspacePath, sessionId);
+    await mkdir(join(dir, "videos"), { recursive: true });
+    await writeFile(join(dir, "videos", fileName), bytes);
+    return { id, mime, path };
+  }
+
+  async readVideoForSend(
+    sessionId: string,
+    relativePath: string,
+  ): Promise<{ dataUrl: string; bytes: number }> {
+    if (!VIDEO_REL_RE.test(relativePath)) throw new Error("Invalid video path");
+    const dir = sessionDir(this.workspacePath, sessionId);
+    const videosDir = resolve(dir, "videos") + sep;
+    const abs = resolve(dir, relativePath);
+    if (!abs.startsWith(videosDir)) throw new Error("Invalid video path");
+    const bytes = await readFile(abs);
+    const ext = relativePath.slice(relativePath.lastIndexOf(".") + 1);
+    const mime =
+      ext === "mp4" ? "video/mp4" : ext === "webm" ? "video/webm" : "video/quicktime";
+    return { dataUrl: `data:${mime};base64,${bytes.toString("base64")}`, bytes: bytes.length };
+  }
+
+  async readVideoDataUrl(sessionId: string, relativePath: string): Promise<string> {
+    return (await this.readVideoForSend(sessionId, relativePath)).dataUrl;
   }
 
   async deleteSession(sessionId: string): Promise<void> {

@@ -24,6 +24,17 @@ export interface SubmittedImage {
   base64: string;
 }
 
+export type VideoMime = "video/mp4" | "video/webm" | "video/quicktime";
+export interface VideoAttachment {
+  id: string;
+  mime: VideoMime;
+  path: string; // videos/vid_<hex>.mp4 | .webm | .mov
+}
+export interface SubmittedVideo {
+  mime: VideoMime;
+  base64: string;
+}
+
 export interface Message {
   id: string;
   session_id: string;
@@ -31,6 +42,7 @@ export interface Message {
   role: Role;
   content: string;
   images?: ImageAttachment[];
+  videos?: VideoAttachment[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
