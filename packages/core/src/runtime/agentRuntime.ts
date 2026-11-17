@@ -757,6 +757,7 @@ export class AgentRuntime {
     ) {
       return "failed";
     }
+    this.skillBodies = await this.loadSkillBodiesQuiet(held.text);
     this.emit({ type: "held_user", turn_id: turnId, session_id: sessionId });
     return "wrote";
   }
@@ -1119,6 +1120,22 @@ export class AgentRuntime {
           "unknown_skill",
         );
       }
+      bodies.push({ name, directory: result.directory, body: result.content });
+    }
+    return bodies;
+  }
+
+  /** Held text during a continuation. A missing or disabled name is skipped. */
+  private async loadSkillBodiesQuiet(text: string): Promise<SkillBodyAttachment[]> {
+    const bodies: SkillBodyAttachment[] = [];
+    for (const name of extractSkillTokens(text)) {
+      const result = await readInstalledSkillFile(
+        name,
+        undefined,
+        this.config.maxReadChars,
+        this.skillsRoot,
+      );
+      if (result.is_error || !result.directory) continue;
       bodies.push({ name, directory: result.directory, body: result.content });
     }
     return bodies;
