@@ -1943,7 +1943,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   text-overflow: ellipsis;
 }
 
-.turn > .msg.user.is-stuck:has(.msg-body) .msg-images {
+.turn > .msg.user.is-stuck:has(.msg-body:not(:empty)) .msg-images {
   display: none;
 }
 
@@ -2060,6 +2060,11 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .msg.user .msg-role {
   color: var(--teal);
+}
+
+.msg.user .msg-body:empty,
+.turn > .msg.user.is-stuck .msg-body:empty {
+  display: none;
 }
 
 .msg.user .msg-body {

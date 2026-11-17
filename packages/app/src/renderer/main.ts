@@ -65,7 +65,7 @@ declare global {
           is_error?: boolean;
           tool_call_id?: string;
           tool_call_arguments?: string;
-          images?: Array<{ path: string }>;
+          images?: Array<{ id?: string; mime?: string; path: string }>;
           created_at?: string;
         }>
       >;
@@ -109,7 +109,7 @@ declare global {
           is_error?: boolean;
           tool_call_id?: string;
           tool_call_arguments?: string;
-          images?: Array<{ path: string }>;
+          images?: Array<{ id?: string; mime?: string; path: string }>;
           created_at?: string;
         }>
       >;
@@ -135,6 +135,12 @@ declare global {
         sessionId: string,
         text: string,
         images?: Array<{ mime: string; base64: string }>,
+        workspace?: string,
+      ): Promise<void>;
+      replay(
+        sessionId: string,
+        text: string,
+        images: Array<{ id: string; mime: string; path: string }>,
         workspace?: string,
       ): Promise<void>;
       watchSession(sessionId: string | null, workspace?: string): Promise<void>;
@@ -2244,11 +2250,11 @@ async function loadCurrent(): Promise<void> {
       renderEmptyState(paint(), "idle");
       return;
     }
-    let openQuestion: { body: HTMLElement; text: string } | null = null;
+    let openQuestion: { body: HTMLElement; text: string; images: ReusedImage[] } | null = null;
     const liveHere = Boolean(live?.gate.isRunning);
     const closeUnanswered = () => {
       if (!openQuestion) return;
-      ensureReask(openQuestion.body, openQuestion.text);
+      ensureReask(openQuestion.body, openQuestion.text, openQuestion.images);
       appendCancelledNotice(paint());
       openQuestion = null;
     };
@@ -2292,7 +2298,7 @@ async function loadCurrent(): Promise<void> {
       } else if (m.role === "assistant") {
         if (isCancelledNotice(m.content)) {
           if (openQuestion) {
-            ensureReask(openQuestion.body, openQuestion.text);
+            ensureReask(openQuestion.body, openQuestion.text, openQuestion.images);
             openQuestion = null;
           }
           const body = appendMessage(into, "assistant", m.content, { rich: true, messageId: m.id, at: m.created_at });
@@ -2315,6 +2321,7 @@ async function loadCurrent(): Promise<void> {
             ...(m.created_at ? { at: m.created_at } : {}),
           }),
           text: m.content,
+          images: reusedImages(m.images),
         };
       } else {
         openQuestion = null;
@@ -2611,10 +2618,24 @@ function appendCancelledNotice(container: HTMLElement): void {
   body.closest(".msg")?.classList.add("is-cancelled");
 }
 
-function ensureReask(body: HTMLElement, text: string): void {
-  if (!text.trim() || body.parentElement?.querySelector(".reask")) return;
+type ReusedImage = { id: string; mime: string; path: string };
+
+function reusedImages(raw: Array<{ id?: string; mime?: string; path: string }> | undefined): ReusedImage[] {
+  if (!raw?.length) return [];
+  const out: ReusedImage[] = [];
+  for (const image of raw) {
+    if (!image.id || !image.mime || !image.path) continue;
+    out.push({ id: image.id, mime: image.mime, path: image.path });
+  }
+  return out;
+}
+
+function ensureReask(body: HTMLElement, text: string, images: ReusedImage[] = [], picturesMissing = false): void {
+  if (!text.trim() && images.length === 0 && !picturesMissing) return;
+  const host = body.parentElement ?? body.closest(".msg");
+  if (host?.querySelector(".reask")) return;
   appendReaskButton(body, () => {
-    void reask(text);
+    void reask(text, images, picturesMissing);
   });
 }
 
@@ -2628,15 +2649,79 @@ function appendUserQuestion(text: string, images: string[], messageId?: string):
   return body;
 }
 
-async function reask(text: string): Promise<void> {
-  if (!text.trim()) return;
+async function reask(text: string, images: ReusedImage[], picturesMissing = false): Promise<void> {
+  const trimmed = text.trim();
+  if (picturesMissing) {
+    showChatError(new Error("原来的图片不在记录里，没有重新发送"));
+    return;
+  }
+  if (!trimmed && images.length === 0) return;
   const run = pageRun();
-  if (creatingSession || run?.gate.isRunning) {
+  if (creatingSession || run?.gate.isRunning || run?.pendingAsk) {
     setStatus("请先停止当前任务再重新问", true);
     return;
   }
-  inputEl.value = text;
-  await sendMessage();
+  if (trimmed && !(await acceptSkillTokens(trimmed))) return;
+  const workspace = viewWorkspace ?? activeWorkspace;
+  if (!workspace) return;
+  try {
+    if (!sameWorkspace(workspace, activeWorkspace)) {
+      await window.agent.activateWorkspace(workspace);
+      activeWorkspace = workspace;
+    }
+  } catch (err) {
+    showStatusError(err);
+    return;
+  }
+  const sessionId = await ensureSession();
+  if (!sessionId) return;
+  const preview = await imageDataUrls(workspace, sessionId, images);
+  if (messagesEl.querySelector(".empty-state")) messagesEl.innerHTML = "";
+  followTail = true;
+  releasedRuns.delete(runKeyOf(workspace, sessionId));
+  const next = ensureRun(workspace, sessionId);
+  drawing = next;
+  try {
+    appendUserQuestion(trimmed, preview);
+    resetStreamTarget(appendMessage(messagesEl, "assistant", ""), next);
+    clearOpenTools(next);
+    next.liveStatus = "运行中…";
+    next.gate = beginRun(sessionId);
+    next.wakeAcceptsInput = false;
+    next.stopRequested = false;
+  } finally {
+    drawing = null;
+  }
+  updateChrome();
+  void refreshSessions();
+  try {
+    await window.agent.replay(sessionId, trimmed, images, workspace);
+  } catch (err) {
+    next.gate = idleGate();
+    dropRun(workspace, sessionId);
+    removeLastTranscriptNodes(messagesEl, 2);
+    if (!messagesEl.querySelector(".msg")) renderEmptyState(messagesEl, "idle");
+    showChatError(err);
+    updateChrome();
+    void refreshSessions();
+  }
+}
+
+async function bindReaskAfterCancel(run: RunPaint, body: HTMLElement): Promise<void> {
+  const text = body.textContent ?? "";
+  const showedPictures = Boolean(body.parentElement?.querySelector(".msg-images img"));
+  let images: ReusedImage[] = [];
+  try {
+    const msgs = sameWorkspace(run.workspace, activeWorkspace)
+      ? await window.agent.loadMessages(run.sessionId)
+      : await window.agent.loadWorkspaceMessages(run.workspace, run.sessionId);
+    const users = msgs.filter((message) => message.role === "user" && message.name !== "task-notification");
+    const last = users[users.length - 1];
+    if (last && last.content === text) images = reusedImages(last.images);
+  } catch {
+    images = [];
+  }
+  ensureReask(body, text, images, showedPictures && images.length === 0);
 }
 
 async function sendMessage(): Promise<void> {
@@ -2932,7 +3017,7 @@ messagesEl.addEventListener("click", (ev) => {
   holdQuestionBubble(bubble, () => turn.classList.toggle("is-expanded"));
 });
 
-messagesEl.addEventListener("click", (ev) => {
+function openMarkdownLink(ev: Event): void {
   const t = ev.target;
   if (!(t instanceof Element)) return;
   const a = t.closest("a.md-link");
@@ -2957,7 +3042,10 @@ messagesEl.addEventListener("click", (ev) => {
     }
     setStatus(res.error || "无法打开链接", true);
   });
-});
+}
+
+messagesEl.addEventListener("click", openMarkdownLink);
+explainConversation?.addEventListener("click", openMarkdownLink);
 
 window.addEventListener("keydown", (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f") {
@@ -3408,7 +3496,7 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
     ensureMessageTime(run.streamingEl);
     const questions = host?.querySelectorAll(":scope > .turn > .msg.user .msg-body, :scope > .msg.user .msg-body");
     const asked = questions?.[questions.length - 1];
-    if (asked instanceof HTMLElement) ensureReask(asked, asked.textContent ?? "");
+    if (asked instanceof HTMLElement) void bindReaskAfterCancel(run, asked);
   } else if (run.streamingEl && run.streamBuffer) {
     paintStreamRich(true, run);
   }

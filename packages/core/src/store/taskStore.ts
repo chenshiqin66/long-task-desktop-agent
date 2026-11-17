@@ -18,7 +18,10 @@ import { sessionDir } from "./sessionStore.js";
  * status. blocks is the reverse edge, kept so a delete can find dependents
  * without guessing. The directory lock makes claim and complete atomic:
  * two callers cannot both observe pending and both become the owner.
- * Separate files keep one unreadable task from discarding the rest.
+ * Separate files keep one unreadable task from blocking edits to the others.
+ * Claim, complete, update, and delete of that id are refused, and the file
+ * is left as it is. New ids skip numbers occupied by those files. A task
+ * that depends on an unreadable id stays blocked, because its status is unknown.
  * Ids are decimal strings and are not reused after delete (.highwatermark).
  *
  * owner is who claimed the task. The parent defaults to "main". A subagent
@@ -117,12 +120,19 @@ export class TaskStore {
     const blockedBy = cleanIdList(input.blockedBy ?? []);
     if (!blockedBy.ok) return blockedBy;
 
-    return this.mutate(async (all) => {
+    return this.mutate(async (all, unreadable) => {
       for (const dep of blockedBy.ids) {
+        const bad = refuseUnreadable(dep, unreadable);
+        if (bad) return bad;
         if (!all.has(dep)) return { ok: false, error: `No task #${dep}` };
       }
       const mark = await readHighWaterMark(this.dir);
-      const highest = Math.max(mark, 0, ...[...all.keys()].map((id) => Number(id)));
+      const taken = new Set<number>([...all.keys()].map((id) => Number(id)));
+      for (const name of unreadable) {
+        const id = name.slice(0, -".json".length);
+        if (TASK_ID_RE.test(id)) taken.add(Number(id));
+      }
+      const highest = Math.max(mark, 0, ...taken);
       const id = String(highest + 1);
       const now = nowIso();
       const task: TaskRecord = {
@@ -155,7 +165,9 @@ export class TaskStore {
     if (!parsed) return { ok: false, error: "Invalid task id" };
     const who = cleanOwner(owner);
     if (!who.ok) return who;
-    return this.mutate(async (all) => {
+    return this.mutate(async (all, unreadable) => {
+      const bad = refuseUnreadable(parsed, unreadable);
+      if (bad) return bad;
       const task = all.get(parsed);
       if (!task) return { ok: false, error: `No task #${parsed}` };
       if (task.status !== "pending") {
@@ -183,7 +195,9 @@ export class TaskStore {
     if (!parsed) return { ok: false, error: "Invalid task id" };
     const who = cleanOwner(owner);
     if (!who.ok) return who;
-    return this.mutate(async (all) => {
+    return this.mutate(async (all, unreadable) => {
+      const bad = refuseUnreadable(parsed, unreadable);
+      if (bad) return bad;
       const task = all.get(parsed);
       if (!task) return { ok: false, error: `No task #${parsed}` };
       if (task.status !== "in_progress") {
@@ -275,7 +289,9 @@ export class TaskStore {
     const overlap = addIds.find((id) => removeIds.includes(id));
     if (overlap) return { ok: false, error: `Task #${overlap} is both added and removed` };
 
-    return this.mutate(async (all) => {
+    return this.mutate(async (all, unreadable) => {
+      const bad = refuseUnreadable(parsed, unreadable);
+      if (bad) return bad;
       const task = all.get(parsed);
       if (!task) return { ok: false, error: `No task #${parsed}` };
       if ((addIds.length > 0 || removeIds.length > 0) && task.status !== "pending") {
@@ -297,6 +313,8 @@ export class TaskStore {
       }
       for (const blockerId of addIds) {
         if (blockerId === task.id) return { ok: false, error: `Task #${task.id} cannot be blocked by itself` };
+        const blockerBad = refuseUnreadable(blockerId, unreadable);
+        if (blockerBad) return blockerBad;
         const blocker = all.get(blockerId);
         if (!blocker) return { ok: false, error: `No task #${blockerId}` };
         if (dependsOn(blockerId, task.id, all)) {
@@ -319,7 +337,9 @@ export class TaskStore {
   async delete(id: string): Promise<TaskResult<TaskRecord>> {
     const parsed = cleanTaskId(id);
     if (!parsed) return { ok: false, error: "Invalid task id" };
-    return this.mutate(async (all) => {
+    return this.mutate(async (all, unreadable) => {
+      const bad = refuseUnreadable(parsed, unreadable);
+      if (bad) return bad;
       const task = all.get(parsed);
       if (!task) return { ok: false, error: `No task #${parsed}` };
       const now = nowIso();
@@ -341,15 +361,19 @@ export class TaskStore {
     });
   }
 
-  private async mutate<T>(fn: (all: Map<string, TaskRecord>) => Promise<TaskResult<T>>): Promise<TaskResult<T>> {
+  private async mutate<T>(
+    fn: (all: Map<string, TaskRecord>, unreadable: ReadonlySet<string>) => Promise<TaskResult<T>>,
+  ): Promise<TaskResult<T>> {
     return withTaskLock(this.dir, async () => {
       const loaded = await loadTasks(this.dir);
-      if (loaded.unreadable.length > 0) {
-        return { ok: false, error: `Unreadable task file: ${loaded.unreadable.join(", ")}` };
-      }
-      return fn(loaded.tasks);
+      return fn(loaded.tasks, new Set(loaded.unreadable));
     });
   }
+}
+
+function refuseUnreadable(id: string, unreadable: ReadonlySet<string>): TaskResult<never> | null {
+  if (!unreadable.has(`${id}.json`)) return null;
+  return { ok: false, error: `Task file ${id}.json is unreadable` };
 }
 
 function cleanSubject(raw: string): { ok: true; subject: string } | { ok: false; error: string } {

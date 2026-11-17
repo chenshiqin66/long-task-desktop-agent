@@ -18,4 +18,8 @@ export interface StoredConfig {
   maxToolOutputChars?: number;
   maxReadChars?: number;
   maxSearchResults?: number;
+  /** Search endpoint. Empty uses the chat base URL. Still expects DeepSeek's JSON. */
+  searchBaseUrl?: string;
+  /** Search key. Empty uses apiKey. */
+  searchApiKey?: string;
 }

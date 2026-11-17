@@ -1,6 +1,7 @@
 import { newId, nowIso } from "../ids.js";
 import type {
   AgentConfig,
+  ImageAttachment,
   ImageMime,
   Message,
   RuntimeEvent,
@@ -13,6 +14,7 @@ import { MAX_IMAGES_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
 import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
 import { TaskStore } from "../store/taskStore.js";
+import { releaseTasksInterruptedByRestart } from "../store/subagentStore.js";
 import {
   InboxStore,
   planDrain,
@@ -590,10 +592,16 @@ export class AgentRuntime {
     await this.runModelLoop(sessionId, turn_id);
   }
 
-  private async beginUserTurn(sessionId: string, text: string, images: SubmittedImage[]): Promise<boolean> {
+  private async beginUserTurn(
+    sessionId: string,
+    text: string,
+    images: SubmittedImage[],
+    opts?: { allowHold?: boolean },
+  ): Promise<boolean> {
     let held = false;
     await this.withInbox(async () => {
       if (this.running && this.turnKind === "wakeup" && this.activeSessionId === sessionId && !this.heldSubmit) {
+        if (opts?.allowHold === false) throw new AgentError("A turn is already running", "busy");
         this.heldSubmit = { text, images };
         if (this.exiting) this.exitWake = true;
         held = true;
@@ -756,6 +764,7 @@ export class AgentRuntime {
     ) {
       return "failed";
     }
+    this.skillBodies = await this.loadSkillBodiesQuiet(held.text);
     this.emit({ type: "held_user", turn_id: turnId, session_id: sessionId });
     return "wrote";
   }
@@ -787,10 +796,15 @@ export class AgentRuntime {
     if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
       throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
     }
+    await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
     const held = await this.beginUserTurn(sessionId, trimmed, incoming);
     if (held) return;
     try {
-      await this.executeUserTurn(sessionId, trimmed, incoming);
+      const storedImages = [];
+      for (const image of incoming) {
+        storedImages.push(await this.store.saveImage(sessionId, image.mime as ImageMime, image.base64));
+      }
+      await this.executeUserTurn(sessionId, trimmed, storedImages);
     } finally {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
@@ -800,7 +814,56 @@ export class AgentRuntime {
     }
   }
 
-  private async executeUserTurn(sessionId: string, trimmed: string, incoming: SubmittedImage[]): Promise<void> {
+  /** Send the original question again. `images` must already live in this session. */
+  async replay(sessionId: string, text: string, images: ImageAttachment[]): Promise<void> {
+    const trimmed = text.trim();
+    const incoming = images ?? [];
+    if (!trimmed && incoming.length === 0) {
+      throw new AgentError("Empty message", "empty");
+    }
+    if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
+      throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
+    }
+    const storedImages = await this.reuseStoredImages(sessionId, incoming);
+    await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
+    await this.beginUserTurn(sessionId, trimmed, [], { allowHold: false });
+    try {
+      await this.executeUserTurn(sessionId, trimmed, storedImages);
+    } finally {
+      await this.settleAfterTurn(sessionId);
+      this.abort = null;
+      this.skillBodies = [];
+      this.turnWritesAllowed = false;
+      this.batchOutputDirs = [];
+    }
+  }
+
+  private async reuseStoredImages(sessionId: string, images: ImageAttachment[]): Promise<ImageAttachment[]> {
+    const stored: ImageAttachment[] = [];
+    for (const image of images) {
+      const mime = image?.mime;
+      const id = image?.id;
+      const path = image?.path;
+      if (mime !== "image/png" && mime !== "image/jpeg" && mime !== "image/webp" && mime !== "image/gif") {
+        throw new AgentError("Unsupported image type", "bad_image");
+      }
+      if (typeof id !== "string" || !/^img_[a-f0-9]+$/.test(id)) {
+        throw new AgentError("Invalid image", "bad_image");
+      }
+      const ext = mime === "image/jpeg" ? "jpg" : mime.slice("image/".length);
+      const expected = `images/${id}.${ext}`;
+      if (path !== expected) throw new AgentError("Invalid image path", "bad_image");
+      try {
+        await this.store.readImageForSend(sessionId, path);
+      } catch {
+        throw new AgentError("Image file is missing", "bad_image");
+      }
+      stored.push({ id, mime, path });
+    }
+    return stored;
+  }
+
+  private async executeUserTurn(sessionId: string, trimmed: string, storedImages: ImageAttachment[]): Promise<void> {
     this.turnWritesAllowed = false;
     this.batchOutputDirs = [];
     this.abort = new AbortController();
@@ -811,13 +874,6 @@ export class AgentRuntime {
       // Close any orphaned tool_calls from a prior crash/storage failure before
       // appending the new user message (append-only jsonl needs them at the end).
       await this.repairStoredToolCalls(sessionId);
-
-      const storedImages = [];
-      for (const image of incoming) {
-        storedImages.push(
-          await this.store.saveImage(sessionId, image.mime as ImageMime, image.base64),
-        );
-      }
 
       if (!(await this.persistTrace(turn_id, { session_id: sessionId, turn_id, type: "turn_start" }))) {
         return;
@@ -1117,6 +1173,22 @@ export class AgentRuntime {
           "unknown_skill",
         );
       }
+      bodies.push({ name, directory: result.directory, body: result.content });
+    }
+    return bodies;
+  }
+
+  /** Held text during a continuation. A missing or disabled name is skipped. */
+  private async loadSkillBodiesQuiet(text: string): Promise<SkillBodyAttachment[]> {
+    const bodies: SkillBodyAttachment[] = [];
+    for (const name of extractSkillTokens(text)) {
+      const result = await readInstalledSkillFile(
+        name,
+        undefined,
+        this.config.maxReadChars,
+        this.skillsRoot,
+      );
+      if (result.is_error || !result.directory) continue;
       bodies.push({ name, directory: result.directory, body: result.content });
     }
     return bodies;
@@ -1638,6 +1710,8 @@ export class AgentRuntime {
       maxSearchResults: this.config.maxSearchResults,
       apiKey: this.config.apiKey,
       llmBaseUrl: this.config.baseUrl,
+      searchBaseUrl: this.config.searchBaseUrl,
+      searchApiKey: this.config.searchApiKey,
       skillsRoot: this.skillsRoot,
       attachedSkillNames: fullyAttachedSkillNames(this.skillBodies),
       blockedOutputDirs: [...this.batchOutputDirs, ...this.deferredOutputDirs],

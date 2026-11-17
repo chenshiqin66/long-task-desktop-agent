@@ -17,6 +17,7 @@ import {
   OpenAICompatibleProvider,
   loadStoredConfig,
   saveStoredConfig,
+  takeConfigQuarantine,
   toAgentConfig,
   assertValidSessionId,
   DeferredPermissionGate,
@@ -32,11 +33,12 @@ import {
   uninstallSkill,
   listSubagentToolRows,
   listSubagentStatuses,
+  releaseTasksInterruptedByRestart,
   TaskStore,
   buildTaskPanel,
   McpPool,
 } from "@agent/core";
-import type { AgentConfig, ImageMime, PermissionDecision, StoredConfig, SubmittedImage } from "@agent/core";
+import type { AgentConfig, ImageAttachment, ImageMime, PermissionDecision, StoredConfig, SubmittedImage } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 import { registerMcpHandlers } from "./mcpIpc.js";
@@ -243,6 +245,7 @@ async function existingWorkspaces(paths: string[]): Promise<string[]> {
 }
 
 async function readTaskPanel(workspace: string, sessionId: string) {
+  await releaseTasksInterruptedByRestart(workspace, sessionId);
   const snapshot = await TaskStore.forSession(workspace, sessionId).list();
   const statuses = await listSubagentStatuses(workspace, sessionId);
   return buildTaskPanel(snapshot, statuses);
@@ -277,6 +280,8 @@ function agentConfigKey(config: AgentConfig): string {
     config.maxToolOutputChars,
     config.maxReadChars,
     config.maxSearchResults,
+    config.searchBaseUrl ?? "",
+    config.searchApiKey ?? "",
   ]);
 }
 
@@ -310,6 +315,22 @@ async function resetAllRuntimes(): Promise<void> {
 }
 
 const IMAGE_MIMES = new Set<ImageMime>(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+function normalizeReusedImages(raw: unknown): ImageAttachment[] {
+  if (!Array.isArray(raw)) throw new Error("Invalid images");
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Invalid image");
+    const mime = (item as { mime?: unknown }).mime;
+    const id = (item as { id?: unknown }).id;
+    const path = (item as { path?: unknown }).path;
+    if (typeof mime !== "string" || !IMAGE_MIMES.has(mime as ImageMime)) {
+      throw new Error("Unsupported image type");
+    }
+    if (typeof id !== "string" || !id.length) throw new Error("Invalid image");
+    if (typeof path !== "string" || !path.length) throw new Error("Invalid image");
+    return { id, mime: mime as ImageMime, path };
+  });
+}
 
 function normalizeSubmittedImages(raw: unknown): SubmittedImage[] | undefined {
   if (raw == null) return undefined;
@@ -427,14 +448,42 @@ async function readSessionArtifacts(workspace: string, sessionId: string, part?:
   return { meta, messages, traces, context };
 }
 
-app.whenReady().then(() => {
+const holdsSingleInstance = app.requestSingleInstanceLock();
+if (!holdsSingleInstance) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
+
+app.whenReady().then(async () => {
+  if (!holdsSingleInstance) return;
   taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
   registerMcpHandlers(ipcMain, mcpPool);
   mcpPool.onStatus((snapshot) => {
     if (!win?.isDestroyed()) win?.webContents.send("agent:mcpStatus", snapshot);
   });
+  await loadStoredConfig();
+  const notice = takeConfigQuarantine();
   createWindow();
+  if (notice) {
+    const moved = "movedTo" in notice;
+    const options = {
+      type: "warning" as const,
+      title: "配置文件无法读取",
+      message: moved
+        ? "config.json 不是合法的 JSON，已经改名备份。应用按默认值启动，密钥是空的。把备份改回 config.json 后重启即可恢复。"
+        : "config.json 不是合法的 JSON，而且没能改名。应用按默认值启动，密钥是空的。在修好这个文件之前不要保存配置，否则会盖掉它。",
+      detail: moved ? notice.movedTo : notice.stillAt,
+    };
+    if (win && !win.isDestroyed()) await dialog.showMessageBox(win, options);
+    else await dialog.showMessageBox(options);
+  }
   void mcpPool.start();
 
   app.on("before-quit", (event) => {
@@ -711,6 +760,23 @@ app.whenReady().then(() => {
         sessionId,
         text,
         normalizeSubmittedImages(images),
+        await currentConfigKey(),
+      );
+    },
+  );
+  ipcMain.handle(
+    "agent:replay",
+    async (_e, sessionId: string, text: string, images?: unknown, workspaceRaw?: unknown) => {
+      assertValidSessionId(sessionId);
+      const workspace =
+        typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
+      if (!workspace) throw new Error("No workspace selected");
+      if (typeof text !== "string") throw new Error("Invalid message");
+      await runPool.replay(
+        workspace,
+        sessionId,
+        text,
+        normalizeReusedImages(images ?? []),
         await currentConfigKey(),
       );
     },

@@ -81,4 +81,47 @@ describe("skill bodies on submit", () => {
       "看看 /etc/hosts",
     ]);
   });
+
+  it("attaches a skill mentioned in a message held during a completion notice", async () => {
+    let release: (() => void) | null = null;
+    let calls = 0;
+    const systems: string[] = [];
+    const provider: LlmProvider = {
+      chatStream(req: LlmChatRequest) {
+        calls += 1;
+        const system = req.messages[0]?.content;
+        systems.push(typeof system === "string" ? system : "");
+        if (calls === 1) {
+          return (async function* () {
+            yield { type: "text" as const, text: "ack" };
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          })();
+        }
+        return textOnly("next");
+      },
+    };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: config(), provider, skillsRoot });
+    const session = await rt.createSession("held");
+    await rt.watchSession(session.session_id);
+    const running = rt.postTaskNotification(session.session_id, {
+      subagentId: "subagent_a",
+      content: "receipt mentions /demo but is not a user request",
+      ok: true,
+    });
+    const started = Date.now();
+    while (calls !== 1 || release == null) {
+      if (Date.now() - started > 2_000) throw new Error("wake did not start");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await rt.submit(session.session_id, "please /demo and /missing");
+    release!();
+    await running;
+    expect(calls).toBe(2);
+    expect(systems[0]).not.toContain("# Skill body:");
+    expect(systems[1]).toContain("# Skill body: demo");
+    expect(systems[1]).toContain("Do the thing.");
+    expect(systems[1]).not.toContain("# Skill body: missing");
+  });
 });

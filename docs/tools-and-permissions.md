@@ -23,7 +23,7 @@
 | `read_file` | 自动 | 整个文件读进来，按 `maxReadChars` 截断 |
 | `list_dir` | 自动 | 跳过名为 `node_modules`、`.git`、`.agent` 的子项 |
 | `keyword_search` | 自动 | 一次最多 8 个词，按字面、区分大小写；跳过大于 1,000,000 字节的文件；条数上限 `maxSearchResults` |
-| `web_search` | 自动 | 调 DeepSeek 搜索接口，复用聊天的 API key；`count` 默认 8、最大 50；查询超过 128 字截断 |
+| `web_search` | 自动 | 调 DeepSeek 搜索接口。`searchApiKey` 空着就用聊天的 API key；`count` 默认 8、最大 50；查询超过 128 字截断 |
 | `read_skill` | 自动 | 读已安装技能的正文或附件，见 [技能](skills.md) |
 | `task_create`、`task_list`、`task_get`、`task_update`、`task_delete`、`claim_task`、`complete_task` | 自动 | 只改本会话 `.agent` 里的任务清单，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
 | `ask_user` | 不经许可门 | 问题最长 2000 字。选项最多 6 个、每个最长 200 字，每条都是用户可能给出的回答，不是模型自己的下一步。回答最长 8000 字，只作为工具结果，界面不画成用户气泡 |
@@ -36,7 +36,7 @@
 
 shell 命令的执行环境：Windows 上以 `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动，命令按 UTF-16LE 编码传入，不经过命令行的引号转义。外层包装把输出编码设为 UTF-8，并把外部程序的非零退出码当作工具失败。其他系统用 `bash -lc`。工作目录是当前工作区，环境变量继承应用进程。标准输出和标准错误按 UTF-8 流解码。超时或取消时，已经拿到的输出留在结果里，这一次仍算失败。`run_skill_script` 同样如此。
 
-`web_search` 的地址由聊天的 Base URL 推出来：以 `/v1` 结尾时拼 `/tools/search`，否则拼 `/v1/tools/search`。这是 DeepSeek 的搜索接口；Base URL 指向别家服务商时，这个工具多半会报错。返回给模型的是编号的纯文本结果，工具说明要求模型用 `[n]` 标注来源。
+`web_search` 的地址：`searchBaseUrl` 有值时用它（以 `/tools/search` 或 `/v1` 结尾就直接接上，否则补 `/v1/tools/search`）；空着则由聊天的 Base URL 推出来，以 `/v1` 结尾时拼 `/tools/search`，否则拼 `/v1/tools/search`。密钥同样先看 `searchApiKey`，空着再用聊天的 API key。返回体只认 DeepSeek 的 JSON；对不上时这个工具报错。返回给模型的是编号的纯文本结果，工具说明要求模型用 `[n]` 标注来源。这两项写在 `config.json` 里，没有单独的设置界面。
 
 ## 文件工具的路径沙箱
 
@@ -60,9 +60,9 @@ shell 是最难管的工具：一条命令可能读、可能写，也可能在�
 
 1. **拦截**：两类命令直接 `blocked`，点过允许也不执行（`packages/core/src/tools/dangerous.ts`）。
    - 磁盘级工具：`mkfs`、`dd of=/dev/…`、`Format-Volume`、`Clear-Disk`、`Initialize-Disk`、`Remove-Partition`、`format X:`、`diskpart`、`wipefs`、`blkdiscard`，以及用 `shred`、`fdisk`、`parted` 这类工具或重定向写 `/dev/` 下的磁盘设备。
-   - 递归删除整个盘或根目录。这一步不按固定写法匹配，而是把命令拆成语句、管道阶段和词，去掉引号（包括 PowerShell 认的弯引号），`bash -c '…'`、`cmd /c "…"` 里的命令再拆一遍。删除命令（`rm`、`rmdir`、`rd`、`del`、`erase`、`Remove-Item`、`ri`）带了递归参数（`-r`、`--recursive`、`/s`、`-Recurse` 及其缩写），目标归一化之后是根或根下的全部，就拦：`/`、`//`、`/*`、`/tmp/..`、`C:\`、`C:/`、`C:\*`、`$env:SystemDrive\` 都算。根目录经管道送进删除命令也算，比如 `Get-ChildItem C:\ | Remove-Item`、`ls / | xargs rm -rf`。
+   - 递归删除整个盘、根目录、用户目录或系统目录。这一步不按固定写法匹配，而是把命令拆成语句、管道阶段和词，去掉引号（包括 PowerShell 认的弯引号），`bash -c '…'`、`cmd /c "…"` 里的命令再拆一遍。删除命令（`rm`、`rmdir`、`rd`、`del`、`erase`、`Remove-Item`、`ri`）带了递归参数（`-r`、`--recursive`、`/s`、`-Recurse` 及其缩写），目标归一化之后是下面这些，就拦：`/`、`//`、`/*`、`/tmp/..`、`C:\`、`C:/`、`C:\*`、`$env:SystemDrive\`；`~`、`$HOME`、`$env:USERPROFILE`、`%USERPROFILE%`，以及它们后面只跟 `/` 或 `/*`；`C:\Windows`、`C:\Users`、`C:\Program Files`、`C:\Program Files (x86)`、`/etc`、`/usr`，以及它们后面只跟 `*`；单独一个变量再加 `/` 或 `/*`，比如 `"$DIR/"`。这些目录经管道送进删除命令也算。
 
-   认不出用变量拼出来的路径，也不管用户目录和系统目录，这些落到后面的步骤，按写操作要确认，见 [已知问题](roadmap.md#已知问题)。
+   `"$DIR/build"`、先 `cd` 再 `rm -rf *`、写在脚本文件里的删除，以及 `C:\Users\x`、`~/code` 这种再往下的一层，都认不出。这些落到后面的步骤，按写操作要确认，见 [已知问题](roadmap.md#已知问题)。
 2. **扫描**：按每种 shell 自己的规则，标出引号、转义、注释之外还在起作用的字符。遇到这次不建模的语法就要求确认：命令替换 `$(...)` 和反引号、圆括号和花括号、bash 的 heredoc（`<<`）、PowerShell 的 here-string（`@'`、`@"`）、块注释 `<#`、停止解析符 `--%`、词中间的 `#`。命令里有控制字符也要确认。
 3. **切段**：在 `;`、`&&`、`||`、换行、单独的 `&` 处切开，再按管道 `|` 切成若干阶段。每一段的每个阶段都必须只读。切分只看引号外的字符，所以 `echo "a;b"` 不会被切开。
 4. **重定向**：`>`、`>>`、`2>`、`*>`、`&>` 这类，目标只要不是 `/dev/null`、`$null`、`&1`、`&2`，就算写。
@@ -113,7 +113,7 @@ Windows PowerShell 5.1 里 `curl` 是 `Invoke-WebRequest` 的别名，所以 `cu
 
 - 文件工具读写不出工作区，写入类工具不碰 `.agent`；换大小写、走目录联接都绕不过去。`write_file` 的目标若已经是符号链接，写入前拒绝，不跟着链接写。硬链接认不出来，见 [已知问题](roadmap.md#已知问题)。
 - 自动执行的 shell 命令，在上面规则覆盖的范围内，不写文件、不执行别的程序。
-- 递归删除整个盘或根目录、格式化或擦除磁盘，点过允许也不执行。用变量拼出来的路径认不出，删用户目录、系统目录不在这份名单里，这些只剩确认这一道，见上面第 1 步。
+- 递归删除整个盘、根目录、用户目录或列出的系统目录，以及格式化或擦除磁盘，点过允许也不执行。`"$DIR/build"`、先 `cd` 再 `rm -rf *`、脚本里的删除，认不出，见上面第 1 步。
 - 配置里的 `apiKey` 不由 runtime 写进会话日志（`llm_request` 只记模型名、条数、字数、图片张数和 `context_id`）。
 
 **它挡不住的：**

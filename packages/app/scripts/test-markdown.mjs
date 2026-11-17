@@ -1,4 +1,4 @@
-import { formatMarkdown } from "../dist/src/renderer/ui.js";
+import { formatMarkdown } from "../dist/src/renderer/markdown.js";
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);

@@ -21,9 +21,12 @@ import { SHELL_TOOL_NAME } from "../src/tools/host.js";
 import {
   assertValidAgentId,
   listSubagentToolRows,
+  processStartId,
+  releaseTasksInterruptedByRestart,
   SubagentStore,
   subagentDir,
 } from "../src/store/subagentStore.js";
+import { TaskStore } from "../src/store/taskStore.js";
 import { rmWorkspace } from "./rmWorkspace.js";
 
 function config(over: Partial<AgentConfig> = {}): AgentConfig {
@@ -336,6 +339,13 @@ describe("AgentRuntime subagents", () => {
       );
       expect(raw.length).toBeGreaterThan(0);
     }
+    const childMeta = JSON.parse(
+      await readFile(
+        join(workspace, ".agent", "sessions", meta.session_id, "subagents", subs[0]!, "meta.json"),
+        "utf8",
+      ),
+    ) as { process_id?: string };
+    expect(childMeta.process_id).toBe(processStartId);
     const sessions = await readdir(join(workspace, ".agent", "sessions"));
     expect(sessions).toEqual([meta.session_id]);
   });
@@ -479,5 +489,118 @@ describe("AgentRuntime subagents", () => {
     if (receipt?.type === "tool_result") {
       expect(receipt.content).toContain(`Reached max tool steps (${EXPLORE_TOOL_ROUNDS})`);
     }
+  });
+
+  it("returns tasks claimed by a subagent from another process start", async () => {
+    const sessionId = "sess_restart";
+    const tasks = TaskStore.forSession(workspace, sessionId);
+    const base = {
+      session_id: sessionId,
+      turn_id: "turn_1",
+      parent_turn_id: "turn_parent",
+      parent_tool_call_id: "parent_call",
+      subagent_type: "worker" as const,
+      description: "left running",
+      status: "running" as const,
+      created_at: "2026-11-17T00:00:00.000Z",
+      updated_at: "2026-11-17T00:00:00.000Z",
+    };
+    await tasks.create({ subject: "Write schema", description: "Add the users table." });
+    await tasks.create({ subject: "Add the API", description: "Serve the users table." });
+    await tasks.create({ subject: "Cover the API", description: "Test the users endpoint." });
+    await tasks.claim("1", "subagent_dead");
+    await tasks.claim("2", "subagent_live");
+    await tasks.claim("3", "subagent_old");
+    await SubagentStore.create(subagentDir(workspace, sessionId, "subagent_dead"), {
+      ...base,
+      agent_id: "subagent_dead",
+      process_id: "other-process",
+    });
+    await SubagentStore.create(subagentDir(workspace, sessionId, "subagent_live"), {
+      ...base,
+      agent_id: "subagent_live",
+      description: "still this process",
+      process_id: processStartId,
+    });
+    await SubagentStore.create(subagentDir(workspace, sessionId, "subagent_old"), {
+      ...base,
+      agent_id: "subagent_old",
+      description: "written before process ids",
+    });
+    await tasks.create({ subject: "Ship it", description: "Publish the API." });
+    await tasks.claim("4", "subagent_done");
+    await tasks.complete("4", "subagent_done");
+    await SubagentStore.create(subagentDir(workspace, sessionId, "subagent_done"), {
+      ...base,
+      agent_id: "subagent_done",
+      description: "already finished",
+      status: "completed",
+      process_id: "other-process",
+    });
+
+    await releaseTasksInterruptedByRestart(workspace, sessionId);
+
+    expect((await tasks.get("1")).ok && (await tasks.get("1")).value).toMatchObject({ status: "pending" });
+    expect((await tasks.get("1")).ok && (await tasks.get("1")).value.owner).toBeUndefined();
+    expect((await tasks.get("2")).ok && (await tasks.get("2")).value).toMatchObject({
+      status: "in_progress",
+      owner: "subagent_live",
+    });
+    expect((await tasks.get("3")).ok && (await tasks.get("3")).value).toMatchObject({ status: "pending" });
+    expect((await tasks.get("4")).ok && (await tasks.get("4")).value).toMatchObject({
+      status: "completed",
+      owner: "subagent_done",
+    });
+
+    const dead = JSON.parse(
+      await readFile(join(subagentDir(workspace, sessionId, "subagent_dead"), "meta.json"), "utf8"),
+    ) as { status: string; stopped_reason?: string; process_id?: string };
+    expect(dead).toMatchObject({ status: "error", stopped_reason: "restart", process_id: "other-process" });
+    const live = JSON.parse(
+      await readFile(join(subagentDir(workspace, sessionId, "subagent_live"), "meta.json"), "utf8"),
+    ) as { status: string };
+    expect(live.status).toBe("running");
+    const done = JSON.parse(
+      await readFile(join(subagentDir(workspace, sessionId, "subagent_done"), "meta.json"), "utf8"),
+    ) as { status: string };
+    expect(done.status).toBe("completed");
+    await expect(
+      readFile(join(workspace, ".agent", "sessions", sessionId, "messages.jsonl"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  it("writes a subagent's reported token usage onto its trace", async () => {
+    const provider: LlmProvider = {
+      chatStream(req) {
+        if (systemText(req).includes("You are an explore subagent")) {
+          return chunks([
+            { type: "usage", usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+            textChunk("looked"),
+          ]);
+        }
+        if (req.messages.some((message) => message.role === "tool")) return chunks([textChunk("ok")]);
+        return chunks([
+          callChunk("s1", "subagent", {
+            description: "look",
+            subagent_type: "explore",
+            task: "Look around.",
+          }),
+        ]);
+      },
+    };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: config(), provider });
+    const meta = await rt.createSession("usage");
+    await rt.submit(meta.session_id, "look");
+    const subs = await readdir(join(workspace, ".agent", "sessions", meta.session_id, "subagents"));
+    const raw = await readFile(
+      join(workspace, ".agent", "sessions", meta.session_id, "subagents", subs[0]!, "trace.jsonl"),
+      "utf8",
+    );
+    const response = raw
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; token_usage?: { total_tokens?: number } })
+      .find((event) => event.type === "llm_response");
+    expect(response?.token_usage).toEqual({ prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 });
   });
 });

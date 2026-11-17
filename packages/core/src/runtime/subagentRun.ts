@@ -22,7 +22,7 @@ import {
 } from "../tools/agentTool.js";
 import { ToolHost } from "../tools/host.js";
 import type { ToolResult } from "../tools/types.js";
-import { SubagentStore, subagentDir, type SubagentMeta } from "../store/subagentStore.js";
+import { SubagentStore, subagentDir, processStartId, type SubagentMeta } from "../store/subagentStore.js";
 
 const CANCELLED = "Cancelled: subagent stopped.";
 
@@ -64,6 +64,7 @@ export async function runIsolatedSubagent(opts: {
     description: opts.description,
     ...(opts.outputDir ? { output_dir: opts.outputDir } : {}),
     status: "running",
+    process_id: processStartId,
     created_at: now,
     updated_at: now,
   };
@@ -138,6 +139,7 @@ export async function runIsolatedSubagent(opts: {
       let assistantText = "";
       const toolCalls: ToolCall[] = [];
       let llmError: string | undefined;
+      let usage: TraceEvent["token_usage"];
       try {
         for await (const chunk of opts.provider.chatStream({
           messages: prepared.messages,
@@ -148,6 +150,7 @@ export async function runIsolatedSubagent(opts: {
           if (opts.signal.aborted) break;
           if (chunk.type === "text" && chunk.text) assistantText += chunk.text;
           else if (chunk.type === "tool_call_delta" && chunk.tool_call) toolCalls.push(chunk.tool_call);
+          else if (chunk.type === "usage") usage = chunk.usage;
           else if (chunk.type === "error") llmError = chunk.error ?? "llm error";
         }
       } catch (err) {
@@ -163,6 +166,7 @@ export async function runIsolatedSubagent(opts: {
       if (llmError) {
         failed = true;
         finalText = `Subagent model error: ${llmError}`;
+        await trace(store, opts.sessionId, turnId, "llm_error", { error: llmError }, usage);
         break;
       }
 
@@ -180,7 +184,7 @@ export async function runIsolatedSubagent(opts: {
       await trace(store, opts.sessionId, turnId, "llm_response", {
         content_chars: assistantText.length,
         tool_calls: toolCalls.map((call) => call.function.name),
-      });
+      }, usage);
 
       if (toolCalls.length === 0) {
         finalText = assistantText;
@@ -234,6 +238,8 @@ export async function runIsolatedSubagent(opts: {
           maxSearchResults: opts.config.maxSearchResults,
           apiKey: opts.config.apiKey,
           llmBaseUrl: opts.config.baseUrl,
+          searchBaseUrl: opts.config.searchBaseUrl,
+          searchApiKey: opts.config.searchApiKey,
           skillsRoot: opts.skillsRoot,
           attachedSkillNames: attached,
           sessionId: opts.sessionId,
@@ -293,6 +299,7 @@ async function trace(
   turnId: string,
   type: string,
   detail: Record<string, unknown>,
+  tokenUsage?: TraceEvent["token_usage"],
 ): Promise<void> {
   const event: TraceEvent = {
     id: newId("trace"),
@@ -301,6 +308,7 @@ async function trace(
     type,
     timestamp: nowIso(),
     detail,
+    ...(tokenUsage ? { token_usage: tokenUsage } : {}),
   };
   await store.appendTrace(event);
 }

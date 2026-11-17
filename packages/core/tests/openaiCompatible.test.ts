@@ -157,6 +157,45 @@ describe("OpenAICompatibleProvider", () => {
     expect(auth).toBe("Bearer sk-secret-key");
     expect(body.model).toBe("gpt-x");
     expect(body.stream).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
     expect(body.tools[0].function.name).toBe("bash");
+  });
+
+  it("yields usage only when the stream sends it", async () => {
+    const sse =
+      `data: {"choices":[{"delta":{"content":"ok"}}]}\n\n` +
+      `data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\n` +
+      `data: [DONE]\n\n`;
+    const fetchImpl: typeof fetch = async () => new Response(sse, { status: 200 });
+    const p = new OpenAICompatibleProvider({ baseUrl: "https://example.com/v1", apiKey: "sk", fetchImpl });
+    const chunks = [];
+    for await (const chunk of p.chatStream({ messages: [{ role: "user", content: "x" }], tools: [], model: "m" })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toContainEqual({
+      type: "usage",
+      usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+    });
+  });
+
+  it("retries once without stream_options when the gateway rejects that field", async () => {
+    const bodies: unknown[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (body.stream_options) {
+        return new Response("unknown field stream_options", { status: 400 });
+      }
+      return new Response(`data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n`, { status: 200 });
+    };
+    const p = new OpenAICompatibleProvider({ baseUrl: "https://example.com/v1", apiKey: "sk", fetchImpl });
+    const texts: string[] = [];
+    for await (const chunk of p.chatStream({ messages: [{ role: "user", content: "x" }], tools: [], model: "m" })) {
+      if (chunk.type === "text" && chunk.text) texts.push(chunk.text);
+      if (chunk.type === "error") texts.push(chunk.error ?? "");
+    }
+    expect(bodies).toHaveLength(2);
+    expect((bodies[1] as { stream_options?: unknown }).stream_options).toBeUndefined();
+    expect(texts).toEqual(["ok"]);
   });
 });

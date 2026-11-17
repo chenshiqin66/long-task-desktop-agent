@@ -200,11 +200,33 @@ describe("task list", () => {
     );
     expect(status.is_error).toBe(true);
     expect(status.content).toMatch(/claim_task/);
+    await store.create({
+      subject: "Add the API",
+      description: "Serve the users table.",
+      blockedBy: ["1"],
+    });
     const dir = tasksDir(workspace, sessionId);
-    await writeFile(join(dir, "2.json"), "{", "utf8");
-    const blocked = await store.create({ subject: "Add the API", description: "Serve the users table." });
-    expect(blocked.ok).toBe(false);
-    if (!blocked.ok) expect(blocked.error).toMatch(/Unreadable/);
+    await writeFile(join(dir, "1.json"), "{", "utf8");
+
+    for (const result of [
+      await store.claim("1", "main"),
+      await store.complete("1", "main"),
+      await store.update({ id: "1", subject: "Nope" }),
+      await store.delete("1"),
+    ]) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatch(/unreadable/i);
+    }
+    expect(await readFile(join(dir, "1.json"), "utf8")).toBe("{");
+
+    const stillBlocked = await store.claim("2", "main");
+    expect(stillBlocked.ok).toBe(false);
+    if (!stillBlocked.ok) expect(stillBlocked.error).toMatch(/blocked by #1/);
+
+    const created = await store.create({ subject: "Cover the API", description: "Test the users endpoint." });
+    expect(created.ok && created.value.id).toBe("3");
+    expect(await readFile(join(dir, "1.json"), "utf8")).toBe("{");
+    expect((await store.update({ id: "2", subject: "Add the public API" })).ok).toBe(true);
   });
 
   it("persists a task when the parent calls task_create", async () => {

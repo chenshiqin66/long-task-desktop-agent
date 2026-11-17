@@ -1,12 +1,17 @@
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { nowIso } from "../ids.js";
 import type { Message, TraceEvent } from "../types.js";
 import { assertValidSessionId, sessionDir } from "./sessionStore.js";
+import { TaskStore } from "./taskStore.js";
 import type { SubagentType } from "../tools/agentTool.js";
 
 /** New records use subagent_. agent_ stays valid so sessions written before the rename still load. */
 const SUBAGENT_ID_RE = /^(?:sub)?agent_[A-Za-z0-9]+$/;
+
+/** Identifies this process. A running subagent from another start is not still alive here. */
+export const processStartId = randomBytes(8).toString("hex");
 
 export function assertValidAgentId(agentId: string): void {
   if (!SUBAGENT_ID_RE.test(agentId)) throw new Error(`Invalid subagent id: ${JSON.stringify(agentId)}`);
@@ -32,6 +37,10 @@ export interface SubagentMeta {
   description: string;
   output_dir?: string;
   status: "running" | "completed" | "error" | "cancelled";
+  /** Set when the subagent starts. Missing means the record predates this field. */
+  process_id?: string;
+  /** Set when a restart interrupted a run that was still marked running. */
+  stopped_reason?: "restart";
   created_at: string;
   updated_at: string;
 }
@@ -161,4 +170,41 @@ export async function listSubagentStatuses(
     }
   }
   return statuses;
+}
+
+/**
+ * A subagent only runs inside the process that started it. Opening the session
+ * or sending a message releases tasks still claimed by a `running` record whose
+ * process id is not this start. The parent transcript gets no receipt.
+ * Two processes are not the normal case: the app keeps a single-instance lock.
+ * A running record from another start still releases its tasks here.
+ */
+export async function releaseTasksInterruptedByRestart(
+  workspacePath: string,
+  sessionId: string,
+): Promise<void> {
+  assertValidSessionId(sessionId);
+  const root = join(sessionDir(workspacePath, sessionId), "subagents");
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  const tasks = TaskStore.forSession(workspacePath, sessionId);
+  for (const name of names) {
+    if (!SUBAGENT_ID_RE.test(name)) continue;
+    const dir = join(root, name);
+    let meta: Partial<SubagentMeta>;
+    try {
+      meta = JSON.parse(await readFile(join(dir, "meta.json"), "utf8")) as Partial<SubagentMeta>;
+    } catch {
+      continue;
+    }
+    if (meta.status !== "running" || meta.process_id === processStartId) continue;
+    await tasks.releaseInProgress(name);
+    const store = new SubagentStore(dir);
+    await store.updateMeta({ status: "error", stopped_reason: "restart" });
+  }
 }

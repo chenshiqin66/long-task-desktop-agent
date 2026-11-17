@@ -26,6 +26,7 @@ describe("web_search", () => {
     expect(resolveWebSearchUrl({ searchBaseUrl: "https://gw.example/v1" })).toBe(
       "https://gw.example/v1/tools/search",
     );
+    expect(resolveWebSearchUrl({ searchBaseUrl: "   " })).toBe("https://api.deepseek.com/v1/tools/search");
   });
 
   it("errors without api key", async () => {
@@ -84,6 +85,38 @@ describe("web_search", () => {
     expect(body.query).toBe("DeepSeek V4");
     expect(body.count).toBe(5);
     expect(body.need_content).toBe(false);
+  });
+
+  it("uses searchBaseUrl and searchApiKey, and falls back when they are blank", async () => {
+    const calls: Array<{ url: string; auth: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      calls.push({ url: String(input), auth: headers.Authorization ?? "" });
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    };
+    const host = new ToolHost(createBuiltinTools());
+    await host.execute(
+      "web_search",
+      JSON.stringify({ query: "q" }),
+      baseCtx({
+        fetchImpl,
+        searchBaseUrl: "https://search.example/v1",
+        searchApiKey: "sk-search",
+      }),
+    );
+    await host.execute(
+      "web_search",
+      JSON.stringify({ query: "q" }),
+      baseCtx({ fetchImpl, searchBaseUrl: "  ", searchApiKey: "" }),
+    );
+    expect(calls[0]).toEqual({
+      url: "https://search.example/v1/tools/search",
+      auth: "Bearer sk-search",
+    });
+    expect(calls[1]).toEqual({
+      url: "https://api.deepseek.com/v1/tools/search",
+      auth: "Bearer sk-test",
+    });
   });
 
   it("surfaces HTTP errors", async () => {
