@@ -42,6 +42,7 @@ import type { AgentConfig, ImageAttachment, ImageMime, PermissionDecision, Store
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 import { registerMcpHandlers } from "./mcpIpc.js";
+import { createMemoryExtractor, registerMemoryHandlers, runtimeMemory } from "./memoryIpc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -54,6 +55,9 @@ let explainKey = "";
 let workspacePath: string | null = null;
 const mcpPool = new McpPool();
 let mcpClosing = false;
+const memoryExtractor = createMemoryExtractor({ mcp: mcpPool, config: readAgentConfig }, (event) => {
+  if (!win?.isDestroyed()) win?.webContents.send("agent:memory-event", event);
+});
 
 type LiveRun = {
   runtime: AgentRuntime;
@@ -77,12 +81,14 @@ const runPool = new SessionRuntimePool<AgentRuntime>(async (workspace, sessionId
     permissions,
     asks,
     mcp: mcpPool,
+    memory: runtimeMemory(workspace),
   });
   const key = sessionRunKey(workspace, sessionId);
   lives.set(key, { runtime, permissions, asks });
   runtime.onEvent((event) => {
     const session_id = "session_id" in event && event.session_id ? event.session_id : sessionId;
     win?.webContents.send("agent:event", { ...event, session_id, workspace });
+    if (event.type === "done" && event.reason === "completed") memoryExtractor.enqueue({ workspace, sessionId });
   });
   return runtime;
 }, (workspace, sessionId) => {
@@ -465,6 +471,15 @@ app.whenReady().then(async () => {
   taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
   registerMcpHandlers(ipcMain, mcpPool);
+  registerMemoryHandlers(ipcMain, {
+    mcp: mcpPool,
+    config: readAgentConfig,
+    workspace: async (raw) => (typeof raw === "string" && raw.trim() ? assertKnownWorkspace(raw) : null),
+    setAutoMemory: async (on) => {
+      const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+      await saveStoredConfig({ ...stored, autoMemory: on });
+    },
+  });
   mcpPool.onStatus((snapshot) => {
     if (!win?.isDestroyed()) win?.webContents.send("agent:mcpStatus", snapshot);
   });
@@ -490,7 +505,7 @@ app.whenReady().then(async () => {
     if (mcpClosing) return;
     event.preventDefault();
     mcpClosing = true;
-    void mcpPool.close().finally(() => app.quit());
+    void Promise.allSettled([mcpPool.close(), memoryExtractor.close()]).finally(() => app.quit());
   });
 
   ipcMain.handle("agent:setTaskbarPrompt", (_event, open: unknown, inView: unknown) => {
@@ -936,6 +951,7 @@ app.whenReady().then(async () => {
       workspaceCollapsed: cfg.workspaceCollapsed ?? prev?.workspaceCollapsed,
       lastWorkspacePath: cfg.lastWorkspacePath ?? prev?.lastWorkspacePath,
       favoriteFolders: cfg.favoriteFolders ?? prev?.favoriteFolders,
+      autoMemory: cfg.autoMemory ?? prev?.autoMemory,
     });
   });
   ipcMain.handle("agent:localTargetsExist", async (_e, targets: unknown) => {

@@ -116,6 +116,18 @@ contextBridge.exposeInMainWorld("agent", {
   addFavoriteFolder: () => ipcRenderer.invoke("agent:addFavoriteFolder"),
   removeFavoriteFolder: (path: string) => ipcRenderer.invoke("agent:removeFavoriteFolder", path),
   reorderFavoriteFolders: (paths: string[]) => ipcRenderer.invoke("agent:reorderFavoriteFolders", paths),
+  memoryLoad: (workspace: string | null) => ipcRenderer.invoke("agent:memoryLoad", workspace),
+  memorySave: (workspace: string | null, scope: string, name: string, change: { description: string; body: string }) =>
+    ipcRenderer.invoke("agent:memorySave", workspace, scope, name, change),
+  memoryDelete: (workspace: string | null, scope: string, name: string) =>
+    ipcRenderer.invoke("agent:memoryDelete", workspace, scope, name),
+  memoryUndo: (workspace: string | null, scope: string, journalId: string) =>
+    ipcRenderer.invoke("agent:memoryUndo", workspace, scope, journalId),
+  memoryOpenDir: (workspace: string | null, scope: string) =>
+    ipcRenderer.invoke("agent:memoryOpenDir", workspace, scope),
+  memoryRevealInstructions: (workspace: string | null, scope: string) =>
+    ipcRenderer.invoke("agent:memoryRevealInstructions", workspace, scope),
+  setAutoMemory: (on: boolean) => ipcRenderer.invoke("agent:setAutoMemory", on),
   popupAppMenu: (index: number, x: number, y: number) =>
     ipcRenderer.invoke("agent:popupAppMenu", index, x, y),
   setTaskbarPrompt: (open: boolean, inView: boolean) =>
@@ -129,5 +141,10 @@ contextBridge.exposeInMainWorld("agent", {
     const listener = () => cb();
     ipcRenderer.on("agent:skillsChanged", listener);
     return () => ipcRenderer.removeListener("agent:skillsChanged", listener);
+  },
+  onMemoryEvent: (cb: (e: RuntimeEvent) => void) => {
+    const listener = (_: unknown, e: RuntimeEvent) => cb(e);
+    ipcRenderer.on("agent:memory-event", listener);
+    return () => ipcRenderer.removeListener("agent:memory-event", listener);
   },
 });
