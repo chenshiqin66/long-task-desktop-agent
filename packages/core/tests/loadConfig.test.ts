@@ -15,6 +15,7 @@ import {
   withCurrentModel,
   upsertModel,
   removeModel,
+  duplicateModel,
 } from "../src/config/loadConfig.js";
 
 describe("loadConfig", () => {
@@ -374,6 +375,39 @@ describe("loadConfig", () => {
     const loaded = await loadStoredConfig(path);
     expect(toAgentConfig(loaded!).model).toBe("model-b");
     expect(currentModelOf(loaded)?.name).toBe("B");
+  });
+
+  it("duplicates a model with a new id and a copy suffix, without changing the current model", () => {
+    const stored = {
+      baseUrl: "https://api.example.com/v1",
+      model: "draw",
+      apiKey: "sk",
+      currentModelId: "b",
+      models: [
+        { id: "a", name: "对话", baseUrl: "https://a.example/v1", model: "chat", apiKey: "sk-a", kind: "text" as const },
+        { id: "b", name: "画图", baseUrl: "https://b.example/v1", model: "draw", apiKey: "sk-b", kind: "image" as const },
+      ],
+    };
+    const next = duplicateModel(stored, "b");
+    expect(next.currentModelId).toBe("b");
+    expect(next.models).toHaveLength(3);
+    const copied = next.models?.find((row) => row.id !== "a" && row.id !== "b");
+    expect(copied?.id).toMatch(/^model_[a-f0-9]+$/);
+    expect(copied?.name).toBe("画图（副本）");
+    expect(copied?.baseUrl).toBe("https://b.example/v1");
+    expect(copied?.model).toBe("draw");
+    expect(copied?.apiKey).toBe("sk-b");
+    expect(copied?.kind).toBe("image");
+    expect(next.models?.find((row) => row.id === "b")?.name).toBe("画图");
+  });
+
+  it("throws when the model to duplicate is missing", () => {
+    expect(() =>
+      duplicateModel(
+        { baseUrl: "", model: "", apiKey: "", models: [], currentModelId: undefined },
+        "missing",
+      ),
+    ).toThrow("找不到这个模型");
   });
 
 });

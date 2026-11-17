@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { replaceFile } from "../store/fileLock.js";
 import type { StoredConfig, StoredModel } from "./types.js";
 import { modelKindOf } from "./modelKind.js";
+import { newId } from "../ids.js";
 import type { AgentConfig } from "../types.js";
 import { DEFAULT_AGENT_CONFIG } from "../types.js";
 
@@ -191,6 +192,23 @@ export function removeModel(stored: StoredConfig, modelId: string): StoredConfig
       ? stored.currentModelId
       : models[0]?.id;
   return normalizeStoredConfig({ ...stored, models, currentModelId: currentId });
+}
+
+export function duplicateModel(stored: StoredConfig, modelId: string): StoredConfig {
+  const models = modelsOf(stored);
+  const source = models.find((entry) => entry.id === modelId);
+  if (!source) throw new Error("找不到这个模型");
+  const copy: StoredModel = {
+    ...source,
+    id: newId("model"),
+    name: `${source.name}（副本）`,
+    kind: modelKindOf(source),
+  };
+  return normalizeStoredConfig({
+    ...stored,
+    models: [...models, copy],
+    currentModelId: stored.currentModelId ?? currentModelOf(stored)?.id,
+  });
 }
 
 export function toAgentConfig(stored: StoredConfig): AgentConfig {
