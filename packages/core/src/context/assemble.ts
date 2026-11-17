@@ -40,6 +40,8 @@ export interface AssembledContext {
 
 export function assembleContext(opts: {
   systemPrompt: string;
+  /** Instruction files and memory for this turn. Between the system prompt and the skill catalog. */
+  memory?: string;
   history: Message[];
   currentUser: Message;
   contextCharLimit: number;
@@ -50,6 +52,7 @@ export function assembleContext(opts: {
 }): AssembledContext {
   const preface = [
     opts.systemPrompt,
+    opts.memory ?? "",
     renderInstalledSkills(opts.installedSkills ?? []),
     renderSkillBodies(opts.skillBodies ?? []),
     opts.extraSystem ?? "",
@@ -230,6 +233,7 @@ function isBulkResult(name: string): boolean {
     name === "powershell" ||
     name === "bash" ||
     name === "read_skill" ||
+    name === "memory_read" ||
     name.startsWith("mcp__")
   );
 }
@@ -292,6 +296,7 @@ function resultNote(name: string, overwritten: boolean, isError: boolean): strin
     if (name === "keyword_search") return "原文仍在磁盘上，需要时再搜索。";
     return "需要时再搜索。";
   }
+  if (name === "memory_read") return isError ? "这次调用失败。需要时再调用。" : "需要时再调用。";
   if (name.startsWith("mcp__")) return isError ? "这次调用失败。需要时再调用。" : "需要时再调用。";
   if (isError) return "这次调用失败。需要时再读。";
   return overwritten ? "该路径之后被改过，要新内容再读。" : "原文仍在磁盘上，需要时再读。";
@@ -321,9 +326,11 @@ export function elideStaleToolResults(messages: Message[]): Message[] {
         ? preview(argString(args, "query"))
         : message.name === "powershell" || message.name === "bash"
           ? preview(argString(args, "command"))
-          : message.name.startsWith("mcp__") || message.name === "read_skill"
-            ? ""
-            : path;
+          : message.name === "memory_read"
+            ? preview(argString(args, "name"))
+            : message.name.startsWith("mcp__") || message.name === "read_skill"
+              ? ""
+              : path;
     return {
       ...message,
       content: omittedResult(

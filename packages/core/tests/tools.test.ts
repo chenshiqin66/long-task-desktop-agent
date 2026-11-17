@@ -79,6 +79,7 @@ describe("tools", () => {
       "delete_file",
       "keyword_search",
       "list_dir",
+      "memory_read",
       "read_file",
       "read_skill",
       "run_skill_script",

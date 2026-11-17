@@ -592,7 +592,8 @@ export function classifyToolCall(
     toolName === "list_dir" ||
     toolName === "keyword_search" ||
     toolName === "web_search" ||
-    toolName === "read_skill"
+    toolName === "read_skill" ||
+    toolName === "memory_read"
   ) {
     return { risk: "read", summary: `Auto-allow ${toolName}` };
   }

@@ -1,3 +1,5 @@
+import type { MemoryStore } from "../memory/store.js";
+
 export interface ToolResult {
   content: string;
   is_error: boolean;
@@ -43,6 +45,8 @@ export interface ToolContext {
    * claimed by subagents in the same assistant response.
    */
   blockedOutputDirs?: readonly string[];
+  /** Memory for this workspace. Only the parent session has it. */
+  memory?: MemoryStore;
 }
 
 export interface Tool {

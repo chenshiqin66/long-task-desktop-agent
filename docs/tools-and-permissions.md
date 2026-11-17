@@ -16,7 +16,7 @@
 
 ## 工具一览
 
-内置 19 个工具，都在 `createBuiltinTools()`（`packages/core/src/tools/host.ts`）里注册。shell 工具的名字随平台变：Windows 上叫 `powershell`，启动 `powershell.exe`；其他系统叫 `bash`，用 `bash -lc`。
+内置 20 个工具，都在 `createBuiltinTools()`（`packages/core/src/tools/host.ts`）里注册。shell 工具的名字随平台变：Windows 上叫 `powershell`，启动 `powershell.exe`；其他系统叫 `bash`，用 `bash -lc`。
 
 | 工具 | 分级 | 要点 |
 | --- | --- | --- |
@@ -25,6 +25,7 @@
 | `keyword_search` | 自动 | 一次最多 8 个词，按字面、区分大小写；跳过大于 1,000,000 字节的文件；条数上限 `maxSearchResults` |
 | `web_search` | 自动 | 调 DeepSeek 搜索接口。`searchApiKey` 空着就用聊天的 API key；`count` 默认 8、最大 50；查询超过 128 字截断 |
 | `read_skill` | 自动 | 读已安装技能的正文或附件，见 [技能](skills.md) |
+| `memory_read` | 自动 | 读记忆：不带 `name` 列出两个作用域的全部条目，带 `name` 返回那一条的全部字段和正文。主会话没有写记忆的工具；子代理和解释侧栏没有这个工具 |
 | `task_create`、`task_list`、`task_get`、`task_update`、`task_delete`、`claim_task`、`complete_task` | 自动 | 只改本会话 `.agent` 里的任务清单，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
 | `ask_user` | 不经许可门 | 问题最长 2000 字。选项最多 6 个、每个最长 200 字，每条都是用户可能给出的回答，不是模型自己的下一步。回答最长 8000 字，只作为工具结果，界面不画成用户气泡 |
 | `write_file`、`str_replace`、`delete_file` | 确认 | 结果文件最长 500,000 字；`str_replace` 要求唯一匹配，否则传 `replace_all`，`new_string` 按字面写入；`delete_file` 不删目录 |

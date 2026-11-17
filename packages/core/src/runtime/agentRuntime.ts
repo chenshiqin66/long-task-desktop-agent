@@ -62,6 +62,8 @@ import { AutoAllowGate, type PermissionGate } from "./permission.js";
 import { ClosedAskGate, type AskGate } from "./askGate.js";
 import { ASK_USER_TOOL_NAME, parseAskUserArgs } from "../tools/askUserTool.js";
 import { runIsolatedSubagent } from "./subagentRun.js";
+import { MEMORY_RULES } from "../memory/prompt.js";
+import { EMPTY_TURN_MEMORY, snapshotTurnMemory, type RuntimeMemory, type TurnMemory } from "../memory/turn.js";
 
 /** Auto-name after this many user turns (completed). */
 const AUTO_TITLE_AFTER_USER_TURNS = 3;
@@ -105,7 +107,8 @@ Subagents:
 - Several subagent calls in one response run at the same time. Their output directories must not overlap.
 - Do not use subagent to ask the user a question or to run a shell command.
 - To assign a listed task to a subagent, pass task_id. The runtime claims it as that subagent. Do not claim it yourself first. A shell command or an MCP tool call is not assigned: claim_task yourself, then run it. A blocked or already claimed task does not start. If the subagent stops before complete_task, that claim returns to pending.
-- delivery defaults to joined. This turn waits, and the tool result is the receipt. Pass deferred when the user says this turn need not wait for the result ("这一轮不用汇总", "写完即可", "派出去之后只用两句话回复"), or asks only for the agent id and output_dir. Deferred returns an acceptance at once and keeps running after this turn. That acceptance names the agent id and output_dir; use those in your reply instead of reading the output directory or .agent/ to find them. The receipt arrives later as a task-notification. Do not edit files or use a deferred explore as evidence until that notification arrives. A deferred worker's output_dir stays locked until then.`;
+- delivery defaults to joined. This turn waits, and the tool result is the receipt. Pass deferred when the user says this turn need not wait for the result ("这一轮不用汇总", "写完即可", "派出去之后只用两句话回复"), or asks only for the agent id and output_dir. Deferred returns an acceptance at once and keeps running after this turn. That acceptance names the agent id and output_dir; use those in your reply instead of reading the output directory or .agent/ to find them. The receipt arrives later as a task-notification. Do not edit files or use a deferred explore as evidence until that notification arrives. A deferred worker's output_dir stays locked until then.
+- Subagents do not see memory notes. When the task depends on one, put that fact in the task text.`;
 
 const TASK_RULES = `
 Task list:
@@ -152,6 +155,7 @@ ${ASK_USER_RULES}
 ${IMAGE_RULES}
 ${SUBAGENT_RULES}
 ${TASK_RULES}
+${MEMORY_RULES}
 ${WEB_SEARCH_RULES}`;
   }
 
@@ -170,6 +174,7 @@ ${ASK_USER_RULES}
 ${IMAGE_RULES}
 ${SUBAGENT_RULES}
 ${TASK_RULES}
+${MEMORY_RULES}
 ${WEB_SEARCH_RULES}`;
 }
 
@@ -245,6 +250,9 @@ export class AgentRuntime {
   private readonly skillsRoot: string;
   /** Bodies pinned for the submit currently running. Cleared when it ends. */
   private skillBodies: SkillBodyAttachment[] = [];
+  private readonly memory?: RuntimeMemory;
+  /** Instruction files and notes read when the current turn started. */
+  private turnMemory: TurnMemory = EMPTY_TURN_MEMORY;
 
   constructor(opts: {
     workspacePath: string;
@@ -261,6 +269,8 @@ export class AgentRuntime {
     skillsRoot?: string;
     /** Shared MCP pool. Absent in tests that do not connect servers. */
     mcp?: McpToolSource;
+    /** Memory store and switch for this workspace. Absent in tests that do not use memory. */
+    memory?: RuntimeMemory;
   }) {
     this.workspacePath = opts.workspacePath;
     this.config = opts.config;
@@ -273,6 +283,7 @@ export class AgentRuntime {
     this.baseTools = opts.tools ?? new ToolHost();
     this.tools = this.baseTools;
     this.mcp = opts.mcp;
+    this.memory = opts.memory;
     this.permissions = opts.permissions ?? new AutoAllowGate();
     this.asks = opts.asks ?? new ClosedAskGate();
     this.skillsRoot = opts.skillsRoot ?? defaultSkillsRoot();
@@ -567,6 +578,7 @@ export class AgentRuntime {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
       this.skillBodies = [];
+      this.turnMemory = EMPTY_TURN_MEMORY;
       this.turnWritesAllowed = false;
       this.batchOutputDirs = [];
     }
@@ -809,6 +821,7 @@ export class AgentRuntime {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
       this.skillBodies = [];
+      this.turnMemory = EMPTY_TURN_MEMORY;
       this.turnWritesAllowed = false;
       this.batchOutputDirs = [];
     }
@@ -833,6 +846,7 @@ export class AgentRuntime {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
       this.skillBodies = [];
+      this.turnMemory = EMPTY_TURN_MEMORY;
       this.turnWritesAllowed = false;
       this.batchOutputDirs = [];
     }
@@ -918,9 +932,19 @@ export class AgentRuntime {
     this.tools = extra.length ? this.baseTools.merge(extra) : this.baseTools;
   }
 
+  /** Read once per turn, next to the tool snapshot. A note written during the turn shows up next turn. */
+  private async loadTurnMemory(): Promise<void> {
+    try {
+      this.turnMemory = this.memory ? await snapshotTurnMemory(this.memory) : EMPTY_TURN_MEMORY;
+    } catch {
+      this.turnMemory = EMPTY_TURN_MEMORY;
+    }
+  }
+
   /** One model loop. The caller has already appended the user message this request should answer. */
   private async runModelLoop(sessionId: string, turn_id: string): Promise<void> {
     this.pinTurnTools();
+    await this.loadTurnMemory();
     let steps = 0;
     while (true) {
         if (!this.abort) return;
@@ -935,6 +959,7 @@ export class AgentRuntime {
         const extraSystem = await this.taskReminder(sessionId, loopHistory);
         const ctx = assembleContext({
           systemPrompt: this.systemPrompt,
+          memory: this.turnMemory.block,
           history: loopHistory.slice(0, -1),
           currentUser: loopHistory[loopHistory.length - 1]!,
           contextCharLimit: this.config.contextCharLimit,
@@ -1716,6 +1741,7 @@ export class AgentRuntime {
       attachedSkillNames: fullyAttachedSkillNames(this.skillBodies),
       blockedOutputDirs: [...this.batchOutputDirs, ...this.deferredOutputDirs],
       sessionId,
+      memory: this.memory?.store,
     });
     return this.persistToolOutcome(
       sessionId,
