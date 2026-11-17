@@ -146,7 +146,7 @@ npm install
 npm start
 ```
 
-根目录的 `npm start` 先构建 core，再构建 app 并启动 Electron。
+根目录的 `npm start` 先构建 core，再构建 app 并启动 Electron。已经有一个窗口时，再开一个会退出，并把已有的窗口带到前面。同一个用户数据目录不能同时跑两个进程，包括另一个工作区副本里的 `npm start`。
 
 第一次打开：
 

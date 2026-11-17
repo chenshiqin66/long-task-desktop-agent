@@ -432,7 +432,20 @@ async function readSessionArtifacts(workspace: string, sessionId: string, part?:
   return { meta, messages, traces, context };
 }
 
+const holdsSingleInstance = app.requestSingleInstanceLock();
+if (!holdsSingleInstance) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
+
 app.whenReady().then(async () => {
+  if (!holdsSingleInstance) return;
   taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
   registerMcpHandlers(ipcMain, mcpPool);

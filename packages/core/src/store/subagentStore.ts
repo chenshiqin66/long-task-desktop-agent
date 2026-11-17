@@ -176,8 +176,8 @@ export async function listSubagentStatuses(
  * A subagent only runs inside the process that started it. Opening the session
  * or sending a message releases tasks still claimed by a `running` record whose
  * process id is not this start. The parent transcript gets no receipt.
- * Two app instances share these files, so the other instance's live run looks
- * interrupted here until a single-instance lock exists.
+ * Two processes are not the normal case: the app keeps a single-instance lock.
+ * A running record from another start still releases its tasks here.
  */
 export async function releaseTasksInterruptedByRestart(
   workspacePath: string,
