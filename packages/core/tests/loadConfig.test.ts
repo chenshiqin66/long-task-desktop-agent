@@ -143,6 +143,7 @@ describe("loadConfig", () => {
         baseUrl: "https://api.example.com/v1",
         model: "gpt-x",
         apiKey: "sk-secret",
+        kind: "text",
       },
     ]);
     expect(currentModelOf(stored)?.id).toBe(LEGACY_MODEL_ID);
@@ -152,6 +153,23 @@ describe("loadConfig", () => {
     expect(agent.apiKey).toBe("sk-secret");
   });
 
+  it("defaults a model kind to text and keeps a valid kind", () => {
+    const stored = {
+      baseUrl: "https://api.example.com/v1",
+      model: "chat",
+      apiKey: "sk",
+      models: [
+        { id: "a", name: "对话", baseUrl: "https://api.example.com/v1", model: "chat", apiKey: "sk" },
+        { id: "b", name: "画图", baseUrl: "https://api.example.com/v1", model: "draw", apiKey: "sk", kind: "image" as const },
+      ],
+      currentModelId: "b",
+    };
+    const models = modelsOf(stored);
+    expect(models[0]?.kind).toBe("text");
+    expect(models[1]?.kind).toBe("image");
+    expect(toAgentConfig(stored).kind).toBe("image");
+    expect(toAgentConfig({ ...stored, currentModelId: "a" }).kind).toBe("text");
+  });
   it("uses the selected list entry even when top-level fields are stale", () => {
     const stored = {
       baseUrl: "https://old.example/v1",

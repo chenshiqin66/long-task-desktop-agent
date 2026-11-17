@@ -1,3 +1,5 @@
+import type { ModelKind } from "./config/modelKind.js";
+
 export type Role = "system" | "user" | "assistant" | "tool";
 
 export interface ToolCall {
@@ -136,6 +138,7 @@ export interface AgentConfig {
   baseUrl: string;
   model: string;
   apiKey: string;
+  kind: ModelKind;
   bashTimeoutMs: number;
   maxSteps: number;
   contextCharLimit: number;
@@ -148,6 +151,7 @@ export interface AgentConfig {
 }
 
 export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, "baseUrl" | "model" | "apiKey"> = {
+  kind: "text",
   bashTimeoutMs: 60_000,
   maxSteps: 50,
   contextCharLimit: 100_000,

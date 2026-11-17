@@ -184,7 +184,7 @@ npm start
 | `baseUrl` | `https://api.openai.com/v1` | 当前模型的 OpenAI 兼容接口地址。与列表里当前那一条保持一致，方便旧代码读取 |
 | `model` | `gpt-4o-mini` | 当前模型名。与列表里当前那一条保持一致 |
 | `apiKey` | 空 | 当前模型的密钥，明文保存，只靠文件权限保护。与列表里当前那一条保持一致 |
-| `models` | 无 | 已配置的模型列表。每项有 `id`、显示名、Base URL、模型名和 API Key。没有这项时，顶层的 `baseUrl`、`model`、`apiKey` 当作一条 |
+| `models` | 无 | 已配置的模型列表。每项有 `id`、显示名、Base URL、模型名、API Key 和 `kind`（`text` 生文、`image` 生图、`video` 生视频、`audio` 生音，缺省为 `text`）。没有这项时，顶层的 `baseUrl`、`model`、`apiKey` 当作一条 |
 | `currentModelId` | 无 | 当前选用的那一条的 `id`。没有或对不上时用列表里的第一条。输入框旁的选择器改的就是这一项 |
 | `workspacePaths` | 无 | 侧栏里的工作区列表 |
 | `workspaceLabels` | 无 | 侧栏里的显示名，不改目录名 |

@@ -29,6 +29,7 @@ export * from "./runtime/explainRuntime.js";
 export * from "./explain/context.js";
 export * from "./store/explainStore.js";
 export * from "./config/types.js";
+export * from "./config/modelKind.js";
 export * from "./config/loadConfig.js";
 export * from "./skills/frontmatter.js";
 export * from "./skills/tokens.js";

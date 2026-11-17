@@ -1,3 +1,5 @@
+import type { ModelKind } from "./modelKind.js";
+
 export interface StoredModel {
   id: string;
   /** Shown in the models page and the composer picker. */
@@ -5,6 +7,7 @@ export interface StoredModel {
   baseUrl: string;
   model: string;
   apiKey: string;
+  kind: ModelKind;
 }
 
 export interface StoredConfig {

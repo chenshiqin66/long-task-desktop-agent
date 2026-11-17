@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { replaceFile } from "../store/fileLock.js";
 import type { StoredConfig, StoredModel } from "./types.js";
+import { modelKindOf } from "./modelKind.js";
 import type { AgentConfig } from "../types.js";
 import { DEFAULT_AGENT_CONFIG } from "../types.js";
 
@@ -80,6 +81,7 @@ function cleanModel(entry: StoredModel): StoredModel {
     baseUrl: entry.baseUrl.trim(),
     model: entry.model.trim(),
     apiKey: entry.apiKey.trim(),
+    kind: modelKindOf(entry),
   };
 }
 
@@ -94,6 +96,7 @@ function readModelEntry(raw: unknown): StoredModel | null {
     baseUrl: asString(row.baseUrl),
     model: asString(row.model),
     apiKey: asString(row.apiKey),
+    kind: modelKindOf(row),
   });
   if (!model.name) model.name = model.model || "未命名模型";
   return model;
@@ -110,6 +113,7 @@ function legacyModel(stored: StoredConfig): StoredModel | null {
     baseUrl,
     model,
     apiKey,
+    kind: modelKindOf(stored),
   };
 }
 
@@ -196,6 +200,7 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
     baseUrl: (current?.baseUrl ?? asString(stored.baseUrl)).trim(),
     model: (current?.model ?? asString(stored.model)).trim(),
     apiKey: (current?.apiKey ?? asString(stored.apiKey)).trim(),
+    kind: modelKindOf(current),
     bashTimeoutMs: stored.bashTimeoutMs ?? DEFAULT_AGENT_CONFIG.bashTimeoutMs,
     maxSteps: stored.maxSteps ?? DEFAULT_AGENT_CONFIG.maxSteps,
     contextCharLimit: stored.contextCharLimit ?? DEFAULT_AGENT_CONFIG.contextCharLimit,
