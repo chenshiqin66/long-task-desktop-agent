@@ -2932,7 +2932,7 @@ messagesEl.addEventListener("click", (ev) => {
   holdQuestionBubble(bubble, () => turn.classList.toggle("is-expanded"));
 });
 
-messagesEl.addEventListener("click", (ev) => {
+function openMarkdownLink(ev: Event): void {
   const t = ev.target;
   if (!(t instanceof Element)) return;
   const a = t.closest("a.md-link");
@@ -2957,7 +2957,10 @@ messagesEl.addEventListener("click", (ev) => {
     }
     setStatus(res.error || "无法打开链接", true);
   });
-});
+}
+
+messagesEl.addEventListener("click", openMarkdownLink);
+explainConversation?.addEventListener("click", openMarkdownLink);
 
 window.addEventListener("keydown", (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f") {
