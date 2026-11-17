@@ -90,6 +90,8 @@ function runInterpreter(
       windowsHide: true,
       shell: false,
     });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
     let settled = false;

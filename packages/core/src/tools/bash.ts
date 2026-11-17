@@ -117,6 +117,8 @@ function runBash(command: string, ctx: ToolContext): Promise<ToolResult> {
 
   return new Promise((resolve) => {
     const child = spawnShell(command, ctx.workspacePath);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
     let settled = false;
