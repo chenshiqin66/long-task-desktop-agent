@@ -1,6 +1,6 @@
 # 数据模型
 
-数据落在两处，互不写入。用户目录 `~/.long-task-agent/` 放配置、技能和 MCP server，跟着人走。工作区下的 `.agent/` 放会话，跟着项目走。换工作区不会串历史，密钥也不会进项目目录。
+数据落在两处。用户目录 `~/.long-task-agent/` 放配置、技能、MCP server 和记忆，跟着人走。工作区下的 `.agent/` 放会话，跟着项目走；项目级指令 `AGENTS.md` 在工作区根目录，不在 `.agent/` 里。换工作区不会串会话，密钥也不会进项目目录。用户级记忆会随着每次请求的 system 写进这个工作区的 `context.jsonl`。
 
 每个会话有三份日志，各回答一个问题：模型下次能看见什么（`messages.jsonl`）、发生过什么（`trace.jsonl`）、某次请求到底发了什么（`context.jsonl`）。三者用 id 互相指认。
 
@@ -12,6 +12,11 @@
   mcp-servers.json               MCP server 清单和密钥，见 mcp.md
   skills/<name>/                 已安装的技能，见 skills.md
   skills/.skill-settings.json    停用的技能名单
+  AGENTS.md                      用户级指令，可选
+  memory/                        所有项目的记忆。<name>.md 一条，journal.jsonl 只追加，.lock 修改时临时创建
+  projects/<key>/
+    project.json                 这个键对应的仓库根目录和创建时间
+    memory/                      本项目的记忆，结构同上面的 memory/
 
 {workspace}/.agent/sessions/{sessionId}/
   meta.json                      会话身份：id、工作区路径、标题、标题来源、时间
@@ -29,7 +34,11 @@
     messages.jsonl  trace.jsonl  context.jsonl
   explain-meta.json              解释侧栏的状态
   explain-messages.jsonl  explain-trace.jsonl  explain-context.jsonl
+  memory-cursor.json             后台提取处理到哪条消息
+  memory-extract.jsonl           每次后台提取的请求、模型原文和判定
 ```
+
+`{workspace}/AGENTS.md` 是项目级指令，可选，不在 `.agent/` 里。
 
 `sessionId` 只能由字母、数字、下划线和连字符组成，避免拼进路径时逃出 `.agent/sessions/`。列会话只看 `sessions/` 的直接子目录，所以 `subagents/` 和 `tasks/` 不会被当成会话。
 
@@ -75,7 +84,7 @@
 
 ## 标识与关系
 
-id 的格式是 `<前缀>_<32 位十六进制>`。前缀有 `sess`、`turn`、`msg`、`trace`、`perm`、`ask`、`subagent`、`note`、`img`。deferred 子代理的完成通知 id 是 `note_<子代理 id>`，所以同一个子代理只会入队一次。早先的子代理目录叫 `agent_…`，现在仍能读。
+id 的格式是 `<前缀>_<32 位十六进制>`。前缀有 `sess`、`turn`、`msg`、`trace`、`perm`、`ask`、`subagent`、`note`、`img`、`memj`、`memx`。`memj` 是一次记忆变更的 id，写在用户目录的 `journal.jsonl` 里；`memx` 是一次后台提取的 id，写在会话目录的 `memory-extract.jsonl` 里。两个都不出现在三份日志中。deferred 子代理的完成通知 id 是 `note_<子代理 id>`，所以同一个子代理只会入队一次。早先的子代理目录叫 `agent_…`，现在仍能读。
 
 ```mermaid
 flowchart TB
@@ -97,7 +106,7 @@ flowchart TB
 
 一条用户消息打开一个 `turn_id`。这一轮里的助手文本、工具调用和工具结果都带同一个 `turn_id`。`llm_response` 和 `llm_error` 用 `request_id` 指回对应的 `llm_request`；`tool_result` 用 `request_id` 指回它的 `tool_call`。
 
-有几处例外：取消时写的 `llm_response` 没有 `request_id`；完成通知消息，以及一轮开头、续跑和存储失败时补齐出来的 tool 消息，没有 `trace_id`，也不写事件；自动标题那次模型调用不进 trace，也不进 context。停止时补的「Cancelled」tool 消息不算例外：它们有 `trace_id`，也写 `tool_call` 和带 `cancelled: true` 的 `tool_result` 事件。
+有几处例外：取消时写的 `llm_response` 没有 `request_id`；完成通知消息，以及一轮开头、续跑和存储失败时补齐出来的 tool 消息，没有 `trace_id`，也不写事件；自动标题那次模型调用不进 trace，也不进 context。后台提取同样不进这两份，写在会话目录自己的 `memory-extract.jsonl`。停止时补的「Cancelled」tool 消息不算例外：它们有 `trace_id`，也写 `tool_call` 和带 `cancelled: true` 的 `tool_result` 事件。
 
 ## 图片
 
@@ -122,3 +131,5 @@ flowchart TB
 - `tool_call_arguments` 只给界面看，不发给模型。
 
 注意边界：shell 读到的任何内容、网关返回的错误正文，都会原样写进日志，见 [安全模型与已知边界](tools-and-permissions.md#安全模型与已知边界)。
+
+会写进去的一处：用户级指令和用户级记忆在每次请求的 system 里，于是随 `context.jsonl` 出现在工作区的 `.agent/` 里。工作区里的这份是副本，改它不会改记忆。

@@ -101,14 +101,15 @@ flowchart LR
 | 顺序 | 部分 | 处理 |
 | --- | --- | --- |
 | 1 | 系统提示 | 原样，放在 `system` 最前 |
-| 2 | 已安装技能目录和使用规则 | 每步扫描已启用技能。一个都没装则不出现 |
-| 3 | 这一轮附上的技能正文 | 用户消息里的 `/技能名` 在本轮开始读入。超过 8000 字只留前 8000 字，并写明后面还有多少字。没有 `/技能名` 则不出现 |
-| 4 | 任务提醒 | 有未完成任务，且隔了 10 次没有使用任务工具的助手回复，才附在 `system` 末尾 |
-| 5 | 最后一条之前的历史 | 按下表在副本上处理 |
-| 6 | 最后一条消息 | 不参与丢弃。用户刚发的消息，或刚返回的工具结果 |
-| 7 | 补齐的工具结果 | 有调用没有结果时补一条合成失败。不计入预算 |
-| 8 | 图片 | 记录里只存相对路径。只有最后一条用户消息上的图片变成像素，更早的换成一行「像素未再次发送」 |
-| 9 | `tools` 数组 | 本轮开始时拍快照，和 `messages` 并列，不写入 `system`，也不从历史预算里扣。内置工具原样。MCP 说明截到 800 字，参数 Schema 不截断。子代理和解释侧栏的表里没有 `mcp__` |
+| 2 | 指令文件和记忆 | 每轮开始读一次，这一轮的每次请求用同一份。两份 `AGENTS.md` 各最多 8000 字；`# Memory` 最多 6000 字，`user` 和 `feedback` 带正文，`project` 和 `reference` 只带一行。算进 system 的长度，从历史预算里扣掉。没有这些、并且自动记忆开着时，这一段不出现。见 [记忆](memory.md) |
+| 3 | 已安装技能目录和使用规则 | 每步扫描已启用技能。一个都没装则不出现 |
+| 4 | 这一轮附上的技能正文 | 用户消息里的 `/技能名` 在本轮开始读入。超过 8000 字只留前 8000 字，并写明后面还有多少字。没有 `/技能名` 则不出现 |
+| 5 | 任务提醒 | 有未完成任务，且隔了 10 次没有使用任务工具的助手回复，才附在 `system` 末尾 |
+| 6 | 最后一条之前的历史 | 按下表在副本上处理 |
+| 7 | 最后一条消息 | 不参与丢弃。用户刚发的消息，或刚返回的工具结果 |
+| 8 | 补齐的工具结果 | 有调用没有结果时补一条合成失败。不计入预算 |
+| 9 | 图片 | 记录里只存相对路径。只有最后一条用户消息上的图片变成像素，更早的换成一行「像素未再次发送」 |
+| 10 | `tools` 数组 | 本轮开始时拍快照，和 `messages` 并列，不写入 `system`，也不从历史预算里扣。内置工具原样。MCP 说明截到 800 字，参数 Schema 不截断。子代理和解释侧栏的表里没有 `mcp__` 和 `memory_read` |
 
 **历史的处理，全部只在发出去的副本上做，按这个顺序：**
 
@@ -117,11 +118,11 @@ flowchart LR
 | 省略已落盘的写入 | 成功的 `write_file` / `str_replace` 参数超过 500 字时，只留路径和字数 |
 | 省略已经看过的失败写入 | 失败的 `write_file` / `str_replace` 参数超过 500 字时，下一次请求仍带全文，方便重试。模型已经回复过之后，再往后的请求只留路径、字数，并带 `succeeded: false` |
 | 省略早先读过的技能 | 之前用户轮次里 `read_skill` 的结果换成「此前读过技能 X 的正文。需要时再调用 read_skill。」同一用户轮次里，不是最后一批的 `read_skill` 全文也换成这一句 |
-| 省略已经用过的工具结果 | 最后一批工具调用的全部结果保持原文。更早的、正文超过 500 字的 `read_file`、`list_dir`、`keyword_search`、`web_search`、`powershell` / `bash`、`mcp__*` 换成一行：工具名、路径或命令、原文字数。文件还在磁盘上就写明，该路径后来被成功写入就写明「之后被改过」。命令类写明「不要为了看旧输出而重跑」。`ask_user`、`task_*`、`subagent` 的结果不缩短 |
+| 省略已经用过的工具结果 | 最后一批工具调用的全部结果保持原文。更早的、正文超过 500 字的 `read_file`、`memory_read`、`list_dir`、`keyword_search`、`web_search`、`powershell` / `bash`、`mcp__*` 换成一行：工具名、路径或命令、原文字数；`memory_read` 写调用时的名字和字数。文件还在磁盘上就写明，该路径后来被成功写入就写明「之后被改过」。命令类写明「不要为了看旧输出而重跑」。`ask_user`、`task_*`、`subagent` 的结果不缩短 |
 | 字数上限 | 预算 = `contextCharLimit` − system 长度 − 最后一条消息的正文和工具参数 − 100，至少 1000。历史里同样把 `tool_calls` 的参数算进去。先整对丢掉最旧的工具往返（助手消息和对应的 tool 消息一起走），再整条丢掉更旧的消息。最早的一条真实用户消息，以及最后一批工具调用，超预算也保持原文。不从正文中间切开。最后一条消息不参与这一步 |
 | 补齐 | 没有结果的工具调用补一条合成的 tool 消息，避免请求因调用和结果不成对而失败。补出来的消息不计入预算 |
 
-所以 `contextCharLimit` 是第 5 段历史的预算，不是整个请求的硬上限：`system`、最后一条消息、`tools` 数组和补齐出来的消息都可能让实际请求超过它。`llm_request` 的 `approx_chars` 把消息正文、工具参数和 `tools` 数组的字符数加在一起。
+所以 `contextCharLimit` 是第 6 段历史的预算，不是整个请求的硬上限：`system`、最后一条消息、`tools` 数组和补齐出来的消息都可能让实际请求超过它。`llm_request` 的 `approx_chars` 把消息正文、工具参数和 `tools` 数组的字符数加在一起。
 
 工具结果在执行时已经截过一次：`read_file` 和 `read_skill` 最多 `maxReadChars`（默认 5 万字），命令、搜索、列目录、网页搜索、MCP 和技能脚本最多 `maxToolOutputChars`（默认 2 万字）。子代理回给父会话的回执最多 6000 字。这些上限发生在写入会话之前，不是上表的丢弃。
 
@@ -139,6 +140,8 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | `error` | 出错说明 |
 | `session_title` | 自动标题 |
 | `inbox_wake`、`task_notification`、`held_user` | 完成通知开出续跑轮、写入回执、续跑期间暂存的用户消息 |
+
+后台提取写入记忆后发 `memory_saved`。它走 `agent:memory-event`，不进上面这张表，也不经过这个事件门。
 
 每条正在执行的会话有自己的 `runEventGate.ts` 状态。这个纯函数决定事件属不属于这一轮：你正看着这条会话就画在主区，否则画进它缓存着的对话节点。子代理的工具行在父轮次结束后也按这个会话归属。这个函数有单独的测试脚本 `packages/app/scripts/test-run-event-gate.mjs`。
 
@@ -183,6 +186,7 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | `store/*.ts` | 会话、事件、上下文、任务、完成通知、子代理、解释的落盘，见 [数据模型](data-model.md) |
 | `tools/*.ts` | 内置工具、分级、路径沙箱，见 [工具与权限](tools-and-permissions.md) |
 | `skills/*.ts` | 技能的安装、目录、正文附加，见 [技能](skills.md) |
+| `memory/*.ts` | 指令文件、记忆的存储和渲染、每轮快照、后台提取。见 [记忆](memory.md) |
 | `mcp/*.ts` | MCP 连接池、stdio 与 Streamable HTTP、工具名和打码，见 [MCP](mcp.md) |
 | `config/loadConfig.ts` | 读写 `~/.long-task-agent/config.json` |
 | `session/autoTitle.ts` | 自动标题 |
@@ -191,13 +195,15 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 
 | 模块 | 职责 |
 | --- | --- |
-| `electron/main.ts` | 窗口、中文菜单、工作区、全部 IPC、会话 runtime 池和解释 runtime 的生命周期、技能目录监视。MCP 的 IPC 在 `electron/mcpIpc.ts`，进程退出时关掉连接池 |
+| `electron/main.ts` | 窗口、中文菜单、工作区、全部 IPC、会话 runtime 池和解释 runtime 的生命周期、技能目录监视。MCP 的 IPC 在 `electron/mcpIpc.ts`，进程退出时关掉连接池。记忆页的 IPC 和提取器在 `electron/memoryIpc.ts`：一轮正常结束就入队，进程退出时和连接池一起关掉。 |
 | `electron/preload.ts` | 页面唯一能用的 API：`window.agent` |
 | `electron/openTarget.ts` | 打开链接和本地路径。网址交给浏览器；目录直接打开；文件只在文件夹里选中，不执行 |
 | `electron/taskbar*.ts` | Windows 任务栏提醒：有权限卡或提问卡在等、而你没在看时，图标每 530 毫秒切换一次。Win32 库到第一次换图标时才加载 |
 | `src/renderer/main.ts` | 工作区与会话列表、页面切换、事件订阅、发送与停止、页内搜索、草稿 |
 | `src/renderer/ui.ts` | 消息气泡、Markdown、工具条、权限卡和提问卡。不持有会话状态 |
 | `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、任务面板、问题轨 |
+| `src/renderer/workbench.ts` | 「我的工作台」的开关和左右两页的切换 |
+| `src/renderer/memory.ts`、`memoryView.ts` | 记忆页，以及对话末尾的「已记住」 |
 | `src/renderer/runEventGate.ts` | 丢掉不属于当前会话或轮次的事件 |
 | `src/renderer/escapeKey.ts` | Esc 先关什么、什么时候才停止这一轮 |
 
