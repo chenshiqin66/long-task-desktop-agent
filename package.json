@@ -10,7 +10,8 @@
     "build": "npm run build -w @agent/core && npm run build -w @agent/app",
     "start": "npm run build -w @agent/core && npm run start -w @agent/app",
     "eval:build": "npm run build -w @agent/core && tsc -p evals/subagent-multitask/runner/tsconfig.json",
-    "eval": "npm run eval:build && node evals/subagent-multitask/runner/dist/cli.js"
+    "eval": "npm run eval:build && node evals/subagent-multitask/runner/dist/cli.js",
+    "eval:memory": "npm run build -w @agent/core && tsc -p evals/memory/runner/tsconfig.json && node evals/memory/runner/dist/cli.js"
   },
   "allowScripts": {
     "electron@33.4.11": true
