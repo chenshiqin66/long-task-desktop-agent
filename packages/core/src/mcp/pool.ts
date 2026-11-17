@@ -5,6 +5,7 @@ import { openMcpSession, type OpenedMcp } from "./connect.js";
 import { redactSecrets, redactUrl } from "./redact.js";
 import type { McpToolSource } from "./source.js";
 import {
+  credentialsOf,
   defaultMcpConfigPath,
   loadMcpServers,
   normalizeMcpServer,
@@ -109,6 +110,11 @@ export class McpPool implements McpToolSource {
       if (slot?.state === "connected" && slot.exposed.has(toolName)) return true;
     }
     return false;
+  }
+
+  /** Credential-like values from every configured server, for the memory secret check. */
+  credentialValues(): string[] {
+    return this.configs.flatMap((config) => credentialsOf(config));
   }
 
   async start(): Promise<void> {

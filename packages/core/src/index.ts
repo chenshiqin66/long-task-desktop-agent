@@ -44,5 +44,5 @@ export * from "./memory/prompt.js";
 export * from "./memory/turn.js";
 export * from "./tools/memoryTools.js";
 export { McpPool, type McpServerInput, type McpServerView, type McpSnapshot, type McpToolSource } from "./mcp/pool.js";
-export { defaultMcpConfigPath } from "./mcp/store.js";
+export { credentialsOf, defaultMcpConfigPath } from "./mcp/store.js";
 export { redactSecrets, redactUrl } from "./mcp/redact.js";
