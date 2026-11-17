@@ -47,6 +47,8 @@ export async function runIsolatedSubagent(opts: {
   /** Set by the parent when it has already claimed taskId as this id. */
   agentId?: string;
   taskId?: string;
+  /** Instruction files from the parent's turn. Appended for worker only. */
+  instructions?: string;
   /** Live tool rows for the parent transcript. Omit in tests that only check the receipt. */
   onTool?: (event: SubagentToolEvent) => void;
 }): Promise<ToolResult> {
@@ -70,10 +72,12 @@ export async function runIsolatedSubagent(opts: {
   };
   const store = await SubagentStore.create(dir, meta);
   const toolRounds = subagentToolRounds(opts.subagentType, opts.config.maxSteps);
-  const systemPrompt =
+  const baseSystem =
     opts.subagentType === "worker"
       ? workerSystemPrompt(opts.workspacePath, opts.outputDir ?? "", toolRounds)
       : exploreSystemPrompt(opts.workspacePath, toolRounds);
+  const systemPrompt =
+    opts.subagentType === "worker" && opts.instructions ? `${baseSystem}\n\n${opts.instructions}` : baseSystem;
   const installed = (await listInstalledSkills(opts.skillsRoot)).filter((skill) => skill.enabled);
   const skillBodies = await bodiesForTask(opts.task, opts.skillsRoot, opts.config.maxReadChars);
   const attached = fullyAttachedSkillNames(skillBodies);

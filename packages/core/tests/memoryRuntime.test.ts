@@ -133,6 +133,56 @@ describe("memory in the runtime", () => {
     expect(prompt).toContain("Subagents do not see memory notes.");
     expect(classifyToolCall("memory_read", "{}").risk).toBe("read");
   });
+
+  it("gives a worker the instruction files but not the notes, and gives explore neither", async () => {
+    const mem = memory();
+    await writeFile(join(workspace, "AGENTS.md"), "Project rule: two spaces.", "utf8");
+    await mem.store.upsert(
+      { scope: "user", name: "lang", type: "user", description: "中文", body: "回复用中文。" },
+      { actor: "user", origin: "manual", secrets: [] },
+    );
+    const seen: Record<"parent" | "worker" | "explore", { system: string; tools: string[] } | undefined> = {
+      parent: undefined,
+      worker: undefined,
+      explore: undefined,
+    };
+    let parentCalls = 0;
+    const provider: LlmProvider = {
+      async *chatStream(req) {
+        const system = systemText(req);
+        const tools = req.tools.map((tool) => tool.name);
+        if (system.startsWith("You are a worker subagent")) {
+          seen.worker = { system, tools };
+          yield text("worker done");
+          return;
+        }
+        if (system.startsWith("You are an explore subagent")) {
+          seen.explore = { system, tools };
+          yield text("explore done");
+          return;
+        }
+        parentCalls += 1;
+        seen.parent ??= { system, tools };
+        if (parentCalls === 1) {
+          yield call("a1", "subagent", { description: "look", subagent_type: "explore", task: "List the docs folder and report the file names." });
+          yield call("a2", "subagent", { description: "write", subagent_type: "worker", task: "Write docs/out.md with one line.", output_dir: "docs" });
+          return;
+        }
+        yield text("done");
+      },
+    };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: config(), provider, skillsRoot, memory: mem });
+    const meta = await rt.createSession("memory");
+    await rt.submit(meta.session_id, "go");
+
+    expect(seen.parent?.system).toContain("回复用中文。");
+    expect(seen.parent?.tools).toContain("memory_read");
+    expect(seen.worker?.system).toContain("# Project instructions\nSource: AGENTS.md\nProject rule: two spaces.");
+    expect(seen.worker?.system).not.toContain("回复用中文。");
+    expect(seen.worker?.tools).not.toContain("memory_read");
+    expect(seen.explore?.system).not.toContain("Project rule: two spaces.");
+    expect(seen.explore?.tools).not.toContain("memory_read");
+  });
 });
 
 describe("memory in the assembled context", () => {

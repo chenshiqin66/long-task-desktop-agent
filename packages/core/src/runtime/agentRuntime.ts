@@ -1473,6 +1473,7 @@ export class AgentRuntime {
             parentToolCallId: item.tc.id,
             call: item.call,
             releaseClaim,
+            instructions: this.turnMemory.workerInstructions,
           }).catch(() => {
             // The receipt could not be written. Do not leave its output_dir locked until restart.
             this.noteDirs.delete(`note_${agentId}`);
@@ -1498,6 +1499,7 @@ export class AgentRuntime {
             outputDir: item.call.output_dir,
             agentId,
             taskId: item.call.task_id,
+            instructions: this.turnMemory.workerInstructions,
           });
           return { item, agentId, deferred: false, result: { ...result, content: await releaseClaim(result.content) } };
         } catch (err) {
@@ -1570,6 +1572,7 @@ export class AgentRuntime {
     parentToolCallId: string;
     call: AgentCall;
     releaseClaim: (content: string) => Promise<string>;
+    instructions: string;
   }): Promise<void> {
     const run = this.deferredRuns.get(opts.agentId);
     let content = "";
@@ -1592,6 +1595,7 @@ export class AgentRuntime {
         outputDir: opts.call.output_dir,
         agentId: opts.agentId,
         taskId: opts.call.task_id,
+        instructions: opts.instructions,
       });
       content = this.closedSessions.has(opts.sessionId) ? "" : await opts.releaseClaim(result.content);
       ok = !result.is_error;
