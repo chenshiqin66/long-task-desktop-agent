@@ -126,7 +126,7 @@ flowchart TB
 
 ## 什么不会写进日志
 
-- 配置里的 `apiKey` 不由 runtime 写进三份日志。
+- 配置里的 `apiKey`、`searchApiKey`，以及 `models` 列表里每条的密钥，都不由 runtime 写进三份日志。
 - `user_message` 事件只记字数、图片张数和 `held`。
 - `tool_call_arguments` 只给界面看，不发给模型。
 
