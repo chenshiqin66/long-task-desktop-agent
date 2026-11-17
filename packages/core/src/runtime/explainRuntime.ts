@@ -16,7 +16,7 @@ import type { LlmProvider } from "../provider/types.js";
 import { ExplainStore } from "../store/explainStore.js";
 import { ToolHost } from "../tools/host.js";
 import type { ToolContext } from "../tools/types.js";
-import type { AgentConfig, Message, SubmittedImage, ToolCall } from "../types.js";
+import type { AgentConfig, Message, SubmittedImage, ToolCall, TraceEvent } from "../types.js";
 import { AgentError } from "./errors.js";
 
 const CANCELLED_TOOL = "Cancelled: tool was not executed.";
@@ -237,6 +237,7 @@ export class ExplainRuntime {
       let assistantText = "";
       const toolCalls: ToolCall[] = [];
       let llmError: string | undefined;
+      let usage: TraceEvent["token_usage"];
       try {
         for await (const chunk of this.provider.chatStream({
           messages: prepared.messages,
@@ -256,6 +257,8 @@ export class ExplainRuntime {
               turn_id: turnId,
               tool_call: chunk.tool_call,
             });
+          } else if (chunk.type === "usage") {
+            usage = chunk.usage;
           } else if (chunk.type === "error") {
             llmError = chunk.error ?? "llm error";
           }
@@ -275,6 +278,7 @@ export class ExplainRuntime {
           type: "llm_error",
           request_id: requestId,
           error: llmError,
+          ...(usage ? { token_usage: usage } : {}),
         });
         this.emit({ type: "error", session_id: sessionId, turn_id: turnId, message: llmError, code: "llm_error" });
         this.emit({ type: "done", session_id: sessionId, turn_id: turnId, reason: "error" });
@@ -295,6 +299,7 @@ export class ExplainRuntime {
         turn_id: turnId,
         type: "llm_response",
         request_id: requestId,
+        ...(usage ? { token_usage: usage } : {}),
         detail: { content_chars: assistantText.length, tool_calls: toolCalls.length },
       });
 

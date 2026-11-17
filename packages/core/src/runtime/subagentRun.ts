@@ -139,6 +139,7 @@ export async function runIsolatedSubagent(opts: {
       let assistantText = "";
       const toolCalls: ToolCall[] = [];
       let llmError: string | undefined;
+      let usage: TraceEvent["token_usage"];
       try {
         for await (const chunk of opts.provider.chatStream({
           messages: prepared.messages,
@@ -149,6 +150,7 @@ export async function runIsolatedSubagent(opts: {
           if (opts.signal.aborted) break;
           if (chunk.type === "text" && chunk.text) assistantText += chunk.text;
           else if (chunk.type === "tool_call_delta" && chunk.tool_call) toolCalls.push(chunk.tool_call);
+          else if (chunk.type === "usage") usage = chunk.usage;
           else if (chunk.type === "error") llmError = chunk.error ?? "llm error";
         }
       } catch (err) {
@@ -164,6 +166,7 @@ export async function runIsolatedSubagent(opts: {
       if (llmError) {
         failed = true;
         finalText = `Subagent model error: ${llmError}`;
+        await trace(store, opts.sessionId, turnId, "llm_error", { error: llmError }, usage);
         break;
       }
 
@@ -181,7 +184,7 @@ export async function runIsolatedSubagent(opts: {
       await trace(store, opts.sessionId, turnId, "llm_response", {
         content_chars: assistantText.length,
         tool_calls: toolCalls.map((call) => call.function.name),
-      });
+      }, usage);
 
       if (toolCalls.length === 0) {
         finalText = assistantText;
@@ -294,6 +297,7 @@ async function trace(
   turnId: string,
   type: string,
   detail: Record<string, unknown>,
+  tokenUsage?: TraceEvent["token_usage"],
 ): Promise<void> {
   const event: TraceEvent = {
     id: newId("trace"),
@@ -302,6 +306,7 @@ async function trace(
     type,
     timestamp: nowIso(),
     detail,
+    ...(tokenUsage ? { token_usage: tokenUsage } : {}),
   };
   await store.appendTrace(event);
 }

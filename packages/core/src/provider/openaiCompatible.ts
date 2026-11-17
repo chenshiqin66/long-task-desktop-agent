@@ -19,6 +19,14 @@ export class OpenAICompatibleProvider implements LlmProvider {
   }
 
   async *chatStream(req: LlmChatRequest): AsyncIterable<LlmStreamChunk> {
+    const retry = yield* this.openStream(req, true);
+    if (retry) yield* this.openStream(req, false);
+  }
+
+  private async *openStream(
+    req: LlmChatRequest,
+    includeUsage: boolean,
+  ): AsyncGenerator<LlmStreamChunk, boolean> {
     const url = `${this.baseUrl}/chat/completions`;
     const tools = req.tools.map((t) => ({
       type: "function",
@@ -41,6 +49,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
           messages: req.messages,
           tools: tools.length ? tools : undefined,
           stream: true,
+          ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
         }),
         signal: req.signal,
       });
@@ -51,8 +60,10 @@ export class OpenAICompatibleProvider implements LlmProvider {
       return;
     }
     if (!res.ok) {
-      yield { type: "error", error: `HTTP ${res.status}: ${await res.text()}` };
-      return;
+      const text = await res.text();
+      if (includeUsage && res.status === 400 && /stream_options/i.test(text)) return true;
+      yield { type: "error", error: `HTTP ${res.status}: ${text}` };
+      return false;
     }
     if (!res.body) {
       yield { type: "error", error: "Empty response body" };

@@ -122,6 +122,38 @@ describe("ExplainRuntime", () => {
     expect(mainRaw).not.toContain("简短解释");
   });
 
+  it("records token usage from the stream and leaves the field off when none arrives", async () => {
+    const sessions = new SessionStore(workspace);
+    const meta = await sessions.createSession("用量");
+    const withUsage: LlmProvider = {
+      chatStream() {
+        return (async function* (): AsyncIterable<LlmStreamChunk> {
+          yield { type: "usage", usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 } };
+          yield { type: "text", text: "有用量" };
+        })();
+      },
+    };
+    const rt = new ExplainRuntime({ workspacePath: workspace, config: config(), provider: withUsage });
+    await rt.submit(meta.session_id, "第一句", undefined, { user: "问", assistant: "答" });
+    const traced = await readFile(
+      join(workspace, ".agent", "sessions", meta.session_id, "explain-trace.jsonl"),
+      "utf8",
+    );
+    expect(traced).toContain('"prompt_tokens":8');
+
+    const plain = new ExplainRuntime({ workspacePath: workspace, config: config(), provider: textProvider("无用量", []) });
+    await plain.submit(meta.session_id, "第二句");
+    const lines = (
+      await readFile(join(workspace, ".agent", "sessions", meta.session_id, "explain-trace.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; token_usage?: unknown; detail?: { content_chars?: number } });
+    const responses = lines.filter((line) => line.type === "llm_response");
+    expect(responses).toHaveLength(2);
+    expect(responses[1]?.token_usage).toBeUndefined();
+  });
+
   it("does not repeat the reminder on a typed follow-up", async () => {
     const sessions = new SessionStore(workspace);
     const meta = await sessions.createSession();

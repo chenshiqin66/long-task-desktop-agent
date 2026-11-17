@@ -568,4 +568,39 @@ describe("AgentRuntime subagents", () => {
       readFile(join(workspace, ".agent", "sessions", sessionId, "messages.jsonl"), "utf8"),
     ).rejects.toThrow();
   });
+
+  it("writes a subagent's reported token usage onto its trace", async () => {
+    const provider: LlmProvider = {
+      chatStream(req) {
+        if (systemText(req).includes("You are an explore subagent")) {
+          return chunks([
+            { type: "usage", usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+            textChunk("looked"),
+          ]);
+        }
+        if (req.messages.some((message) => message.role === "tool")) return chunks([textChunk("ok")]);
+        return chunks([
+          callChunk("s1", "subagent", {
+            description: "look",
+            subagent_type: "explore",
+            task: "Look around.",
+          }),
+        ]);
+      },
+    };
+    const rt = new AgentRuntime({ workspacePath: workspace, config: config(), provider });
+    const meta = await rt.createSession("usage");
+    await rt.submit(meta.session_id, "look");
+    const subs = await readdir(join(workspace, ".agent", "sessions", meta.session_id, "subagents"));
+    const raw = await readFile(
+      join(workspace, ".agent", "sessions", meta.session_id, "subagents", subs[0]!, "trace.jsonl"),
+      "utf8",
+    );
+    const response = raw
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; token_usage?: { total_tokens?: number } })
+      .find((event) => event.type === "llm_response");
+    expect(response?.token_usage).toEqual({ prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 });
+  });
 });
