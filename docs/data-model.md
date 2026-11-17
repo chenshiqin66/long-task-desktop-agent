@@ -8,7 +8,7 @@
 
 ```text
 ~/.long-task-agent/
-  config.json                    模型配置、工作区列表、可选限额。POSIX 上目录 0700、文件 0600
+  config.json                    模型配置、工作区列表、可选限额。先写临时文件再改名。POSIX 上目录 0700、文件 0600
   mcp-servers.json               MCP server 清单和密钥，见 mcp.md
   skills/<name>/                 已安装的技能，见 skills.md
   skills/.skill-settings.json    停用的技能名单

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, stat, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import {
@@ -38,6 +38,17 @@ describe("loadConfig", () => {
     expect(agent.maxSteps).toBe(50);
     expect(agent.bashTimeoutMs).toBe(60_000);
     expect(agent.apiKey).toBe("sk-secret");
+  });
+
+  it("replaces config.json and leaves no temp file", async () => {
+    const path = join(dir, "config.json");
+    const base = { baseUrl: "https://api.example.com/v1", model: "gpt-x" };
+    await saveStoredConfig({ ...base, apiKey: "sk-first" }, path);
+    await saveStoredConfig({ ...base, apiKey: "sk-second" }, path);
+    expect(await readdir(dir)).toEqual(["config.json"]);
+    const raw = await readFile(path, "utf8");
+    expect(raw).toContain("sk-second");
+    expect(raw).not.toContain("sk-first");
   });
 
   it("returns null when config file missing", async () => {

@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, writeFile, chmod, rename, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { randomBytes } from "node:crypto";
 import type { StoredConfig } from "./types.js";
 import type { AgentConfig } from "../types.js";
 import { DEFAULT_AGENT_CONFIG } from "../types.js";
@@ -34,8 +35,26 @@ export async function saveStoredConfig(
   await chmod(dir, 0o700).catch(() => {
     /* best-effort on platforms that ignore mode */
   });
-  await writeFile(path, JSON.stringify(cfg, null, 2), { encoding: "utf8", mode: 0o600 });
-  await chmod(path, 0o600);
+  const body = JSON.stringify(cfg, null, 2);
+  const tmp = join(dir, `.${basename(path)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
+  await writeFile(tmp, body, { encoding: "utf8", mode: 0o600 });
+  try {
+    await rename(tmp, path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST" && code !== "EPERM" && code !== "EBUSY") {
+      await rm(tmp, { force: true });
+      throw err;
+    }
+    await rm(path, { force: true });
+    try {
+      await rename(tmp, path);
+    } catch (renameErr) {
+      await rm(tmp, { force: true });
+      throw renameErr;
+    }
+  }
+  await chmod(path, 0o600).catch(() => undefined);
 }
 
 export function toAgentConfig(stored: StoredConfig): AgentConfig {
