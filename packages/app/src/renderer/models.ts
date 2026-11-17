@@ -1,9 +1,14 @@
+type ModelKind = "text" | "image" | "video" | "audio";
+
+const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio"];
+
 type StoredModel = {
   id: string;
   name: string;
   baseUrl: string;
   model: string;
   apiKey: string;
+  kind?: ModelKind;
 };
 
 type StoredConfig = {
@@ -18,6 +23,36 @@ type StoredConfig = {
 export interface ModelsHost {
   onOpen: () => void;
   onClose: () => void;
+}
+
+export function modelRowHeading(name: string, kindLabel: string): string {
+  return `${name} · ${kindLabel}`;
+}
+
+export function composerModelOptionText(name: string, kindLabel: string): string {
+  return `${name}（${kindLabel}）`;
+}
+
+function parseModelKind(raw: unknown): ModelKind {
+  return typeof raw === "string" && (MODEL_KINDS as readonly string[]).includes(raw)
+    ? (raw as ModelKind)
+    : "text";
+}
+
+function modelKindOf(entry: { kind?: unknown } | null | undefined): ModelKind {
+  return parseModelKind(entry?.kind);
+}
+
+function modelLabel(entry: StoredModel): string {
+  return entry.name || entry.model || "未命名模型";
+}
+
+function kindLabelFromSelect(select: HTMLSelectElement, kind: ModelKind): string {
+  for (let i = 0; i < select.options.length; i++) {
+    const option = select.options[i];
+    if (option && option.value === kind) return option.textContent || "生文";
+  }
+  return "生文";
 }
 
 function textButton(label: string, onClick: () => void, danger = false): HTMLButtonElement {
@@ -37,6 +72,23 @@ function emptyConfig(): StoredConfig {
   return { baseUrl: "", model: "", apiKey: "", models: [], currentModelId: undefined };
 }
 
+function duplicateModel(stored: StoredConfig, modelId: string): StoredConfig {
+  const models = [...(stored.models ?? [])];
+  const source = models.find((entry) => entry.id === modelId);
+  if (!source) throw new Error("找不到这个模型");
+  const copy: StoredModel = {
+    ...source,
+    id: newModelId(),
+    name: `${source.name}（副本）`,
+    kind: modelKindOf(source),
+  };
+  return {
+    ...stored,
+    models: [...models, copy],
+    currentModelId: stored.currentModelId,
+  };
+}
+
 export function attachModelsLibrary(
   button: HTMLButtonElement,
   page: HTMLElement,
@@ -50,6 +102,7 @@ export function attachModelsLibrary(
   const addBtn = page.querySelector("#models-add") as HTMLButtonElement;
   const form = page.querySelector("#models-form") as HTMLFormElement;
   const nameInput = page.querySelector("#model-name") as HTMLInputElement;
+  const kindSelect = page.querySelector("#model-kind") as HTMLSelectElement;
   const baseUrlInput = page.querySelector("#model-baseUrl") as HTMLInputElement;
   const modelInput = page.querySelector("#model-model") as HTMLInputElement;
   const apiKeyInput = page.querySelector("#model-apiKey") as HTMLInputElement;
@@ -72,6 +125,7 @@ export function attachModelsLibrary(
   function openForm(entry?: StoredModel): void {
     editing = entry?.id ?? null;
     nameInput.value = entry?.name ?? "";
+    kindSelect.value = modelKindOf(entry);
     baseUrlInput.value = entry?.baseUrl ?? "";
     modelInput.value = entry?.model ?? "";
     apiKeyInput.value = entry?.apiKey ?? "";
@@ -97,7 +151,7 @@ export function attachModelsLibrary(
       for (const entry of models) {
         const option = document.createElement("option");
         option.value = entry.id;
-        option.textContent = entry.name || entry.model || "未命名模型";
+        option.textContent = composerModelOptionText(modelLabel(entry), kindLabelFromSelect(kindSelect, modelKindOf(entry)));
         select.append(option);
       }
       select.value = models.some((entry) => entry.id === currentId) ? currentId : models[0]!.id;
@@ -138,7 +192,7 @@ export function attachModelsLibrary(
     title.className = "mcp-row-title";
     const heading = document.createElement("span");
     heading.className = "mcp-label";
-    heading.textContent = entry.name || entry.model || "未命名模型";
+    heading.textContent = modelRowHeading(modelLabel(entry), kindLabelFromSelect(kindSelect, modelKindOf(entry)));
     const modelId = document.createElement("span");
     modelId.className = "mcp-id";
     modelId.textContent = entry.model;
@@ -154,6 +208,28 @@ export function attachModelsLibrary(
     summary.textContent = entry.baseUrl || "未填写 Base URL";
     const actions = document.createElement("div");
     actions.className = "mcp-actions";
+    const hover = document.createElement("div");
+    hover.className = "mcp-actions-hover";
+    hover.append(
+      textButton("复制", () => {
+        void run(async () => {
+          const cur = (await loadConfig()) ?? emptyConfig();
+          const before = new Set((cur.models ?? []).map((row) => row.id));
+          const next = duplicateModel(cur, entry.id);
+          await persist(next);
+          const copied = next.models?.find((row) => !before.has(row.id));
+          if (copied) openForm(copied);
+        });
+      }),
+      textButton("修改", () => openForm(entry)),
+      textButton("移除", () => {
+        void run(async () => {
+          if (editing === entry.id) closeForm();
+          await deleteModel(entry.id);
+        });
+      }, true),
+    );
+    actions.append(hover);
     if (!current) {
       actions.append(
         textButton("使用", () => {
@@ -163,15 +239,6 @@ export function attachModelsLibrary(
         }),
       );
     }
-    actions.append(
-      textButton("修改", () => openForm(entry)),
-      textButton("移除", () => {
-        void run(async () => {
-          if (editing === entry.id) closeForm();
-          await deleteModel(entry.id);
-        });
-      }, true),
-    );
     main.append(title, summary, actions);
     row.append(main);
     return row;
@@ -259,7 +326,7 @@ export function attachModelsLibrary(
       const cur = (await loadConfig()) ?? emptyConfig();
       const models = [...(cur.models ?? [])];
       const id = editing ?? newModelId();
-      const entry: StoredModel = { id, name, baseUrl, model, apiKey };
+      const entry: StoredModel = { id, name, baseUrl, model, apiKey, kind: parseModelKind(kindSelect.value) };
       const index = models.findIndex((item) => item.id === id);
       if (index >= 0) models[index] = entry;
       else models.push(entry);

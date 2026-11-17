@@ -3822,6 +3822,18 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   margin-left: auto;
 }
 
+.mcp-row .mcp-actions-hover {
+  display: flex;
+  gap: inherit;
+  opacity: 0;
+  pointer-events: none;
+}
+.mcp-row:hover .mcp-actions-hover,
+.mcp-row:focus-within .mcp-actions-hover {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .mcp-actions .skill-switch {
   position: relative;
   width: 36px;
