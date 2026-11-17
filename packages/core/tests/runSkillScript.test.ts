@@ -103,4 +103,31 @@ describe("run_skill_script", () => {
       await rm(outside, { recursive: true, force: true });
     }
   });
+
+  it("keeps output already captured when the script times out", async () => {
+    const root = await tempDir("skill-run-timeout-root-");
+    const source = await tempDir("skill-run-timeout-src-");
+    const workspace = await tempDir("skill-run-timeout-ws-");
+    try {
+      await mkdir(join(source, "scripts"), { recursive: true });
+      await writeFile(join(source, "SKILL.md"), skillMd, "utf8");
+      await writeFile(
+        join(source, "scripts", "hang.js"),
+        "console.log('before-timeout'); setTimeout(() => {}, 30000);",
+        "utf8",
+      );
+      await installSkill(source, root);
+      const r = await runSkillScriptTool.execute(
+        { name: "demo", path: "scripts/hang.js" },
+        { ...ctx(workspace, root), bashTimeoutMs: 800 },
+      );
+      expect(r.is_error).toBe(true);
+      expect(r.content).toContain("before-timeout");
+      expect(r.content).toMatch(/timeout/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(source, { recursive: true, force: true });
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

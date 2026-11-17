@@ -457,6 +457,39 @@ describe("tools", () => {
     expect(r.content).toContain("中文输出");
   });
 
+  it("bash timeout keeps output already captured", async () => {
+    const command =
+      process.platform === "win32"
+        ? "Write-Output 'before-timeout'; Start-Sleep -Seconds 30"
+        : "echo before-timeout; sleep 30";
+    const r = await host.execute(SHELL_TOOL_NAME, JSON.stringify({ command }), {
+      ...ctx,
+      bashTimeoutMs: 800,
+    });
+    expect(r.is_error).toBe(true);
+    expect(r.content).toContain("before-timeout");
+    expect(r.content).toMatch(/timeout/i);
+  });
+
+  it("bash cancel keeps output already captured", async () => {
+    const ac = new AbortController();
+    const command =
+      process.platform === "win32"
+        ? "Write-Output 'before-cancel'; Start-Sleep -Seconds 30"
+        : "echo before-cancel; sleep 30";
+    const pending = host.execute(SHELL_TOOL_NAME, JSON.stringify({ command }), {
+      ...ctx,
+      signal: ac.signal,
+      bashTimeoutMs: 8_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    ac.abort();
+    const r = await pending;
+    expect(r.is_error).toBe(true);
+    expect(r.content).toContain("before-cancel");
+    expect(r.content).toMatch(/cancel/i);
+  });
+
   it("keyword_search skips file symlink that escapes workspace", async () => {
     const outsideDir = await mkdtemp(join(tmpdir(), "agent-search-out-"));
     const secret = join(outsideDir, "secret.txt");

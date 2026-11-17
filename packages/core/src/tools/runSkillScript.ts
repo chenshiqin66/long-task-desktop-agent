@@ -134,11 +134,14 @@ function runInterpreter(
     };
     const timer = setTimeout(() => {
       forceKillChild(child);
-      finish({ content: `Command timeout after ${ctx.bashTimeoutMs}ms`, is_error: true });
+      const note = `Command timeout after ${ctx.bashTimeoutMs}ms`;
+      const body = [stdout, stderr].filter(Boolean).join("\n");
+      finish({ content: body ? `${body}\n${note}` : note, is_error: true });
     }, ctx.bashTimeoutMs);
     const onAbort = () => {
       forceKillChild(child);
-      finish({ content: "Command cancelled", is_error: true });
+      const body = [stdout, stderr].filter(Boolean).join("\n");
+      finish({ content: body ? `${body}\nCommand cancelled` : "Command cancelled", is_error: true });
     };
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (d) => appendChunk("out", String(d)));

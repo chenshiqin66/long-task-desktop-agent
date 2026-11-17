@@ -34,7 +34,7 @@
 
 未知工具按 `write` 分级；宿主找不到实现，返回错误结果。工具参数解析失败、工具内部抛错，都变成 `is_error` 的工具结果交还模型，不打断循环。子代理的工具表里没有 `subagent` 和 `ask_user`，调用它们也返回错误结果，循环继续。父会话仍由 runtime 接住这两个名字。
 
-shell 命令的执行环境：Windows 上以 `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动，命令按 UTF-16LE 编码传入，不经过命令行的引号转义。外层包装把输出编码设为 UTF-8，并把外部程序的非零退出码当作工具失败。其他系统用 `bash -lc`。工作目录是当前工作区，环境变量继承应用进程。输出按块解码，一个多字节字符恰好落在两块交界时，这个字会变成乱码。
+shell 命令的执行环境：Windows 上以 `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动，命令按 UTF-16LE 编码传入，不经过命令行的引号转义。外层包装把输出编码设为 UTF-8，并把外部程序的非零退出码当作工具失败。其他系统用 `bash -lc`。工作目录是当前工作区，环境变量继承应用进程。标准输出和标准错误按 UTF-8 流解码。超时或取消时，已经拿到的输出留在结果里，这一次仍算失败。`run_skill_script` 同样如此。
 
 `web_search` 的地址由聊天的 Base URL 推出来：以 `/v1` 结尾时拼 `/tools/search`，否则拼 `/v1/tools/search`。这是 DeepSeek 的搜索接口；Base URL 指向别家服务商时，这个工具多半会报错。返回给模型的是编号的纯文本结果，工具说明要求模型用 `[n]` 标注来源。
 
