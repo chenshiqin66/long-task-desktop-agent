@@ -24,7 +24,7 @@ export interface MemoryPageDeps {
   workspace(): string | null;
   /** Workspaces in the sidebar. A source session elsewhere is shown as a path only. */
   knownWorkspaces(): readonly string[];
-  /** Closes the workbench and opens the session. Resolves to an error message, or null. */
+  /** Closes the memory page and opens the session. Resolves to an error message, or null. */
   openSession(workspace: string, sessionId: string): Promise<string | null>;
 }
 

@@ -21,6 +21,7 @@ import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js
 import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
 import { attachMcpLibrary } from "./mcp.js";
+import { attachModelsLibrary } from "./models.js";
 import { escapeAction } from "./escapeKey.js";
 import { mountFavoriteFolders, mountWorkbench, mountWorkbenchNav, type WorkbenchPage } from "./workbench.js";
 import { appendMemorySaved, mountMemoryPage } from "./memory.js";
@@ -263,12 +264,16 @@ const storeHint = document.getElementById("store-meta-hint")!;
 const findBar = document.getElementById("find-bar")!;
 const findInput = document.getElementById("find-input") as HTMLInputElement;
 const findCount = document.getElementById("find-count")!;
-const configDialog = document.getElementById("config-dialog") as HTMLDialogElement;
-const configForm = document.getElementById("config-form") as HTMLFormElement;
 const skillsPage = document.getElementById("skills-page") as HTMLElement;
 const btnSkills = document.getElementById("btn-skills") as HTMLButtonElement;
 const mcpPage = document.getElementById("mcp-page") as HTMLElement;
 const btnMcp = document.getElementById("btn-mcp") as HTMLButtonElement;
+const memoryPageEl = document.getElementById("memory-page") as HTMLElement;
+const btnMemory = document.getElementById("btn-memory") as HTMLButtonElement;
+const modelsPage = document.getElementById("models-page") as HTMLElement;
+const btnConfig = document.getElementById("btn-config") as HTMLButtonElement;
+const composerModel = document.getElementById("composer-model") as HTMLSelectElement;
+const composerModelEmpty = document.getElementById("composer-model-empty") as HTMLButtonElement;
 const favoriteFolders = mountFavoriteFolders(
   document.getElementById("workbench-view") as HTMLElement,
   document.getElementById("folder-add") as HTMLButtonElement,
@@ -296,11 +301,7 @@ const workbench = mountWorkbench(
   () => reloadWorkbenchPage(workbenchNav.current()),
 );
 
-function reloadWorkbenchPage(page: WorkbenchPage): void {
-  if (page === "memory") {
-    void memoryPage.open();
-    return;
-  }
+function reloadWorkbenchPage(_page?: WorkbenchPage): void {
   void favoriteFolders.reload().catch((err: unknown) => {
     const note = document.getElementById("folder-note");
     if (!note) return;
@@ -308,14 +309,6 @@ function reloadWorkbenchPage(page: WorkbenchPage): void {
     note.textContent = err instanceof Error ? err.message : "读不到常用文件夹";
   });
 }
-
-/** From the 已记住 line. The sheet covers the window, so it is closed whenever this runs. */
-function openMemoryPage(): void {
-  workbenchNav.select("memory");
-  workbench.open();
-}
-
-document.getElementById("btn-memory")!.addEventListener("click", () => openMemoryPage());
 
 async function openMemorySource(workspace: string, sessionId: string): Promise<string | null> {
   let title = "";
@@ -326,7 +319,6 @@ async function openMemorySource(workspace: string, sessionId: string): Promise<s
   } catch (err) {
     return plainError(err);
   }
-  workbench.close();
   await showSession(workspace, sessionId, title);
   return null;
 }
@@ -477,6 +469,8 @@ let followTail = true;
 let tailAnchor = 0;
 let skillsPageOpen = false;
 let mcpPageOpen = false;
+let memoryPageOpen = false;
+let modelsPageOpen = false;
 let activeStoreTab: StoreTab = "meta";
 let sessionArtifacts: {
   sessionId: string;
@@ -683,7 +677,7 @@ function coverStageWithSkills(): void {
 }
 
 function libraryOpen(): boolean {
-  return skillsPageOpen || mcpPageOpen;
+  return skillsPageOpen || mcpPageOpen || memoryPageOpen || modelsPageOpen;
 }
 
 function clearMcpChrome(): void {
@@ -700,10 +694,26 @@ function clearSkillsChrome(): void {
   btnSkills.setAttribute("aria-pressed", "false");
 }
 
+function clearMemoryChrome(): void {
+  memoryPageOpen = false;
+  memoryPageEl.hidden = true;
+  btnMemory.classList.remove("is-current");
+  btnMemory.setAttribute("aria-pressed", "false");
+}
+
+function clearModelsChrome(): void {
+  modelsPageOpen = false;
+  modelsPage.hidden = true;
+  btnConfig.classList.remove("is-current");
+  btnConfig.setAttribute("aria-pressed", "false");
+}
+
 function leaveSkillsPage(): void {
   const open = libraryOpen();
   clearSkillsChrome();
   clearMcpChrome();
+  clearMemoryChrome();
+  clearModelsChrome();
   if (!open) return;
   mainBar.classList.remove("is-covered");
 }
@@ -714,12 +724,9 @@ function closeSkillsPage(): void {
   setMainView(activeView);
 }
 
-function openSkillsPage(): void {
-  clearMcpChrome();
-  skillsPageOpen = true;
-  skillsPage.hidden = false;
-  btnSkills.classList.add("is-current");
-  btnSkills.setAttribute("aria-pressed", "true");
+function markLibraryButton(button: HTMLButtonElement): void {
+  button.classList.add("is-current");
+  button.setAttribute("aria-pressed", "true");
   mainTitle.classList.remove("active");
   mainTitle.setAttribute("aria-selected", "false");
   clearLogsSelection();
@@ -727,24 +734,60 @@ function openSkillsPage(): void {
   syncQuestionsToggle();
 }
 
+function openSkillsPage(): void {
+  clearMcpChrome();
+  clearMemoryChrome();
+  clearModelsChrome();
+  skillsPageOpen = true;
+  skillsPage.hidden = false;
+  markLibraryButton(btnSkills);
+}
+
 function closeMcpPage(): void {
   if (!mcpPageOpen) return;
-  clearMcpChrome();
-  mainBar.classList.remove("is-covered");
+  leaveSkillsPage();
   setMainView(activeView);
 }
 
 function openMcpPage(): void {
   clearSkillsChrome();
+  clearMemoryChrome();
+  clearModelsChrome();
   mcpPageOpen = true;
   mcpPage.hidden = false;
-  btnMcp.classList.add("is-current");
-  btnMcp.setAttribute("aria-pressed", "true");
-  mainTitle.classList.remove("active");
-  mainTitle.setAttribute("aria-selected", "false");
-  clearLogsSelection();
-  coverStageWithSkills();
-  syncQuestionsToggle();
+  markLibraryButton(btnMcp);
+}
+
+function closeMemoryPage(): void {
+  if (!memoryPageOpen) return;
+  leaveSkillsPage();
+  setMainView(activeView);
+}
+
+/** From the 已记住 line, or the sidebar 记忆 button. */
+function openMemoryPage(): void {
+  clearSkillsChrome();
+  clearMcpChrome();
+  clearModelsChrome();
+  memoryPageOpen = true;
+  memoryPageEl.hidden = false;
+  markLibraryButton(btnMemory);
+  void memoryPage.open();
+}
+
+function closeModelsPage(): void {
+  if (!modelsPageOpen) return;
+  leaveSkillsPage();
+  setMainView(activeView);
+}
+
+function openModelsPage(): void {
+  clearSkillsChrome();
+  clearMcpChrome();
+  clearMemoryChrome();
+  modelsPageOpen = true;
+  modelsPage.hidden = false;
+  markLibraryButton(btnConfig);
 }
 
 function paintStoreView(): void {
@@ -2465,44 +2508,15 @@ btnNew.onclick = () => {
 
 attachSkillLibrary(btnSkills, skillsPage, { onOpen: openSkillsPage, onClose: closeSkillsPage });
 attachMcpLibrary(btnMcp, mcpPage, { onOpen: openMcpPage, onClose: closeMcpPage });
+const modelsApi = attachModelsLibrary(btnConfig, modelsPage, composerModel, composerModelEmpty, {
+  onOpen: openModelsPage,
+  onClose: closeModelsPage,
+});
 attachSkillMenu(inputEl, skillMenu);
 
-document.getElementById("btn-config")!.onclick = async () => {
-  try {
-    const cur = (await window.agent.getConfig()) ?? {
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o-mini",
-      apiKey: "",
-    };
-    (document.getElementById("cfg-baseUrl") as HTMLInputElement).value = cur.baseUrl ?? "";
-    (document.getElementById("cfg-model") as HTMLInputElement).value = cur.model ?? "";
-    (document.getElementById("cfg-apiKey") as HTMLInputElement).value = cur.apiKey ?? "";
-    configDialog.showModal();
-  } catch (err) {
-    showStatusError(err);
-  }
-};
-
-configForm.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const submitter = (ev as SubmitEvent).submitter as HTMLButtonElement | null;
-  const action = submitter?.value ?? "cancel";
-  if (action === "cancel") {
-    configDialog.close();
-    return;
-  }
-  try {
-    const cur = (await window.agent.getConfig()) ?? {};
-    const baseUrl = (document.getElementById("cfg-baseUrl") as HTMLInputElement).value.trim();
-    const model = (document.getElementById("cfg-model") as HTMLInputElement).value.trim();
-    const apiKey = (document.getElementById("cfg-apiKey") as HTMLInputElement).value.trim();
-    await window.agent.saveConfig({ ...cur, baseUrl, model, apiKey });
-    configDialog.close();
-    // A running turn owns the status line. Saving must not clear 「等待确认权限」 or 「等你回答」.
-    if (!pageRun()?.gate.isRunning) setStatus("配置已保存");
-  } catch (err) {
-    showStatusError(err);
-  }
+btnMemory.addEventListener("click", () => {
+  if (memoryPageOpen) closeMemoryPage();
+  else openMemoryPage();
 });
 
 async function imageDataUrls(
@@ -3123,7 +3137,7 @@ window.addEventListener("keydown", (ev) => {
   const action = escapeAction({
     handled: ev.defaultPrevented,
     composing: ev.isComposing,
-    dialogOpen: configDialog.open,
+    dialogOpen: Boolean(document.querySelector("dialog[open]")),
     workbenchOpen: workbench.isOpen(),
     findOpen: !findBar.hidden || Boolean(explainApi && !explainApi.findBar.hidden),
     taskPanelOpen: taskPanelOpen && !taskPanelEl.hidden,
@@ -3171,6 +3185,8 @@ function findRoot(): HTMLElement {
   if (findScope === "explain" && explainApi?.searchRoot()) return explainApi.searchRoot()!;
   if (mcpPageOpen) return mcpPage;
   if (skillsPageOpen) return skillsPage;
+  if (memoryPageOpen) return memoryPageEl;
+  if (modelsPageOpen) return modelsPage;
   return activeView === "chat" ? messagesEl : storeView;
 }
 
@@ -3599,7 +3615,7 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
 
 window.agent.onMemoryEvent((e) => {
   if (e.type !== "memory_saved") return;
-  if (workbench.isOpen() && workbenchNav.current() === "memory") void memoryPage.refresh();
+  if (memoryPageOpen) void memoryPage.refresh();
   const key = sessionViewKey(e.workspace, e.session_id);
   const onScreen = e.session_id === currentSessionId && sameWorkspace(e.workspace, viewWorkspace);
   const container = onScreen ? messagesEl : key ? sessionViews.get(key)?.holder : undefined;
@@ -3704,6 +3720,7 @@ async function boot(): Promise<void> {
     workspacePaths = restored?.paths ?? [];
     workspaceLabels = restored?.labels ?? {};
     rememberWorkspaceFold(workspacePaths, restored?.collapsed ?? []);
+    void modelsApi.reload();
     if (restored?.active) await applyWorkspace(restored.active);
     else {
       await refreshSessions();

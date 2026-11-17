@@ -36,8 +36,8 @@
           <div class="sidebar-tools">
             <button type="button" id="btn-mcp" class="btn btn-ghost" aria-pressed="false">连接</button>
             <button type="button" id="btn-skills" class="btn btn-ghost" aria-pressed="false">技能</button>
-            <button type="button" id="btn-memory" class="btn btn-ghost">记忆</button>
-            <button type="button" id="btn-config" class="btn btn-ghost" aria-label="配置模型">模型</button>
+            <button type="button" id="btn-memory" class="btn btn-ghost" aria-pressed="false">记忆</button>
+            <button type="button" id="btn-config" class="btn btn-ghost" aria-pressed="false" aria-label="配置模型">模型</button>
           </div>
           <button type="button" id="btn-workbench" class="btn btn-ghost" aria-pressed="false" aria-expanded="false" aria-controls="workbench-sheet">我的工作台</button>
         </div>
@@ -187,6 +187,43 @@
             </form>
             <div id="mcp-list" class="mcp-list"></div>
           </section>
+
+          <section id="memory-page" class="skills-page" hidden aria-label="记忆">
+            <header class="skills-page-head">
+              <h2>记忆</h2>
+            </header>
+            <p id="memory-note" class="skills-note" hidden></p>
+            <div id="memory-view" class="memory-view"></div>
+          </section>
+
+          <section id="models-page" class="skills-page" hidden aria-label="模型">
+            <header class="skills-page-head">
+              <h2>模型</h2>
+              <span id="models-count" class="skills-count">已配置(0)</span>
+              <button type="button" id="models-add" class="btn btn-primary skills-add">+ 添加</button>
+            </header>
+            <p class="models-intro">密钥仅保存在本机用户目录，不会写入会话记录。</p>
+            <p id="models-note" class="skills-note" hidden></p>
+            <form id="models-form" class="models-form" hidden>
+              <label class="field">显示名
+                <input id="model-name" autocomplete="off" />
+              </label>
+              <label class="field">Base URL
+                <input id="model-baseUrl" type="url" autocomplete="off" />
+              </label>
+              <label class="field">Model
+                <input id="model-model" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">API Key
+                <input id="model-apiKey" type="password" autocomplete="off" />
+              </label>
+              <div class="config-actions">
+                <button type="button" id="models-cancel" class="btn btn-ghost">取消</button>
+                <button type="submit" class="btn btn-accent">保存</button>
+              </div>
+            </form>
+            <div id="models-list" class="models-list"></div>
+          </section>
         </div>
 
         <div class="float-stack">
@@ -220,7 +257,14 @@
                   任务<span id="task-count" class="task-count"></span>
                 </button>
                 </div>
+                <div class="composer-send">
+                <label class="sr-only" for="composer-model">选择模型</label>
+                <select id="composer-model" class="composer-model" aria-label="选择模型" disabled>
+                  <option value="">未配置模型</option>
+                </select>
+                <button type="button" id="composer-model-empty" class="composer-model-empty" hidden>未配置模型</button>
                 <button type="button" id="btn-send" class="btn btn-accent" disabled>发送</button>
+                </div>
               </div>
             </div>
           </footer>
@@ -287,7 +331,6 @@
       <aside class="workbench-menu">
         <nav id="workbench-nav" class="workbench-nav" aria-label="工作台菜单">
           <button type="button" id="workbench-folders" data-page="folders" aria-current="page">常用文件夹</button>
-          <button type="button" id="workbench-memory" data-page="memory">记忆</button>
         </nav>
         <div id="workbench-foot-space" class="workbench-foot-space" aria-hidden="true"></div>
       </aside>
@@ -299,10 +342,6 @@
         <div class="workbench-page" data-workbench-page="folders">
           <p id="folder-note" class="skills-note" hidden></p>
           <div id="workbench-view" class="workbench-view"></div>
-        </div>
-        <div class="workbench-page" data-workbench-page="memory" hidden>
-          <p id="memory-note" class="skills-note" hidden></p>
-          <div id="memory-view" class="workbench-view memory-view"></div>
         </div>
       </section>
       <button type="button" id="workbench-close" class="workbench-x" aria-label="关闭工作台">
@@ -316,31 +355,6 @@
       <button type="button" class="page-ctx-item" role="menuitem" data-ctx="copy">复制</button>
       <button type="button" class="page-ctx-item" role="menuitem" data-ctx="explain" hidden>解释</button>
     </div>
-
-    <dialog id="config-dialog" class="config-dialog">
-      <form method="dialog" id="config-form" class="config-form">
-        <header class="config-head">
-          <h2>配置模型</h2>
-          <p>密钥仅保存在本机用户目录，不会写入会话记录。</p>
-        </header>
-        <label class="field">
-          <span>Base URL</span>
-          <input id="cfg-baseUrl" name="baseUrl" type="url" required autocomplete="off" />
-        </label>
-        <label class="field">
-          <span>Model</span>
-          <input id="cfg-model" name="model" type="text" required autocomplete="off" />
-        </label>
-        <label class="field">
-          <span>API Key</span>
-          <input id="cfg-apiKey" name="apiKey" type="password" autocomplete="off" />
-        </label>
-        <div class="config-actions">
-          <button type="submit" value="cancel" class="btn btn-ghost">取消</button>
-          <button type="submit" value="save" class="btn btn-accent">保存</button>
-        </div>
-      </form>
-    </dialog>
 
     <script type="module" src="./main.js"></script>
   </body>

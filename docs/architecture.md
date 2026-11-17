@@ -73,7 +73,7 @@ flowchart LR
 
 每个 `AgentRuntime` 在构造时绑定一个工作区。会话目录、沙箱和 shell 的工作目录都随这个对象定下来。同一工作区可以同时有多个对象，各管一条正在执行的会话；换工作区不再拆掉其他会话的对象。
 
-在「配置模型」对话框（左下角的「模型」按钮）里保存，只重写 `~/.long-task-agent/config.json`，不碰正在跑的 runtime：权限确认和「等你回答」继续挂在原对象上。下一次点发送时，主进程比较 11 个字段：Base URL、模型、密钥、搜索地址、搜索密钥，加 6 项限额。有变化、且这一条既没有轮次在跑、也没有后台子代理，才丢掉旧对象，按新配置再建。模型和供应商是建对象时定的，所以生效方式是换对象，不是在跑着的对象上改字段。
+在侧栏「模型」页，或在输入框旁的模型选择器里改当前模型，只重写 `~/.long-task-agent/config.json`，不碰正在跑的 runtime：权限确认和「等你回答」继续挂在原对象上。下一次点发送时，主进程比较 11 个字段：当前这条的 Base URL、模型、密钥、搜索地址、搜索密钥，加 6 项限额。有变化、且这一条既没有轮次在跑、也没有后台子代理，才丢掉旧对象，按新配置再建。模型和供应商是建对象时定的，所以生效方式是换对象，不是在跑着的对象上改字段。后台提取记忆也用当前这一条。
 
 解释侧栏用另一个对象 `ExplainRuntime`，全局一份，按「工作区 + 配置」复用。它和主会话可以同时跑，见 [解释侧栏](#解释侧栏)。
 
@@ -201,8 +201,8 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | `electron/taskbar*.ts` | Windows 任务栏提醒：有权限卡或提问卡在等、而你没在看时，图标每 530 毫秒切换一次。Win32 库到第一次换图标时才加载 |
 | `src/renderer/main.ts` | 工作区与会话列表、页面切换、事件订阅、发送与停止、页内搜索、草稿 |
 | `src/renderer/ui.ts` | 消息气泡、Markdown、工具条、权限卡和提问卡。不持有会话状态 |
-| `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、任务面板、问题轨 |
-| `src/renderer/workbench.ts` | 「我的工作台」的开关和左右两页的切换 |
+| `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`models.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、模型页和输入框旁的模型选择器、任务面板、问题轨 |
+| `src/renderer/workbench.ts` | 「我的工作台」的开关和常用文件夹页 |
 | `src/renderer/memory.ts`、`memoryView.ts` | 记忆页，以及对话末尾的「已记住」 |
 | `src/renderer/runEventGate.ts` | 丢掉不属于当前会话或轮次的事件 |
 | `src/renderer/escapeKey.ts` | Esc 先关什么、什么时候才停止这一轮 |

@@ -19,6 +19,7 @@ import {
   saveStoredConfig,
   takeConfigQuarantine,
   toAgentConfig,
+  normalizeStoredConfig,
   assertValidSessionId,
   DeferredPermissionGate,
   DeferredAskGate,
@@ -941,10 +942,14 @@ app.whenReady().then(async () => {
     if (!open) collapsed.push(path);
     await saveStoredConfig({ ...stored, workspaceCollapsed: collapsed });
   });
-  ipcMain.handle("agent:getConfig", async () => loadStoredConfig());
+  ipcMain.handle("agent:getConfig", async () => {
+    const stored = await loadStoredConfig();
+    return stored ? normalizeStoredConfig(stored) : null;
+  });
   ipcMain.handle("agent:saveConfig", async (_e, cfg: StoredConfig) => {
     const prev = await loadStoredConfig();
-    await saveStoredConfig({
+    const merged: StoredConfig = {
+      ...prev,
       ...cfg,
       workspacePaths: cfg.workspacePaths ?? prev?.workspacePaths,
       workspaceLabels: cfg.workspaceLabels ?? prev?.workspaceLabels,
@@ -952,7 +957,12 @@ app.whenReady().then(async () => {
       lastWorkspacePath: cfg.lastWorkspacePath ?? prev?.lastWorkspacePath,
       favoriteFolders: cfg.favoriteFolders ?? prev?.favoriteFolders,
       autoMemory: cfg.autoMemory ?? prev?.autoMemory,
-    });
+    };
+    if (cfg.models === undefined && prev?.models) merged.models = prev.models;
+    if (cfg.models === undefined && cfg.currentModelId === undefined && prev?.currentModelId) {
+      merged.currentModelId = prev.currentModelId;
+    }
+    await saveStoredConfig(normalizeStoredConfig(merged));
   });
   ipcMain.handle("agent:localTargetsExist", async (_e, targets: unknown) => {
     if (!Array.isArray(targets) || targets.some((item) => typeof item !== "string")) return {};

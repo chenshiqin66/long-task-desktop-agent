@@ -1,7 +1,21 @@
-export interface StoredConfig {
+export interface StoredModel {
+  id: string;
+  /** Shown in the models page and the composer picker. */
+  name: string;
   baseUrl: string;
   model: string;
   apiKey: string;
+}
+
+export interface StoredConfig {
+  /** The current model. Kept in sync with models[currentModelId] so older readers still work. */
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  /** When missing, the top-level baseUrl / model / apiKey are treated as one entry. */
+  models?: StoredModel[];
+  /** Which models[] entry is current. Missing or unknown means the first entry. */
+  currentModelId?: string;
   /** Directories shown in the sidebar. Adding one does not remove the others. */
   workspacePaths?: string[];
   /** Sidebar labels keyed by workspace path. Missing key means show the folder name. Does not rename the directory. */

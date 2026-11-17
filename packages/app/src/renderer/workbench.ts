@@ -140,7 +140,7 @@ export function mountWorkbench(
   };
 }
 
-export type WorkbenchPage = "folders" | "memory";
+export type WorkbenchPage = "folders";
 
 export interface WorkbenchNav {
   current(): WorkbenchPage;
@@ -180,7 +180,7 @@ export function mountWorkbenchNav(opts: {
   }
 
   buttons.forEach((button) => {
-    button.addEventListener("click", () => show(button.dataset.page === "memory" ? "memory" : "folders"));
+    button.addEventListener("click", () => show("folders"));
   });
   return { current: () => page, select, show };
 }

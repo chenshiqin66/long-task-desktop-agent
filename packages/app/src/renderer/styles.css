@@ -315,6 +315,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 #btn-skills.is-current,
 #btn-mcp.is-current,
+#btn-memory.is-current,
+#btn-config.is-current,
 #btn-workbench.is-current {
   border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
   background: var(--teal-soft);
@@ -2985,6 +2987,37 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   min-width: 0;
 }
 
+.composer-send {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-model,
+.composer-model-empty {
+  max-width: 11rem;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  min-width: 0;
+}
+
+.composer-model-empty {
+  cursor: pointer;
+  color: var(--ink-muted);
+}
+
+.composer-model-empty:hover {
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
+  background: var(--teal-soft);
+}
+
 .btn-tasks {
   height: 28px;
   padding: 0 8px;
@@ -3285,6 +3318,13 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   justify-content: flex-end;
 }
 
+:is(#composer, #explain-composer).is-compact .composer-model,
+:is(#composer, #explain-composer).is-compact .composer-model-empty {
+  max-width: 8rem;
+  height: 26px;
+  padding: 0 6px;
+}
+
 :is(#composer, #explain-composer).is-compact.is-locked.has-draft .composer-lock-note {
   position: absolute;
   margin: 0;
@@ -3292,40 +3332,6 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.config-dialog {
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 0;
-  width: min(420px, calc(100vw - 32px));
-  background: var(--paper-elev);
-  color: var(--ink);
-  box-shadow: 0 12px 40px rgba(26, 35, 50, 0.18);
-}
-
-.config-dialog::backdrop {
-  background: rgba(26, 35, 50, 0.35);
-}
-
-.config-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 18px 18px 16px;
-}
-
-.config-head h2 {
-  margin: 0 0 4px;
-  font-family: var(--font-ui);
-  font-size: var(--text-title);
-}
-
-.config-head p {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: var(--text);
-  color: var(--ink-muted);
 }
 
 .field {
@@ -3641,7 +3647,15 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   max-width: 100%;
 }
 
-.mcp-form {
+.models-intro {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  color: var(--ink-muted);
+}
+
+.mcp-form,
+.models-form {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -3690,10 +3704,15 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   align-items: flex-start;
 }
 
-.mcp-list {
+.mcp-list,
+.models-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.mcp-row.is-current-model {
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
 }
 
 .mcp-row {
