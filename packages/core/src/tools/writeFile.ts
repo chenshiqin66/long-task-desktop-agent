@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { lstat, writeFile } from "node:fs/promises";
 import type { Tool, ToolResult } from "./types.js";
 import {
   MAX_WRITE_CHARS,
@@ -47,6 +47,9 @@ export const writeFileTool: Tool = {
     const resolved = await resolveWritableFile(ctx.workspacePath, requested);
     if ("error" in resolved) return { content: resolved.error, is_error: true };
     try {
+      if (await isExistingSymlink(resolved.abs)) {
+        return { content: `Refusing to follow a symlink: ${requested}`, is_error: true };
+      }
       await writeFile(resolved.abs, content, "utf8");
       const outside = await assertStillInside(resolved.realRoot, resolved.abs, requested);
       if (outside) return { content: outside, is_error: true };
@@ -59,3 +62,13 @@ export const writeFileTool: Tool = {
     }
   },
 };
+
+async function isExistingSymlink(abs: string): Promise<boolean> {
+  try {
+    return (await lstat(abs)).isSymbolicLink();
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+    if (code === "ENOENT") return false;
+    throw err;
+  }
+}

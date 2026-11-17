@@ -240,6 +240,33 @@ describe("tools", () => {
     expect(r.content.includes("truncated") || r.content.length <= 50).toBe(true);
   });
 
+  it("write_file refuses to follow an existing symlink", async () => {
+    const outsideDir = await mkdtemp(join(tmpdir(), "agent-write-out-"));
+    const secret = join(outsideDir, "secret.txt");
+    await writeFile(secret, "top-secret\n", "utf8");
+    try {
+      await symlink(secret, join(workspace, "leak.txt"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        await rmWorkspace(outsideDir);
+        return;
+      }
+      throw err;
+    }
+    try {
+      const r = await host.execute(
+        "write_file",
+        JSON.stringify({ path: "leak.txt", content: "pwned" }),
+        ctx,
+      );
+      expect(r.is_error).toBe(true);
+      expect(r.content).toMatch(/symlink/i);
+      expect(await readFile(secret, "utf8")).toBe("top-secret\n");
+    } finally {
+      await rmWorkspace(outsideDir);
+    }
+  });
+
   it("read_file rejects path outside workspace", async () => {
     const r = await host.execute(
       "read_file",
