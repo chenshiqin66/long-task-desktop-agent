@@ -102,6 +102,16 @@ describe("runtime routing by model kind", () => {
     );
     expect(events.some((event) => event.type === "status" && event.phase === "generating_image")).toBe(true);
     expect(events.some((event) => event.type === "done" && event.reason === "completed")).toBe(true);
+    const { context } = await rt.loadSessionArtifacts(meta.session_id);
+    expect(context).toEqual([
+      expect.objectContaining({
+        type: "request",
+        kind: "image",
+        model: "draw",
+        messages: [{ role: "user", text: "一只猫" }],
+      }),
+    ]);
+    expect((context[0] as { tools_sha256?: unknown }).tools_sha256).toBeUndefined();
   });
 
   it("sends this turn's user images as reference data URLs", async () => {
@@ -115,6 +125,20 @@ describe("runtime routing by model kind", () => {
     expect(generateCalls[0]?.images).toEqual([{ dataUrl: `data:image/png;base64,${PNG}` }]);
     const user = (await rt.loadMessages(meta.session_id)).find((message) => message.role === "user");
     expect(JSON.stringify(user)).not.toContain(PNG);
+    const { context } = await rt.loadSessionArtifacts(meta.session_id);
+    expect(context).toEqual([
+      expect.objectContaining({
+        type: "request",
+        kind: "image",
+        messages: [
+          {
+            role: "user",
+            text: "一只猫",
+                        images: [expect.objectContaining({ path: expect.stringMatching(/^images\/img_[a-f0-9]+\.png$/) })],
+          },
+        ],
+      }),
+    ]);
   });
 
   it("rejects an empty image prompt without calling the provider", async () => {
@@ -132,6 +156,7 @@ describe("runtime routing by model kind", () => {
     expect(chatCalls).toHaveLength(0);
     expect(generateCalls).toHaveLength(0);
     expect(errorMessage(events, thrown)).toBe("生图请先输入提示词");
+    expect((await rt.loadSessionArtifacts(meta.session_id)).context).toEqual([]);
   });
 
   it("rejects image generation when this turn includes a video", async () => {
@@ -149,6 +174,7 @@ describe("runtime routing by model kind", () => {
     expect(chatCalls).toHaveLength(0);
     expect(generateCalls).toHaveLength(0);
     expect(errorMessage(events, thrown)).toBe("生图不发送视频，请先去掉视频，或改用生文模型");
+    expect((await rt.loadSessionArtifacts(meta.session_id)).context).toEqual([]);
   });
 
   it.each(["video", "audio"] as const)("does not call the provider for %s models", async (kind) => {

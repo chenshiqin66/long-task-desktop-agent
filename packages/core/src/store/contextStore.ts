@@ -37,13 +37,14 @@ export class ContextStore {
     id: string;
     turnId: string;
     model: string;
-    toolsSha256: string;
-    tools: WireTool[];
+    toolsSha256?: string;
+    tools?: WireTool[];
     messages: AuditMessage[];
+    kind?: string;
   }): Promise<void> {
     const known = await this.knownToolHashes(opts.sessionId);
     const path = join(sessionDir(this.workspacePath, opts.sessionId), "context.jsonl");
-    if (!known.has(opts.toolsSha256)) {
+    if (opts.toolsSha256 && opts.tools && !known.has(opts.toolsSha256)) {
       await appendFile(
         path,
         JSON.stringify({ type: "tools", sha256: opts.toolsSha256, tools: opts.tools }) + "\n",
@@ -58,7 +59,8 @@ export class ContextStore {
         id: opts.id,
         turn_id: opts.turnId,
         model: opts.model,
-        tools_sha256: opts.toolsSha256,
+        ...(opts.toolsSha256 ? { tools_sha256: opts.toolsSha256 } : {}),
+        ...(opts.kind ? { kind: opts.kind } : {}),
         messages: opts.messages,
       }) + "\n",
       "utf8",

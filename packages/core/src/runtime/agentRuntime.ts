@@ -2262,15 +2262,37 @@ export class AgentRuntime {
     }
 
     const refImages: { dataUrl: string }[] = [];
+    const sentImages: { path: string; bytes: number }[] = [];
     for (const image of images) {
       try {
         const loaded = await this.store.readImageForSend(sessionId, image.path);
         refImages.push({ dataUrl: loaded.dataUrl });
+        sentImages.push({ path: image.path, bytes: loaded.bytes });
       } catch {
         this.emit({ type: "error", turn_id, message: "Image file is missing", code: "bad_image" });
         this.emit({ type: "done", turn_id, reason: "error" });
         return true;
       }
+    }
+
+    const imageRequestId = newId("trace");
+    if (
+      !(await this.persistContext(turn_id, {
+        sessionId,
+        id: imageRequestId,
+        turnId: turn_id,
+        model: this.config.model,
+        kind: "image",
+        messages: [
+          {
+            role: "user",
+            text: prompt,
+            ...(sentImages.length ? { images: sentImages } : {}),
+          },
+        ],
+      }))
+    ) {
+      return true;
     }
 
     let result;
