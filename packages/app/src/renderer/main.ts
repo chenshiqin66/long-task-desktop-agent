@@ -1,7 +1,9 @@
 import {
   appendAskCard,
   appendMessage,
+  applyMessageMedia,
   ensureMessageTime,
+  removeTranscriptMessage,
   appendTaskNotice,
   appendReaskButton,
   CANCELLED_TURN_NOTICE,
@@ -75,6 +77,7 @@ declare global {
           tool_call_id?: string;
           tool_call_arguments?: string;
           images?: Array<{ id?: string; mime?: string; path: string }>;
+          videos?: Array<{ id?: string; mime?: string; path: string }>;
           created_at?: string;
         }>
       >;
@@ -93,6 +96,7 @@ declare global {
         context: unknown[];
       }>>;
       readWorkspaceImage(path: string, sessionId: string, relativePath: string): Promise<string>;
+      readWorkspaceVideo(path: string, sessionId: string, relativePath: string): Promise<string>;
       renameWorkspaceSession(
         path: string,
         sessionId: string,
@@ -119,6 +123,7 @@ declare global {
           tool_call_id?: string;
           tool_call_arguments?: string;
           images?: Array<{ id?: string; mime?: string; path: string }>;
+          videos?: Array<{ id?: string; mime?: string; path: string }>;
           created_at?: string;
         }>
       >;
@@ -144,12 +149,14 @@ declare global {
         sessionId: string,
         text: string,
         images?: Array<{ mime: string; base64: string }>,
+        videos?: Array<{ mime: string; base64: string }>,
         workspace?: string,
       ): Promise<void>;
       replay(
         sessionId: string,
         text: string,
         images: Array<{ id: string; mime: string; path: string }>,
+        videos?: Array<{ id: string; mime: string; path: string }>,
         workspace?: string,
       ): Promise<void>;
       watchSession(sessionId: string | null, workspace?: string): Promise<void>;
@@ -189,6 +196,7 @@ declare global {
         fileError?: string;
       }) => void): () => void;
       readSessionImage(sessionId: string, relativePath: string): Promise<string>;
+      readSessionVideo(sessionId: string, relativePath: string): Promise<string>;
       cancel(sessionId?: string, workspace?: string): Promise<void>;
       explainLoad(
         workspace: string,
@@ -243,10 +251,12 @@ const composerLockNote = document.getElementById("composer-lock-note") as HTMLEl
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnImage = document.getElementById("btn-image") as HTMLButtonElement;
+const btnVideo = document.getElementById("btn-video") as HTMLButtonElement;
 const btnTasks = document.getElementById("btn-tasks") as HTMLButtonElement;
 const taskCountEl = document.getElementById("task-count")!;
 const taskPanelEl = document.getElementById("task-panel")!;
 const imageInput = document.getElementById("image-input") as HTMLInputElement;
+const videoInput = document.getElementById("video-input") as HTMLInputElement;
 const composerEl = document.getElementById("composer")!;
 const composerImages = document.getElementById("composer-images")!;
 const mainTitle = document.getElementById("main-title")!;
@@ -342,10 +352,14 @@ let activeWorkspace: string | null = null;
 let viewWorkspace: string | null = null;
 const workspaceExpanded = new Map<string, boolean>();
 const MAX_PENDING_IMAGES = 4;
+const MAX_PENDING_VIDEOS = 1;
 const MAX_IMAGE_EDGE = 1600;
+const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
 type PendingImage = { previewUrl: string; mime: "image/png" | "image/jpeg"; base64: string };
-type ComposerDraft = { text: string; images: PendingImage[] };
+type PendingVideo = { previewUrl: string; mime: "video/mp4" | "video/webm" | "video/quicktime"; base64: string };
+type ComposerDraft = { text: string; images: PendingImage[]; videos: PendingVideo[] };
 let pendingImages: PendingImage[] = [];
+let pendingVideos: PendingVideo[] = [];
 /** Drafts belong to one page: the blank「新建会话」page, or one session. Not the global box. */
 const composerDrafts = new Map<string, ComposerDraft>();
 /** One rendered transcript per opened session. Switching reattaches it instead of parsing again. */
@@ -379,6 +393,9 @@ type RunPaint = {
   openTools: Map<string, HTMLElement>;
   toolStepNodes: Map<string, HTMLElement>;
   nestedTails: Map<string, HTMLElement>;
+  generatedImages?: Array<{ id?: string; mime?: string; path: string }>;
+  generatedMessageId?: string;
+  generatedFill?: Promise<void>;
 };
 
 const runs = new Map<string, RunPaint>();
@@ -1323,6 +1340,7 @@ const PHASE_LABEL: Record<string, string> = {
   tool: "执行工具…",
   awaiting_permission: "等待确认权限…",
   awaiting_user: "等你回答…",
+  generating_image: "正在生成图片…",
 };
 
 function errText(err: unknown): string {
@@ -1464,9 +1482,9 @@ function updateChrome(): void {
   const running = Boolean(run?.gate.isRunning);
   const asking = Boolean(run?.pendingAsk);
   const wakeHere = Boolean(run?.wakeAcceptsInput) && !asking;
-  const wakeDraft = wakeHere && (inputEl.value.trim().length > 0 || pendingImages.length > 0);
+  const wakeDraft = wakeHere && (inputEl.value.trim().length > 0 || pendingImages.length > 0 || pendingVideos.length > 0);
   const canCompose = hasWorkspace && !asking && !creatingSession && (!running || wakeHere);
-  const hasDraft = inputEl.value.trim().length > 0 || pendingImages.length > 0;
+  const hasDraft = inputEl.value.trim().length > 0 || pendingImages.length > 0 || pendingVideos.length > 0;
   // Stop belongs to this session. Another session's turn does not lock this box.
   const stopHere = running && !asking && !wakeDraft;
   const stopping = stopHere && Boolean(run?.stopRequested);
@@ -1490,6 +1508,7 @@ function updateChrome(): void {
     setStatus(run.liveStatus, true, "run");
   }
   btnImage.disabled = !canCompose;
+  btnVideo.disabled = !canCompose;
   syncImageRemoveLock();
   syncLiveDock();
   syncTaskChrome();
@@ -1546,17 +1565,18 @@ function currentComposerKey(): string {
 function rememberComposer(): void {
   const key = currentComposerKey();
   const text = inputEl.value;
-  if (!text && pendingImages.length === 0) {
+  if (!text && pendingImages.length === 0 && pendingVideos.length === 0) {
     composerDrafts.delete(key);
     return;
   }
-  composerDrafts.set(key, { text, images: pendingImages });
+  composerDrafts.set(key, { text, images: pendingImages, videos: pendingVideos });
 }
 
 function restoreComposer(): void {
   const saved = composerDrafts.get(currentComposerKey());
   inputEl.value = saved?.text ?? "";
   pendingImages = saved?.images ?? [];
+  pendingVideos = saved?.videos ?? [];
   renderPendingImages();
 }
 
@@ -1565,7 +1585,9 @@ function forgetComposer(workspace: string | null, sessionId: string | null): voi
   const draft = composerDrafts.get(key);
   if (!draft) return;
   if (pendingImages === draft.images) pendingImages = [];
+  if (pendingVideos === draft.videos) pendingVideos = [];
   for (const image of draft.images) URL.revokeObjectURL(image.previewUrl);
+  for (const video of draft.videos) URL.revokeObjectURL(video.previewUrl);
   composerDrafts.delete(key);
 }
 
@@ -2357,11 +2379,11 @@ async function loadCurrent(): Promise<void> {
       renderEmptyState(paint(), "idle");
       return;
     }
-    let openQuestion: { body: HTMLElement; text: string; images: ReusedImage[] } | null = null;
+    let openQuestion: { body: HTMLElement; text: string; images: ReusedImage[]; videos: ReusedVideo[] } | null = null;
     const liveHere = Boolean(live?.gate.isRunning);
     const closeUnanswered = () => {
       if (!openQuestion) return;
-      ensureReask(openQuestion.body, openQuestion.text, openQuestion.images);
+      ensureReask(openQuestion.body, openQuestion.text, openQuestion.images, false, openQuestion.videos);
       appendCancelledNotice(paint());
       openQuestion = null;
     };
@@ -2405,14 +2427,30 @@ async function loadCurrent(): Promise<void> {
       } else if (m.role === "assistant") {
         if (isCancelledNotice(m.content)) {
           if (openQuestion) {
-            ensureReask(openQuestion.body, openQuestion.text, openQuestion.images);
+            ensureReask(openQuestion.body, openQuestion.text, openQuestion.images, false, openQuestion.videos);
             openQuestion = null;
           }
-          const body = appendMessage(into, "assistant", m.content, { rich: true, messageId: m.id, at: m.created_at });
+          const urls = await imageDataUrls(workspace, sessionId, m.images);
+          const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
+          const body = appendMessage(into, "assistant", m.content, {
+            rich: true,
+            messageId: m.id,
+            at: m.created_at,
+            ...(urls.length ? { images: urls } : {}),
+            ...(videoUrls.length ? { videos: videoUrls } : {}),
+          });
           body.closest(".msg")?.classList.add("is-cancelled");
         } else {
           openQuestion = null;
-          appendMessage(into, "assistant", m.content, { rich: true, messageId: m.id, at: m.created_at });
+          const urls = await imageDataUrls(workspace, sessionId, m.images);
+          const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
+          appendMessage(into, "assistant", m.content, {
+            rich: true,
+            messageId: m.id,
+            at: m.created_at,
+            ...(urls.length ? { images: urls } : {}),
+            ...(videoUrls.length ? { videos: videoUrls } : {}),
+          });
         }
       } else if (m.role === "user" && m.name === "task-notification") {
         if (openQuestion) closeUnanswered();
@@ -2421,19 +2459,26 @@ async function loadCurrent(): Promise<void> {
       } else if (m.role === "user") {
         if (openQuestion) closeUnanswered();
         const urls = await imageDataUrls(workspace, sessionId, m.images);
+        const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
         openQuestion = {
           body: appendMessage(paint(), "user", m.content, {
             ...(urls.length ? { images: urls } : {}),
+            ...(videoUrls.length ? { videos: videoUrls } : {}),
             ...(m.id ? { messageId: m.id } : {}),
             ...(m.created_at ? { at: m.created_at } : {}),
           }),
           text: m.content,
           images: reusedImages(m.images),
+          videos: reusedVideos(m.videos),
         };
       } else {
         openQuestion = null;
         const urls = await imageDataUrls(workspace, sessionId, m.images);
-        appendMessage(paint(), m.role, m.content, urls.length ? { images: urls } : undefined);
+        const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
+        appendMessage(paint(), m.role, m.content, {
+          ...(urls.length ? { images: urls } : {}),
+          ...(videoUrls.length ? { videos: videoUrls } : {}),
+        });
       }
     }
     if (openQuestion && !liveHere) closeUnanswered();
@@ -2541,9 +2586,31 @@ async function imageDataUrls(
   return urls;
 }
 
+async function videoDataUrls(
+  workspace: string | null,
+  sessionId: string,
+  videos: Array<{ path: string }> | undefined,
+): Promise<string[]> {
+  if (!videos?.length) return [];
+  const foreign = Boolean(workspace && !sameWorkspace(workspace, activeWorkspace));
+  const urls: string[] = [];
+  for (const video of videos) {
+    try {
+      urls.push(
+        foreign
+          ? await window.agent.readWorkspaceVideo(workspace!, sessionId, video.path)
+          : await window.agent.readSessionVideo(sessionId, video.path),
+      );
+    } catch {
+      /* skip a missing file rather than failing the whole transcript */
+    }
+  }
+  return urls;
+}
+
 function renderPendingImages(): void {
   composerImages.innerHTML = "";
-  composerImages.hidden = pendingImages.length === 0;
+  composerImages.hidden = pendingImages.length === 0 && pendingVideos.length === 0;
   pendingImages.forEach((image, index) => {
     const thumb = document.createElement("div");
     thumb.className = "composer-thumb";
@@ -2563,6 +2630,28 @@ function renderPendingImages(): void {
       updateChrome();
     };
     thumb.append(img, remove);
+    composerImages.append(thumb);
+  });
+  pendingVideos.forEach((video, index) => {
+    const thumb = document.createElement("div");
+    thumb.className = "composer-thumb";
+    const node = document.createElement("video");
+    node.src = video.previewUrl;
+    node.muted = true;
+    node.preload = "metadata";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "移除视频");
+    remove.onclick = () => {
+      if (inputEl.disabled) return;
+      URL.revokeObjectURL(video.previewUrl);
+      pendingVideos.splice(index, 1);
+      renderPendingImages();
+      rememberComposer();
+      updateChrome();
+    };
+    thumb.append(node, remove);
     composerImages.append(thumb);
   });
 }
@@ -2634,6 +2723,37 @@ async function addImageFiles(files: File[]): Promise<void> {
   rememberComposer();
 }
 
+async function addVideoFiles(files: File[]): Promise<void> {
+  const accepted = files.filter((file) => /^(video\/(mp4|webm|quicktime))$/.test(file.type));
+  if (!accepted.length) {
+    setStatus("只能上传 mp4、webm 或 mov", true);
+    return;
+  }
+  if (pendingVideos.length >= MAX_PENDING_VIDEOS) {
+    setStatus(`一次最多 ${MAX_PENDING_VIDEOS} 个视频`, true);
+    return;
+  }
+  const file = accepted[0];
+  if (accepted.length > 1 || pendingVideos.length + accepted.length > MAX_PENDING_VIDEOS) {
+    setStatus(`一次最多 ${MAX_PENDING_VIDEOS} 个视频`, true);
+  }
+  if (file.size > MAX_VIDEO_BYTES) {
+    setStatus("视频不能超过 20 MiB", true);
+    return;
+  }
+  try {
+    pendingVideos.push({
+      previewUrl: URL.createObjectURL(file),
+      mime: file.type as PendingVideo["mime"],
+      base64: await blobToBase64(file),
+    });
+  } catch (err) {
+    showStatusError(err);
+  }
+  renderPendingImages();
+  rememberComposer();
+}
+
 async function ensureSession(): Promise<string | null> {
   if (currentSessionId) return currentSessionId;
   if (!hasWorkspace) {
@@ -2697,6 +2817,7 @@ function appendCancelledNotice(container: HTMLElement): void {
 }
 
 type ReusedImage = { id: string; mime: string; path: string };
+type ReusedVideo = { id: string; mime: string; path: string };
 
 function reusedImages(raw: Array<{ id?: string; mime?: string; path: string }> | undefined): ReusedImage[] {
   if (!raw?.length) return [];
@@ -2708,18 +2829,36 @@ function reusedImages(raw: Array<{ id?: string; mime?: string; path: string }> |
   return out;
 }
 
-function ensureReask(body: HTMLElement, text: string, images: ReusedImage[] = [], picturesMissing = false): void {
-  if (!text.trim() && images.length === 0 && !picturesMissing) return;
+function reusedVideos(raw: Array<{ id?: string; mime?: string; path: string }> | undefined): ReusedVideo[] {
+  if (!raw?.length) return [];
+  const out: ReusedVideo[] = [];
+  for (const video of raw) {
+    if (!video.id || !video.mime || !video.path) continue;
+    out.push({ id: video.id, mime: video.mime, path: video.path });
+  }
+  return out;
+}
+
+function ensureReask(
+  body: HTMLElement,
+  text: string,
+  images: ReusedImage[] = [],
+  picturesMissing = false,
+  videos: ReusedVideo[] = [],
+  videosMissing = false,
+): void {
+  if (!text.trim() && images.length === 0 && !picturesMissing && videos.length === 0 && !videosMissing) return;
   const host = body.parentElement ?? body.closest(".msg");
   if (host?.querySelector(".reask")) return;
   appendReaskButton(body, () => {
-    void reask(text, images, picturesMissing);
+    void reask(text, images, picturesMissing, videos, videosMissing);
   });
 }
 
-function appendUserQuestion(text: string, images: string[], messageId?: string): HTMLElement {
+function appendUserQuestion(text: string, images: string[], messageId?: string, videos: string[] = []): HTMLElement {
   const body = appendMessage(messagesEl, "user", text, {
     ...(images.length ? { images } : {}),
+    ...(videos.length ? { videos } : {}),
     ...(messageId ? { messageId } : {}),
     at: new Date().toISOString(),
   });
@@ -2727,13 +2866,23 @@ function appendUserQuestion(text: string, images: string[], messageId?: string):
   return body;
 }
 
-async function reask(text: string, images: ReusedImage[], picturesMissing = false): Promise<void> {
+async function reask(
+  text: string,
+  images: ReusedImage[],
+  picturesMissing = false,
+  videos: ReusedVideo[] = [],
+  videosMissing = false,
+): Promise<void> {
   const trimmed = text.trim();
   if (picturesMissing) {
     showChatError(new Error("原来的图片不在记录里，没有重新发送"));
     return;
   }
-  if (!trimmed && images.length === 0) return;
+  if (videosMissing) {
+    showChatError(new Error("原来的视频不在记录里，没有重新发送"));
+    return;
+  }
+  if (!trimmed && images.length === 0 && videos.length === 0) return;
   const run = pageRun();
   if (creatingSession || run?.gate.isRunning || run?.pendingAsk) {
     setStatus("请先停止当前任务再重新问", true);
@@ -2754,15 +2903,19 @@ async function reask(text: string, images: ReusedImage[], picturesMissing = fals
   const sessionId = await ensureSession();
   if (!sessionId) return;
   const preview = await imageDataUrls(workspace, sessionId, images);
+  const videoPreview = await videoDataUrls(workspace, sessionId, videos);
   if (messagesEl.querySelector(".empty-state")) messagesEl.innerHTML = "";
   followTail = true;
   releasedRuns.delete(runKeyOf(workspace, sessionId));
   const next = ensureRun(workspace, sessionId);
   drawing = next;
   try {
-    appendUserQuestion(trimmed, preview);
+    appendUserQuestion(trimmed, preview, undefined, videoPreview);
     resetStreamTarget(appendMessage(messagesEl, "assistant", ""), next);
     clearOpenTools(next);
+    next.generatedImages = undefined;
+    next.generatedMessageId = undefined;
+    next.generatedFill = undefined;
     next.liveStatus = "运行中…";
     next.gate = beginRun(sessionId);
     next.wakeAcceptsInput = false;
@@ -2773,7 +2926,7 @@ async function reask(text: string, images: ReusedImage[], picturesMissing = fals
   updateChrome();
   void refreshSessions();
   try {
-    await window.agent.replay(sessionId, trimmed, images, workspace);
+    await window.agent.replay(sessionId, trimmed, images, videos, workspace);
   } catch (err) {
     next.gate = idleGate();
     dropRun(workspace, sessionId);
@@ -2788,18 +2941,31 @@ async function reask(text: string, images: ReusedImage[], picturesMissing = fals
 async function bindReaskAfterCancel(run: RunPaint, body: HTMLElement): Promise<void> {
   const text = body.textContent ?? "";
   const showedPictures = Boolean(body.parentElement?.querySelector(".msg-images img"));
+  const showedVideos = Boolean(body.parentElement?.querySelector(".msg-videos video"));
   let images: ReusedImage[] = [];
+  let videos: ReusedVideo[] = [];
   try {
     const msgs = sameWorkspace(run.workspace, activeWorkspace)
       ? await window.agent.loadMessages(run.sessionId)
       : await window.agent.loadWorkspaceMessages(run.workspace, run.sessionId);
     const users = msgs.filter((message) => message.role === "user" && message.name !== "task-notification");
     const last = users[users.length - 1];
-    if (last && last.content === text) images = reusedImages(last.images);
+    if (last && last.content === text) {
+      images = reusedImages(last.images);
+      videos = reusedVideos(last.videos);
+    }
   } catch {
     images = [];
+    videos = [];
   }
-  ensureReask(body, text, images, showedPictures && images.length === 0);
+  ensureReask(
+    body,
+    text,
+    images,
+    showedPictures && images.length === 0,
+    videos,
+    showedVideos && videos.length === 0,
+  );
 }
 
 async function sendMessage(): Promise<void> {
@@ -2812,7 +2978,8 @@ async function sendMessage(): Promise<void> {
   if (page?.gate.isRunning && !page.wakeAcceptsInput) return;
   const text = inputEl.value.trim();
   const images = pendingImages.slice();
-  if (!text && images.length === 0) return;
+  const videos = pendingVideos.slice();
+  if (!text && images.length === 0 && videos.length === 0) return;
   if (text && !(await acceptSkillTokens(text))) return;
   const draftKey = currentComposerKey();
   const workspace = viewWorkspace ?? activeWorkspace;
@@ -2831,6 +2998,7 @@ async function sendMessage(): Promise<void> {
   composerDrafts.delete(draftKey);
   composerDrafts.delete(currentComposerKey());
   pendingImages = [];
+  pendingVideos = [];
   composerImages.innerHTML = "";
   composerImages.hidden = true;
   inputEl.value = "";
@@ -2842,10 +3010,13 @@ async function sendMessage(): Promise<void> {
   const joiningWake = run.gate.isRunning && run.wakeAcceptsInput;
   drawing = run;
   try {
-    appendUserQuestion(text, images.map((image) => image.previewUrl));
+    appendUserQuestion(text, images.map((image) => image.previewUrl), undefined, videos.map((video) => video.previewUrl));
     if (!joiningWake) {
       resetStreamTarget(appendMessage(messagesEl, "assistant", ""), run);
       clearOpenTools(run);
+      run.generatedImages = undefined;
+      run.generatedMessageId = undefined;
+      run.generatedFill = undefined;
       run.liveStatus = "运行中…";
       run.gate = beginRun(sessionId);
       run.wakeAcceptsInput = false;
@@ -2863,6 +3034,9 @@ async function sendMessage(): Promise<void> {
       images.length
         ? images.map((image) => ({ mime: image.mime, base64: image.base64 }))
         : undefined,
+      videos.length
+        ? videos.map((video) => ({ mime: video.mime, base64: video.base64 }))
+        : undefined,
       workspace,
     );
   } catch (err) {
@@ -2873,6 +3047,7 @@ async function sendMessage(): Promise<void> {
     if (isSkillSendFailure(err)) {
       inputEl.value = text;
       pendingImages = images;
+      pendingVideos = videos;
       renderPendingImages();
       rememberComposer();
       removeLastTranscriptNodes(messagesEl, 2);
@@ -2926,7 +3101,7 @@ btnSend.onclick = () => {
     return;
   }
   if (run?.gate.isRunning) {
-    if (run.wakeAcceptsInput && (inputEl.value.trim() || pendingImages.length > 0)) {
+    if (run.wakeAcceptsInput && (inputEl.value.trim() || pendingImages.length > 0 || pendingVideos.length > 0)) {
       void sendMessage();
       return;
     }
@@ -2953,6 +3128,13 @@ imageInput.onchange = () => {
   const files = Array.from(imageInput.files ?? []);
   imageInput.value = "";
   void addImageFiles(files);
+};
+btnVideo.onclick = () => videoInput.click();
+videoInput.onchange = () => {
+  const files = Array.from(videoInput.files ?? []);
+  videoInput.value = "";
+  if (btnVideo.disabled) return;
+  void addVideoFiles(files);
 };
 inputEl.addEventListener("paste", (ev) => {
   const files = Array.from(ev.clipboardData?.files ?? []).filter((file) =>
@@ -3449,6 +3631,92 @@ function runStatusText(reason: string): string {
   return "完成";
 }
 
+function showGeneratingImagePlaceholder(run: RunPaint, host: HTMLElement): void {
+  const place = (mutate: () => void) => {
+    if (host === messagesEl) keepTail(mutate);
+    else mutate();
+  };
+  if (!run.streamingEl) {
+    place(() => resetStreamTarget(appendMessage(host, "assistant", "正在生成图片"), run));
+  } else {
+    run.streamingEl.textContent = "正在生成图片";
+    delete run.streamingEl.dataset.rawMd;
+  }
+  run.streamingEl?.closest(".msg")?.classList.add("is-generating-image");
+  if (run.streamingEl) ensureMessageTime(run.streamingEl);
+}
+
+function discardImagePlaceholder(run: RunPaint): void {
+  const body = run.streamingEl;
+  if (!body) return;
+  const msg = body.closest(".msg");
+  if (!(msg instanceof HTMLElement)) return;
+  if (msg.querySelector(".msg-images img, .msg-videos video")) {
+    msg.classList.remove("is-generating-image");
+    return;
+  }
+  const pending = msg.classList.contains("is-generating-image");
+  if (pending || !run.streamBuffer.trim()) {
+    const text = (body.textContent ?? "").trim();
+    if (pending || !text) {
+      removeTranscriptMessage(body);
+      resetStreamTarget(null, run);
+    }
+  }
+}
+
+function fillGeneratedImages(run: RunPaint, host: HTMLElement): Promise<void> {
+  if (run.generatedFill) return run.generatedFill;
+  const images = run.generatedImages;
+  const messageId = run.generatedMessageId;
+  if (!images?.length) return Promise.resolve();
+  const existing = run.streamingEl;
+  run.generatedFill = (async () => {
+    const urls = await imageDataUrls(run.workspace, run.sessionId, images);
+    const place = (mutate: () => void) => {
+      if (host === messagesEl) keepTail(mutate);
+      else mutate();
+    };
+    place(() => {
+      let body = existing && existing.isConnected ? existing : run.streamingEl;
+      if (!body) {
+        const pending = host.querySelector(".msg.assistant.is-generating-image .msg-body");
+        body = pending instanceof HTMLElement ? pending : appendMessage(host, "assistant", "");
+      }
+      applyMessageMedia(body, {
+        images: urls,
+        content: "",
+        rich: false,
+        messageId,
+        at: new Date().toISOString(),
+      });
+      body.closest(".msg")?.classList.remove("is-generating-image");
+    });
+  })();
+  return run.generatedFill;
+}
+
+async function fillGeneratedOnDone(run: RunPaint, host: HTMLElement): Promise<void> {
+  if (run.generatedImages?.length) {
+    await fillGeneratedImages(run, host);
+    return;
+  }
+  const pending = Boolean(run.streamingEl?.closest(".msg")?.classList.contains("is-generating-image"));
+  if (!pending) return;
+  try {
+    const msgs = sameWorkspace(run.workspace, activeWorkspace)
+      ? await window.agent.loadMessages(run.sessionId)
+      : await window.agent.loadWorkspaceMessages(run.workspace, run.sessionId);
+    const last = [...msgs].reverse().find((message) => message.role === "assistant" && message.images?.length);
+    if (!last?.images?.length) return;
+    run.generatedImages = last.images;
+    run.generatedMessageId = last.id;
+    await fillGeneratedImages(run, host);
+  } catch {
+    /* keep the placeholder only until the session is reopened */
+  }
+}
+
 function applyTranscript(host: HTMLElement, e: {
   type: string;
   delta?: string;
@@ -3562,6 +3830,7 @@ function applyTranscript(host: HTMLElement, e: {
       permissionDock.hidden = true;
       syncTaskbarAttention();
     }
+    discardImagePlaceholder(run);
     place(() => appendMessage(host, "error", e.message ?? ""));
     return true;
   }
@@ -3569,14 +3838,20 @@ function applyTranscript(host: HTMLElement, e: {
 }
 
 function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
-  const host = run.streamingEl?.closest(".messages");
+  const hostEl = run.streamingEl?.closest(".messages");
+  const host = hostEl instanceof HTMLElement ? hostEl : onScreen ? messagesEl : ensureSessionView(runKeyOf(run.workspace, run.sessionId)).holder;
   if (reason === "cancelled" && run.streamingEl && !run.streamBuffer.trim()) {
     run.streamingEl.textContent = CANCELLED_TURN_NOTICE;
     run.streamingEl.closest(".msg")?.classList.add("is-cancelled");
+    run.streamingEl.closest(".msg")?.classList.remove("is-generating-image");
     ensureMessageTime(run.streamingEl);
-    const questions = host?.querySelectorAll(":scope > .turn > .msg.user .msg-body, :scope > .msg.user .msg-body");
+    const questions = host.querySelectorAll(":scope > .turn > .msg.user .msg-body, :scope > .msg.user .msg-body");
     const asked = questions?.[questions.length - 1];
     if (asked instanceof HTMLElement) void bindReaskAfterCancel(run, asked);
+  } else if (reason === "error") {
+    discardImagePlaceholder(run);
+  } else if (reason === "completed") {
+    void fillGeneratedOnDone(run, host);
   } else if (run.streamingEl && run.streamBuffer) {
     paintStreamRich(true, run);
   }
@@ -3668,7 +3943,18 @@ window.agent.onEvent((e) => {
     if (!decision.paint && !decision.keep && !decision.stashFor) return;
     if (e.type === "status") {
       if (e.phase !== "awaiting_permission") clearAnsweredPermission(run);
+      if (e.phase === "generating_image") {
+        const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
+        showGeneratingImagePlaceholder(run, host);
+      }
       showRunStatus(PHASE_LABEL[e.phase] ?? e.phase, run);
+      return;
+    }
+    if (e.type === "generated_images" && Array.isArray(e.images)) {
+      run.generatedImages = e.images;
+      if (typeof e.message_id === "string") run.generatedMessageId = e.message_id;
+      const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
+      void fillGeneratedImages(run, host);
       return;
     }
     if (e.type === "ask_user" || e.type === "permission_request") {

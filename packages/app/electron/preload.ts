@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:loadWorkspaceArtifacts", path, sessionId, part),
   readWorkspaceImage: (path: string, sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readWorkspaceImage", path, sessionId, relativePath),
+  readWorkspaceVideo: (path: string, sessionId: string, relativePath: string) =>
+    ipcRenderer.invoke("agent:readWorkspaceVideo", path, sessionId, relativePath),
   renameWorkspaceSession: (
     path: string,
     sessionId: string,
@@ -52,14 +54,16 @@ contextBridge.exposeInMainWorld("agent", {
     sessionId: string,
     text: string,
     images?: Array<{ mime: string; base64: string }>,
+    videos?: Array<{ mime: string; base64: string }>,
     workspace?: string,
-  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, workspace),
+  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, videos, workspace),
   replay: (
     sessionId: string,
     text: string,
     images: Array<{ id: string; mime: string; path: string }>,
+    videos?: Array<{ id: string; mime: string; path: string }>,
     workspace?: string,
-  ) => ipcRenderer.invoke("agent:replay", sessionId, text, images, workspace),
+  ) => ipcRenderer.invoke("agent:replay", sessionId, text, images, videos, workspace),
   watchSession: (sessionId: string | null, workspace?: string) =>
     ipcRenderer.invoke("agent:watchSession", sessionId, workspace),
   listSkills: () => ipcRenderer.invoke("agent:listSkills"),
@@ -84,6 +88,8 @@ contextBridge.exposeInMainWorld("agent", {
   },
   readSessionImage: (sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readSessionImage", sessionId, relativePath),
+  readSessionVideo: (sessionId: string, relativePath: string) =>
+    ipcRenderer.invoke("agent:readSessionVideo", sessionId, relativePath),
   cancel: (sessionId?: string, workspace?: string) =>
     ipcRenderer.invoke("agent:cancel", sessionId, workspace),
   explainLoad: (workspace: string, sessionId: string) =>

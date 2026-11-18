@@ -2167,7 +2167,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   text-overflow: ellipsis;
 }
 
-.turn > .msg.user.is-stuck:has(.msg-body:not(:empty)) .msg-images {
+.turn > .msg.user.is-stuck:has(.msg-body:not(:empty)) .msg-images,
+.turn > .msg.user.is-stuck:has(.msg-body:not(:empty)) .msg-videos {
   display: none;
 }
 
@@ -2948,13 +2949,18 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   height: 52px;
 }
 
-.composer-thumb img {
+.composer-thumb img,
+.composer-thumb video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   border-radius: 8px;
   border: 1px solid var(--line);
   display: block;
+}
+
+.composer-thumb video {
+  background: #000;
 }
 
 .composer-thumb button {
@@ -3224,18 +3230,21 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   cursor: default;
 }
 
-.msg-images {
+.msg-images,
+.msg-videos {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 6px;
 }
 
-.msg.user .msg-images {
+.msg.user .msg-images,
+.msg.user .msg-videos {
   justify-content: flex-end;
 }
 
-.msg-images img {
+.msg-images img,
+.msg-videos video {
   width: 160px;
   max-width: 100%;
   height: 108px;
@@ -3243,6 +3252,13 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   border-radius: 10px;
   border: 1px solid var(--line);
   background: #fff;
+}
+
+.msg-videos video {
+  width: 240px;
+  height: auto;
+  max-height: 180px;
+  background: #000;
 }
 
 :is(#btn-send, #explain-send) {

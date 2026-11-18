@@ -167,9 +167,9 @@ function insertMessageTime(msg: HTMLElement, at: Date): void {
   msg.after(time);
 }
 
-function stampVisibleBubble(msg: HTMLElement, role: string, content: string, at: string | undefined, images?: string[]): void {
+function stampVisibleBubble(msg: HTMLElement, role: string, content: string, at: string | undefined, images?: string[], videos?: string[]): void {
   if (role !== "user" && role !== "assistant") return;
-  const visible = role === "user" ? Boolean(content.trim() || images?.length) : Boolean(content.trim());
+  const visible = Boolean(content.trim() || images?.length || videos?.length);
   if (!visible) return;
   const parsed = parseStamp(at);
   if (!parsed) return;
@@ -188,21 +188,81 @@ export function ensureMessageTime(body: HTMLElement, at: string | Date = new Dat
 }
 
 /** Returns the `.msg-body` element (streaming appends here). */
+function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[]): void {
+  msg.querySelector(":scope > .msg-images")?.remove();
+  msg.querySelector(":scope > .msg-videos")?.remove();
+  const body = msg.querySelector(":scope > .msg-body");
+  const place = (row: HTMLElement) => {
+    if (body) msg.insertBefore(row, body);
+    else msg.append(row);
+  };
+  if (images?.length) {
+    const row = el("div", { class: "msg-images" });
+    for (const src of images) {
+      row.append(el("img", { src, alt: "附件图片" }));
+    }
+    place(row);
+  }
+  if (videos?.length) {
+    const row = el("div", { class: "msg-videos" });
+    for (const src of videos) {
+      const video = el("video", { src, controls: "" });
+      video.controls = true;
+      row.append(video);
+    }
+    place(row);
+  }
+}
+
+export function applyMessageMedia(
+  body: HTMLElement,
+  opts: { images?: string[]; videos?: string[]; content?: string; rich?: boolean; messageId?: string; at?: string },
+): void {
+  const msg = body.closest(".msg");
+  if (!(msg instanceof HTMLElement)) return;
+  if (opts.messageId) msg.dataset.messageId = opts.messageId;
+  if (opts.images || opts.videos) appendMediaRows(msg, opts.images, opts.videos);
+  if (opts.content !== undefined) {
+    if (msg.classList.contains("assistant") && opts.rich !== false) setRichText(body, opts.content, true);
+    else {
+      delete body.dataset.rawMd;
+      body.textContent = opts.content;
+    }
+  }
+  const content = opts.content !== undefined ? opts.content : (body.textContent ?? "");
+  const images = opts.images ?? Array.from(msg.querySelectorAll(":scope > .msg-images img")).map((node) => (node as HTMLImageElement).src);
+  const videos = opts.videos ?? Array.from(msg.querySelectorAll(":scope > .msg-videos video")).map((node) => (node as HTMLVideoElement).src);
+  stampVisibleBubble(msg, msg.classList.contains("user") ? "user" : "assistant", content, opts.at, images, videos);
+  if (!opts.at && (content.trim() || images.length || videos.length)) ensureMessageTime(body);
+}
+
+export function removeTranscriptMessage(body: HTMLElement): void {
+  const msg = body.closest(".msg");
+  if (!(msg instanceof HTMLElement)) return;
+  const container = msg.closest(".messages") ?? msg.parentElement;
+  const turn = msg.closest(".turn");
+  const time = msg.nextElementSibling;
+  if (time instanceof HTMLElement && time.classList.contains("msg-time")) time.remove();
+  msg.remove();
+  if (
+    turn instanceof HTMLElement &&
+    container &&
+    turn.parentElement === container &&
+    !turn.querySelector(".msg, .tool-group")
+  ) {
+    turn.remove();
+  }
+}
+
 export function appendMessage(
   container: HTMLElement,
   role: string,
   content: string,
-  opts?: { rich?: boolean; images?: string[]; messageId?: string; at?: string },
+  opts?: { rich?: boolean; images?: string[]; videos?: string[]; messageId?: string; at?: string },
 ) {
   const div = el("div", { class: `msg ${role}` });
   if (opts?.messageId) div.dataset.messageId = opts.messageId;
-  if (opts?.images?.length) {
-    const row = el("div", { class: "msg-images" });
-    for (const src of opts.images) {
-      row.append(el("img", { src, alt: "附件图片" }));
-    }
-    div.append(row);
-  }
+  appendMediaRows(div, opts?.images, opts?.videos);
   const body = el("div", { class: "msg-body" });
   messageRoot.set(body, div);
   if (role === "assistant" && opts?.rich !== false) {
@@ -214,9 +274,9 @@ export function appendMessage(
   if (role !== "user" && role !== "assistant") {
     div.append(el("span", { class: "msg-role" }, ROLE_LABEL[role] ?? role));
   }
-  if (content || role !== "user" || opts?.images?.length) div.append(body);
+  if (content || role !== "user" || opts?.images?.length || opts?.videos?.length) div.append(body);
   placeTranscript(container, div, role === "user");
-  stampVisibleBubble(div, role, content, opts?.at, opts?.images);
+  stampVisibleBubble(div, role, content, opts?.at, opts?.images, opts?.videos);
   return body;
 }
 

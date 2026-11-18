@@ -39,7 +39,7 @@ import {
   buildTaskPanel,
   McpPool,
 } from "@agent/core";
-import type { AgentConfig, ImageAttachment, ImageMime, PermissionDecision, StoredConfig, SubmittedImage } from "@agent/core";
+import type { AgentConfig, ImageAttachment, ImageMime, PermissionDecision, StoredConfig, SubmittedImage, SubmittedVideo, VideoAttachment, VideoMime } from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 import { registerMcpHandlers } from "./mcpIpc.js";
@@ -354,6 +354,39 @@ function normalizeSubmittedImages(raw: unknown): SubmittedImage[] | undefined {
   });
 }
 
+const VIDEO_MIMES = new Set<VideoMime>(["video/mp4", "video/webm", "video/quicktime"]);
+
+function normalizeReusedVideos(raw: unknown): VideoAttachment[] {
+  if (!Array.isArray(raw)) throw new Error("Invalid videos");
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Invalid video");
+    const mime = (item as { mime?: unknown }).mime;
+    const id = (item as { id?: unknown }).id;
+    const path = (item as { path?: unknown }).path;
+    if (typeof mime !== "string" || !VIDEO_MIMES.has(mime as VideoMime)) {
+      throw new Error("Unsupported video type");
+    }
+    if (typeof id !== "string" || !id.length) throw new Error("Invalid video");
+    if (typeof path !== "string" || !path.length) throw new Error("Invalid video");
+    return { id, mime: mime as VideoMime, path };
+  });
+}
+
+function normalizeSubmittedVideos(raw: unknown): SubmittedVideo[] | undefined {
+  if (raw == null) return undefined;
+  if (!Array.isArray(raw)) throw new Error("Invalid videos");
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Invalid video");
+    const mime = (item as { mime?: unknown }).mime;
+    const base64 = (item as { base64?: unknown }).base64;
+    if (typeof mime !== "string" || !VIDEO_MIMES.has(mime as VideoMime)) {
+      throw new Error("Unsupported video type");
+    }
+    if (typeof base64 !== "string" || !base64.length) throw new Error("Invalid video");
+    return { mime: mime as VideoMime, base64 };
+  });
+}
+
 async function ensureExplainRuntime(workspace: string): Promise<ExplainRuntime> {
   const config = await readAgentConfig();
   const key = `${workspace}\0${agentConfigKey(config)}`;
@@ -620,6 +653,15 @@ app.whenReady().then(async () => {
     },
   );
   ipcMain.handle(
+    "agent:readWorkspaceVideo",
+    async (_e, raw: string, sessionId: string, relativePath: string) => {
+      const path = await assertKnownWorkspace(raw);
+      assertValidSessionId(sessionId);
+      if (typeof relativePath !== "string") throw new Error("Invalid video");
+      return new SessionStore(path).readVideoDataUrl(sessionId, relativePath);
+    },
+  );
+  ipcMain.handle(
     "agent:renameWorkspaceSession",
     async (
       _e,
@@ -766,7 +808,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle(
     "agent:submit",
-    async (_e, sessionId: string, text: string, images?: unknown, workspaceRaw?: unknown) => {
+    async (_e, sessionId: string, text: string, images?: unknown, videos?: unknown, workspaceRaw?: unknown) => {
       assertValidSessionId(sessionId);
       const workspace =
         typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
@@ -777,12 +819,13 @@ app.whenReady().then(async () => {
         text,
         normalizeSubmittedImages(images),
         await currentConfigKey(),
+        normalizeSubmittedVideos(videos),
       );
     },
   );
   ipcMain.handle(
     "agent:replay",
-    async (_e, sessionId: string, text: string, images?: unknown, workspaceRaw?: unknown) => {
+    async (_e, sessionId: string, text: string, images?: unknown, videos?: unknown, workspaceRaw?: unknown) => {
       assertValidSessionId(sessionId);
       const workspace =
         typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
@@ -794,6 +837,7 @@ app.whenReady().then(async () => {
         text,
         normalizeReusedImages(images ?? []),
         await currentConfigKey(),
+        normalizeReusedVideos(videos ?? []),
       );
     },
   );
@@ -813,6 +857,15 @@ app.whenReady().then(async () => {
       if (typeof relativePath !== "string") throw new Error("Invalid image path");
       if (!workspacePath) throw new Error("No workspace selected");
       return new SessionStore(workspacePath).readImageDataUrl(sessionId, relativePath);
+    },
+  );
+  ipcMain.handle(
+    "agent:readSessionVideo",
+    async (_e, sessionId: string, relativePath: string) => {
+      assertValidSessionId(sessionId);
+      if (typeof relativePath !== "string") throw new Error("Invalid video path");
+      if (!workspacePath) throw new Error("No workspace selected");
+      return new SessionStore(workspacePath).readVideoDataUrl(sessionId, relativePath);
     },
   );
   ipcMain.handle("agent:cancel", async (_e, sessionId?: unknown, workspaceRaw?: unknown) => {
