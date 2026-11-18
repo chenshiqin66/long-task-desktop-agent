@@ -2721,6 +2721,7 @@ async function addImageFiles(files: File[]): Promise<void> {
   }
   renderPendingImages();
   rememberComposer();
+  updateChrome();
 }
 
 async function addVideoFiles(files: File[]): Promise<void> {
@@ -2752,6 +2753,7 @@ async function addVideoFiles(files: File[]): Promise<void> {
   }
   renderPendingImages();
   rememberComposer();
+  updateChrome();
 }
 
 async function ensureSession(): Promise<string | null> {
