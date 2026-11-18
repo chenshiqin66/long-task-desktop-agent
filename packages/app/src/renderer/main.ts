@@ -37,6 +37,7 @@ import {
 } from "./memoryView.js";
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { paintSendButton } from "./sendButton.js";
+import { paintAddButtons } from "./addButton.js";
 import { mountQuestionNav } from "./questionNav.js";
 
 type SubagentToolRow = {
@@ -314,6 +315,8 @@ const workbench = mountWorkbench(
   document.getElementById("workbench-close") as HTMLButtonElement,
   () => reloadWorkbenchPage(workbenchNav.current()),
 );
+
+paintAddButtons();
 
 function reloadWorkbenchPage(_page?: WorkbenchPage): void {
   void favoriteFolders.reload().catch((err: unknown) => {

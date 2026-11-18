@@ -462,27 +462,6 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .workbench-plus {
   margin-left: auto;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-  font-family: var(--font-ui);
-  font-size: 1.15rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.workbench-plus:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
-  background: var(--teal-soft);
-}
-
-.workbench-plus:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
 }
 
 .folder-list {
@@ -895,25 +874,15 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   letter-spacing: 0.08em;
 }
 
-.workspace-add {
+.workspace-add.btn-add-icon {
   width: 22px;
   height: 22px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-  font-family: var(--font-ui);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
+  min-width: 22px;
 }
 
-.workspace-add:hover {
-  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
-  background: var(--teal-soft);
+.workspace-add.btn-add-icon svg {
+  width: 22px;
+  height: 22px;
 }
 
 .workspace-trees {
@@ -3584,9 +3553,49 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .skills-add {
-  width: auto;
   margin-left: auto;
-  padding: 8px 14px;
+}
+
+.btn-add-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  line-height: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  filter: none;
+}
+
+.btn-add-icon svg {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.btn-add-icon path {
+  fill: #14b8a6;
+}
+
+.btn-add-icon:hover:not(:disabled) {
+  background: transparent;
+  filter: brightness(1.05);
+}
+
+.btn-add-icon:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.btn-add-icon:disabled path {
+  fill: #dbdbdb;
 }
 
 .skills-note {

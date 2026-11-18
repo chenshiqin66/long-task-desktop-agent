@@ -13,6 +13,7 @@ const scripts = [
   ["test-escape-key.mjs"],
   ["test-image-viewer.mjs"],
   ["test-send-button.mjs"],
+  ["test-add-button.mjs"],
   ["test-sticky-turns.mjs"],
   ["test-memory-view.mjs"],
   ["test-model-kind-label.mjs"],
