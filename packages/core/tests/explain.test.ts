@@ -275,6 +275,43 @@ describe("ExplainRuntime", () => {
     expect(await rt.getOpen(meta.session_id)).toBe(true);
     expect((await sessions.getMeta(meta.session_id)).title).toBe("保持");
   });
+
+  it("rejects explain when the current model is not text", async () => {
+    const sessions = new SessionStore(workspace);
+    const meta = await sessions.createSession();
+    for (const kind of ["image", "video", "audio"] as const) {
+      const seen: LlmChatRequest[] = [];
+      const rt = new ExplainRuntime({
+        workspacePath: workspace,
+        config: config({ kind }),
+        provider: textProvider("不该出现", seen),
+      });
+      await expect(rt.submit(meta.session_id, "这句话什么意思")).rejects.toThrow("解释请改选生文模型");
+      expect(seen).toEqual([]);
+      expect(await rt.loadMessages(meta.session_id)).toEqual([]);
+    }
+  });
+
+  it("sends a video_url part when the current model is text", async () => {
+    const sessions = new SessionStore(workspace);
+    const meta = await sessions.createSession();
+    const seen: LlmChatRequest[] = [];
+    const rt = new ExplainRuntime({
+      workspacePath: workspace,
+      config: config({ kind: "text" }),
+      provider: textProvider("看到了", seen),
+    });
+    await rt.submit(meta.session_id, "请看", undefined, undefined, [
+      { mime: "video/mp4", base64: Buffer.from("fake-mp4").toString("base64") },
+    ]);
+
+    expect(seen).toHaveLength(1);
+    const user = seen[0]!.messages.find((message) => message.role === "user");
+    expect(Array.isArray(user?.content)).toBe(true);
+    if (!Array.isArray(user?.content)) return;
+    expect(user.content.some((part) => part.type === "video_url")).toBe(true);
+  });
+
 });
 
 function msg(

@@ -1,7 +1,7 @@
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { newId, nowIso } from "../ids.js";
-import type { ImageAttachment, ImageMime, Message, SubmittedImage, TraceEvent } from "../types.js";
+import type { ImageAttachment, ImageMime, Message, SubmittedImage, SubmittedVideo, TraceEvent, VideoAttachment } from "../types.js";
 import type { AuditMessage, WireTool } from "../context/auditContext.js";
 import { SessionStore, sessionDir } from "./sessionStore.js";
 
@@ -127,6 +127,21 @@ export class ExplainStore {
 
   readImageDataUrl(sessionId: string, relativePath: string): Promise<string> {
     return this.sessions.readImageDataUrl(sessionId, relativePath);
+  }
+
+  async saveVideo(sessionId: string, video: SubmittedVideo): Promise<VideoAttachment> {
+    return this.sessions.saveVideo(sessionId, video.mime, video.base64);
+  }
+
+  readVideoForSend(
+    sessionId: string,
+    relativePath: string,
+  ): Promise<{ dataUrl: string; bytes: number }> {
+    return this.sessions.readVideoForSend(sessionId, relativePath);
+  }
+
+  readVideoDataUrl(sessionId: string, relativePath: string): Promise<string> {
+    return this.sessions.readVideoDataUrl(sessionId, relativePath);
   }
 
   private file(sessionId: string, name: string): string {

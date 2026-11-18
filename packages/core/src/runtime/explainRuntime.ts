@@ -13,10 +13,11 @@ import {
 } from "../explain/context.js";
 import { newId, nowIso } from "../ids.js";
 import type { LlmProvider } from "../provider/types.js";
+import { MAX_VIDEOS_PER_MESSAGE } from "../store/sessionStore.js";
 import { ExplainStore } from "../store/explainStore.js";
 import { ToolHost } from "../tools/host.js";
 import type { ToolContext } from "../tools/types.js";
-import type { AgentConfig, Message, SubmittedImage, ToolCall, TraceEvent } from "../types.js";
+import type { AgentConfig, Message, SubmittedImage, SubmittedVideo, ToolCall, TraceEvent } from "../types.js";
 import { AgentError } from "./errors.js";
 
 const CANCELLED_TOOL = "Cancelled: tool was not executed.";
@@ -120,11 +121,19 @@ export class ExplainRuntime {
     text: string,
     images?: SubmittedImage[],
     context?: ExplainTurnContext | null,
+    videos?: SubmittedVideo[],
   ): Promise<void> {
+    if (this.config.kind !== "text") {
+      throw new AgentError("解释请改选生文模型", "bad_kind");
+    }
     const trimmed = text.trim();
     const incoming = images ?? [];
-    if (!trimmed && incoming.length === 0) {
+    const incomingVideos = videos ?? [];
+    if (!trimmed && incoming.length === 0 && incomingVideos.length === 0) {
       throw new AgentError("没有可发送的内容", "empty");
+    }
+    if (incomingVideos.length > MAX_VIDEOS_PER_MESSAGE) {
+      throw new AgentError("At most " + String(MAX_VIDEOS_PER_MESSAGE) + " video", "bad_video");
     }
     if (this.running) throw new AgentError("解释还在进行", "busy");
     this.running = true;
@@ -135,6 +144,8 @@ export class ExplainRuntime {
       await this.repairStoredTools(sessionId);
       const storedImages = [];
       for (const image of incoming) storedImages.push(await this.store.saveImage(sessionId, image));
+      const storedVideos = [];
+      for (const video of incomingVideos) storedVideos.push(await this.store.saveVideo(sessionId, video));
       const content = context ? buildExplainUserContent(trimmed, context) : trimmed;
       const userMsg: Message = {
         id: newId("msg"),
@@ -143,6 +154,7 @@ export class ExplainRuntime {
         role: "user",
         content,
         ...(storedImages.length ? { images: storedImages } : {}),
+        ...(storedVideos.length ? { videos: storedVideos } : {}),
         created_at: nowIso(),
       };
       await this.store.appendMessage(userMsg);
@@ -203,13 +215,23 @@ export class ExplainRuntime {
       });
       this.emit({ type: "status", session_id: sessionId, turn_id: turnId, phase: "llm" });
       const requestId = newId("trace");
-      const prepared = await prepareOutbound(assembled.messages, async (relativePath) => {
-        try {
-          return await this.store.readImageForSend(sessionId, relativePath);
-        } catch {
-          return null;
-        }
-      });
+      const prepared = await prepareOutbound(
+        assembled.messages,
+        async (relativePath) => {
+          try {
+            return await this.store.readImageForSend(sessionId, relativePath);
+          } catch {
+            return null;
+          }
+        },
+        async (relativePath) => {
+          try {
+            return await this.store.readVideoForSend(sessionId, relativePath);
+          } catch {
+            return null;
+          }
+        },
+      );
       const fingerprint = toolsFingerprint(this.tools.listDefinitions());
       await this.store.appendContext({
         sessionId,

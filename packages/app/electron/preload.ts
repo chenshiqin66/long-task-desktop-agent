@@ -102,10 +102,13 @@ contextBridge.exposeInMainWorld("agent", {
     text: string,
     images?: Array<{ mime: string; base64: string }>,
     sourceMessageIds?: string[] | null,
-  ) => ipcRenderer.invoke("agent:explainSubmit", workspace, sessionId, text, images, sourceMessageIds),
+    videos?: Array<{ mime: string; base64: string }>,
+  ) => ipcRenderer.invoke("agent:explainSubmit", workspace, sessionId, text, images, sourceMessageIds, videos),
   explainCancel: () => ipcRenderer.invoke("agent:explainCancel"),
   explainReadImage: (workspace: string, sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:explainReadImage", workspace, sessionId, relativePath),
+  explainReadVideo: (workspace: string, sessionId: string, relativePath: string) =>
+    ipcRenderer.invoke("agent:explainReadVideo", workspace, sessionId, relativePath),
   onExplainEvent: (cb: (e: RuntimeEvent) => void) => {
     const listener = (_: unknown, e: RuntimeEvent) => cb(e);
     ipcRenderer.on("agent:explain-event", listener);

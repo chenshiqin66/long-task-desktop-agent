@@ -18,10 +18,15 @@ type ExplainMessage = {
   tool_call_id?: string;
   tool_call_arguments?: string;
   images?: Array<{ path: string }>;
+  videos?: Array<{ path: string }>;
   created_at?: string;
 };
 
+type ModelKind = "text" | "image" | "video" | "audio";
+const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio"];
+
 type PendingImage = { previewUrl: string; mime: "image/png" | "image/jpeg"; base64: string };
+type PendingVideo = { previewUrl: string; mime: "video/mp4" | "video/webm" | "video/quicktime"; base64: string };
 
 type Slot = {
   workspace: string;
@@ -53,6 +58,8 @@ export type ExplainPane = {
 
 const MAX_PENDING_IMAGES = 4;
 const MAX_IMAGE_EDGE = 1600;
+const MAX_PENDING_VIDEOS = 1;
+const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
 
 const PHASE: Record<string, string> = {
   assembling: "整理上下文…",
@@ -97,6 +104,8 @@ export function mountExplainPane(): ExplainPane {
   const sendBtn = document.getElementById("explain-send") as HTMLButtonElement;
   const imageBtn = document.getElementById("explain-image") as HTMLButtonElement;
   const fileInput = document.getElementById("explain-file") as HTMLInputElement;
+  const videoBtn = document.getElementById("explain-video") as HTMLButtonElement;
+  const videoInput = document.getElementById("explain-video-file") as HTMLInputElement;
   const imageRow = document.getElementById("explain-images") as HTMLElement;
   const lockNote = document.getElementById("explain-lock") as HTMLElement;
   const composer = document.getElementById("explain-composer") as HTMLElement;
@@ -105,10 +114,12 @@ export function mountExplainPane(): ExplainPane {
 
   const slots = new Map<string, Slot>();
   let loadGen = 0;
-  const drafts = new Map<string, { text: string; images: PendingImage[] }>();
+  const drafts = new Map<string, { text: string; images: PendingImage[]; videos: PendingVideo[] }>();
   let current: { sessionId: string; workspace: string } | null = null;
   let shown: HTMLElement | null = placeholder;
   let pending: PendingImage[] = [];
+  let pendingVideos: PendingVideo[] = [];
+  let currentKind: ModelKind = "text";
   let runKey: string | null = null;
   let runPhase = "";
 
@@ -141,21 +152,49 @@ export function mountExplainPane(): ExplainPane {
     pad();
   }
 
+  function parseModelKind(raw: unknown): ModelKind {
+    return typeof raw === "string" && (MODEL_KINDS as readonly string[]).includes(raw)
+      ? (raw as ModelKind)
+      : "text";
+  }
+
+  function kindFromConfig(cfg: unknown): ModelKind {
+    if (!cfg || typeof cfg !== "object") return "text";
+    const stored = cfg as { models?: unknown; currentModelId?: unknown };
+    const models = Array.isArray(stored.models) ? stored.models : [];
+    const currentId = typeof stored.currentModelId === "string" ? stored.currentModelId : "";
+    const entries = models.filter(
+      (row): row is { id?: unknown; kind?: unknown } => Boolean(row) && typeof row === "object",
+    );
+    const chosen = entries.find((row) => row.id === currentId) ?? entries[0];
+    return parseModelKind(chosen?.kind);
+  }
+
+  async function refreshKind(): Promise<void> {
+    try {
+      currentKind = kindFromConfig(await window.agent.getConfig());
+    } catch {
+      currentKind = "text";
+    }
+    paintComposer();
+  }
+
   function rememberDraft(sessionId: string | null): void {
     if (!sessionId) return;
-    drafts.set(sessionId, { text: input.value, images: pending });
+    drafts.set(sessionId, { text: input.value, images: pending, videos: pendingVideos });
   }
 
   function restoreDraft(sessionId: string): void {
     const saved = drafts.get(sessionId);
     pending = saved?.images ?? [];
+    pendingVideos = saved?.videos ?? [];
     input.value = saved?.text ?? "";
     paintImages();
   }
 
   function paintImages(): void {
     imageRow.innerHTML = "";
-    imageRow.hidden = pending.length === 0;
+    imageRow.hidden = pending.length === 0 && pendingVideos.length === 0;
     pending.forEach((image, index) => {
       const thumb = document.createElement("div");
       thumb.className = "composer-thumb";
@@ -176,19 +215,44 @@ export function mountExplainPane(): ExplainPane {
       thumb.append(img, remove);
       imageRow.append(thumb);
     });
+    pendingVideos.forEach((video, index) => {
+      const thumb = document.createElement("div");
+      thumb.className = "composer-thumb";
+      const node = document.createElement("video");
+      node.src = video.previewUrl;
+      node.muted = true;
+      node.preload = "metadata";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", "移除视频");
+      remove.onclick = () => {
+        if (input.disabled) return;
+        URL.revokeObjectURL(video.previewUrl);
+        pendingVideos.splice(index, 1);
+        paintImages();
+        paintComposer();
+      };
+      thumb.append(node, remove);
+      imageRow.append(thumb);
+    });
   }
 
   function paintComposer(): void {
     const here = Boolean(current && runKey === current.sessionId);
     const elsewhere = Boolean(runKey) && !here;
-    input.disabled = here || elsewhere;
+    const blocked = currentKind !== "text";
+    input.disabled = here || elsewhere || blocked;
     imageBtn.disabled = input.disabled;
-    lockNote.hidden = !elsewhere;
-    composer.classList.toggle("is-locked", elsewhere);
+    videoBtn.disabled = input.disabled;
+    lockNote.hidden = !elsewhere && !blocked;
+    lockNote.textContent = blocked ? "解释请改选生文模型" : "另一个会话的解释正在进行";
+    composer.classList.toggle("is-locked", elsewhere || blocked);
     sendBtn.classList.toggle("is-stop", here);
     sendBtn.classList.remove("is-stopping");
     sendBtn.textContent = here ? "停止" : "发送";
-    sendBtn.disabled = elsewhere || (!here && !input.value.trim() && pending.length === 0);
+    const empty = !input.value.trim() && pending.length === 0 && pendingVideos.length === 0;
+    sendBtn.disabled = elsewhere || (blocked && !here) || (!here && empty);
     pad();
   }
 
@@ -300,8 +364,17 @@ export function mountExplainPane(): ExplainPane {
             /* missing file */
           }
         }
+        const videoUrls: string[] = [];
+        for (const video of message.videos ?? []) {
+          try {
+            videoUrls.push(await window.agent.explainReadVideo(slot.workspace, slot.sessionId, video.path));
+          } catch {
+            /* missing file */
+          }
+        }
         appendMessage(slot.board, "user", visibleExplainText(message.content), {
           images: urls.length ? urls : undefined,
+          videos: videoUrls.length ? videoUrls : undefined,
           messageId: message.id,
           at: message.created_at,
         });
@@ -421,9 +494,16 @@ export function mountExplainPane(): ExplainPane {
   async function submitExplain(
     text: string,
     images: PendingImage[],
+    videos: PendingVideo[],
     sourceMessageIds: string[] | null,
   ): Promise<void> {
     if (!current) return;
+    if (currentKind !== "text") {
+      const slot = slotFor(current.workspace, current.sessionId);
+      slot.open = true;
+      applyVisibility();
+      return;
+    }
     if (runKey && runKey !== current.sessionId) {
       setStatus("另一个会话的解释正在进行", true);
       return;
@@ -436,8 +516,10 @@ export function mountExplainPane(): ExplainPane {
     showBoard(slot.board);
     slot.board.querySelector(".empty-state")?.remove();
     const previews = images.map((image) => image.previewUrl);
+    const videoPreviews = videos.map((video) => video.previewUrl);
     appendMessage(slot.board, "user", text, {
       ...(previews.length ? { images: previews } : {}),
+      ...(videoPreviews.length ? { videos: videoPreviews } : {}),
       at: new Date().toISOString(),
     });
     slot.stream = null;
@@ -456,6 +538,7 @@ export function mountExplainPane(): ExplainPane {
         text,
         images.length ? images.map((image) => ({ mime: image.mime, base64: image.base64 })) : undefined,
         sourceMessageIds,
+        videos.length ? videos.map((video) => ({ mime: video.mime, base64: video.base64 })) : undefined,
       );
       void window.agent.explainSetOpen(current.workspace, current.sessionId, true);
     } catch (err) {
@@ -464,6 +547,7 @@ export function mountExplainPane(): ExplainPane {
       if (sourceMessageIds === null && current?.sessionId === slot.sessionId) {
         input.value = text;
         pending = images;
+        pendingVideos = videos;
         paintImages();
       }
       removeLastTranscriptNodes(slot.board, 1);
@@ -527,7 +611,39 @@ export function mountExplainPane(): ExplainPane {
     }
     paintImages();
     paintComposer();
-    if (current) drafts.set(current.sessionId, { text: input.value, images: pending });
+    if (current) drafts.set(current.sessionId, { text: input.value, images: pending, videos: pendingVideos });
+  }
+
+  async function addVideoFiles(files: File[]): Promise<void> {
+    const accepted = files.filter((file) => /^(video\/(mp4|webm|quicktime))$/.test(file.type));
+    if (!accepted.length) {
+      setStatus("只能上传 mp4、webm 或 mov", true);
+      return;
+    }
+    if (pendingVideos.length >= MAX_PENDING_VIDEOS) {
+      setStatus(`一次最多 ${MAX_PENDING_VIDEOS} 个视频`, true);
+      return;
+    }
+    const file = accepted[0];
+    if (accepted.length > 1 || pendingVideos.length + accepted.length > MAX_PENDING_VIDEOS) {
+      setStatus(`一次最多 ${MAX_PENDING_VIDEOS} 个视频`, true);
+    }
+    if (file.size > MAX_VIDEO_BYTES) {
+      setStatus("视频不能超过 20 MiB", true);
+      return;
+    }
+    try {
+      pendingVideos.push({
+        previewUrl: URL.createObjectURL(file),
+        mime: file.type as PendingVideo["mime"],
+        base64: await blobToBase64(file),
+      });
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), true);
+    }
+    paintImages();
+    paintComposer();
+    if (current) drafts.set(current.sessionId, { text: input.value, images: pending, videos: pendingVideos });
   }
 
   function setPanelOpen(open: boolean): void {
@@ -536,7 +652,10 @@ export function mountExplainPane(): ExplainPane {
     slot.open = open;
     applyVisibility();
     void window.agent.explainSetOpen(current.workspace, current.sessionId, open);
-    if (open) input.focus();
+    if (open) {
+      void refreshKind();
+      input.focus();
+    }
   }
   toggle.addEventListener("click", () => setPanelOpen(true));
   collapse.addEventListener("click", () => setPanelOpen(false));
@@ -548,11 +667,14 @@ export function mountExplainPane(): ExplainPane {
     }
     const text = input.value.trim();
     const images = pending.slice();
-    if (!text && images.length === 0) return;
+    const videos = pendingVideos.slice();
+    if (!text && images.length === 0 && videos.length === 0) return;
+    if (currentKind !== "text") return;
     pending = [];
+    pendingVideos = [];
     paintImages();
     input.value = "";
-    void submitExplain(text, images, null);
+    void submitExplain(text, images, videos, null);
   });
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) {
@@ -562,7 +684,7 @@ export function mountExplainPane(): ExplainPane {
   });
   input.addEventListener("input", () => {
     paintComposer();
-    if (current) drafts.set(current.sessionId, { text: input.value, images: pending });
+    if (current) drafts.set(current.sessionId, { text: input.value, images: pending, videos: pendingVideos });
   });
   input.addEventListener("paste", (ev) => {
     const files = Array.from(ev.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -576,6 +698,22 @@ export function mountExplainPane(): ExplainPane {
     fileInput.value = "";
     void addFiles(files);
   });
+  videoBtn.addEventListener("click", () => videoInput.click());
+  videoInput.addEventListener("change", () => {
+    const files = Array.from(videoInput.files ?? []);
+    videoInput.value = "";
+    void addVideoFiles(files);
+  });
+  const modelSelect = document.getElementById("composer-model");
+  modelSelect?.addEventListener("change", () => {
+    void refreshKind();
+  });
+  if (modelSelect) {
+    new MutationObserver(() => {
+      void refreshKind();
+    }).observe(modelSelect, { childList: true, subtree: true, attributes: true, attributeFilter: ["value"] });
+  }
+  void refreshKind();
   window.agent?.onExplainEvent?.((event) => onEvent(event));
   window.addEventListener("resize", () => {
     if (!pane.hidden) layout();
@@ -605,6 +743,7 @@ export function mountExplainPane(): ExplainPane {
       }
       const slot = slotFor(current.workspace, current.sessionId);
       restoreDraft(current.sessionId);
+      void refreshKind();
       void slot.loaded.then(() => {
         if (current?.sessionId !== slot.sessionId) return;
         applyVisibility();
@@ -614,6 +753,12 @@ export function mountExplainPane(): ExplainPane {
     ask(text, sourceMessageIds) {
       const trimmed = text.trim();
       if (!trimmed || !current) return;
+      if (currentKind !== "text") {
+        const slot = slotFor(current.workspace, current.sessionId);
+        slot.open = true;
+        applyVisibility();
+        return;
+      }
       if (runKey) {
         setStatus(runKey === current.sessionId ? "解释还在进行" : "另一个会话的解释正在进行", true);
         const slot = slots.get(current.sessionId);
@@ -623,7 +768,7 @@ export function mountExplainPane(): ExplainPane {
         }
         return;
       }
-      void submitExplain(trimmed, [], sourceMessageIds);
+      void submitExplain(trimmed, [], [], sourceMessageIds);
     },
     contains(node) {
       return Boolean(node && pane.contains(node));

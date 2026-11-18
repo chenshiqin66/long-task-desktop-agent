@@ -201,7 +201,7 @@ declare global {
       explainLoad(
         workspace: string,
         sessionId: string,
-      ): Promise<{ open: boolean; messages: Array<{ id?: string; role: string; content: string; name?: string; is_error?: boolean; tool_call_id?: string; tool_call_arguments?: string; images?: Array<{ path: string }>; created_at?: string }> }>;
+      ): Promise<{ open: boolean; messages: Array<{ id?: string; role: string; content: string; name?: string; is_error?: boolean; tool_call_id?: string; tool_call_arguments?: string; images?: Array<{ path: string }>; videos?: Array<{ path: string }>; created_at?: string }> }>;
       explainSetOpen(workspace: string, sessionId: string, open: boolean): Promise<void>;
       explainSubmit(
         workspace: string,
@@ -209,9 +209,11 @@ declare global {
         text: string,
         images?: Array<{ mime: string; base64: string }>,
         sourceMessageIds?: string[] | null,
+        videos?: Array<{ mime: string; base64: string }>,
       ): Promise<void>;
       explainCancel(): Promise<void>;
       explainReadImage(workspace: string, sessionId: string, relativePath: string): Promise<string>;
+      explainReadVideo(workspace: string, sessionId: string, relativePath: string): Promise<string>;
       onExplainEvent(cb: (e: any) => void): () => void;
       respondPermission(requestId: string, decision: "allow" | "deny"): Promise<boolean>;
       answerAsk(requestId: string, text: string): Promise<boolean>;

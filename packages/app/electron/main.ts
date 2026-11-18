@@ -389,7 +389,7 @@ function normalizeSubmittedVideos(raw: unknown): SubmittedVideo[] | undefined {
 
 async function ensureExplainRuntime(workspace: string): Promise<ExplainRuntime> {
   const config = await readAgentConfig();
-  const key = `${workspace}\0${agentConfigKey(config)}`;
+  const key = `${workspace}\0${agentConfigKey(config)}\0${config.kind}`;
   if (explainRt?.isRunning) {
     if (!samePath(explainRt.workspacePath, workspace)) {
       throw new AgentError("解释还在进行", "busy");
@@ -902,6 +902,7 @@ app.whenReady().then(async () => {
       text: unknown,
       images?: unknown,
       sourceMessageIds?: unknown,
+      videos?: unknown,
     ) => {
       assertValidSessionId(sessionId);
       if (typeof text !== "string") throw new Error("Invalid message");
@@ -913,7 +914,9 @@ app.whenReady().then(async () => {
         const main = await new SessionStore(path).readMessages(sessionId);
         context = sourceTurnContext(main, ids, text);
       }
-      await rt.submit(sessionId, text, normalizeSubmittedImages(images), context);
+      const config = await readAgentConfig();
+      const submittedVideos = config.kind === "text" ? normalizeSubmittedVideos(videos) : undefined;
+      await rt.submit(sessionId, text, normalizeSubmittedImages(images), context, submittedVideos);
     },
   );
   ipcMain.handle("agent:explainCancel", async () => {
@@ -926,6 +929,15 @@ app.whenReady().then(async () => {
       if (typeof relativePath !== "string") throw new Error("Invalid image path");
       const path = await assertKnownWorkspace(rawWorkspace);
       return new SessionStore(path).readImageDataUrl(sessionId, relativePath);
+    },
+  );
+  ipcMain.handle(
+    "agent:explainReadVideo",
+    async (_e, rawWorkspace: string, sessionId: string, relativePath: string) => {
+      assertValidSessionId(sessionId);
+      if (typeof relativePath !== "string") throw new Error("Invalid video path");
+      const path = await assertKnownWorkspace(rawWorkspace);
+      return new SessionStore(path).readVideoDataUrl(sessionId, relativePath);
     },
   );
   ipcMain.handle("agent:answerAsk", async (_e, requestId: string, text: string) => {
