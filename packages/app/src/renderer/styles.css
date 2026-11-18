@@ -2972,7 +2972,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 .composer-model,
 .composer-model-empty {
   max-width: 11rem;
-  height: 32px;
+  height: 22px;
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3473,7 +3473,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 :is(#composer, #explain-composer).is-compact .composer-model,
 :is(#composer, #explain-composer).is-compact .composer-model-empty {
   max-width: 8rem;
-  height: 26px;
+  height: 21px;
   padding: 0 6px;
 }
 
