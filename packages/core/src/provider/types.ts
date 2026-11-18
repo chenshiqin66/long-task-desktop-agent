@@ -1,4 +1,4 @@
-import type { ToolCall } from "../types.js";
+import type { ImageMime, ToolCall } from "../types.js";
 import type { ToolDefinition } from "../tools/types.js";
 import type { AssembledMessage } from "../context/assemble.js";
 
@@ -21,6 +21,19 @@ export interface LlmChatRequest {
   signal?: AbortSignal;
 }
 
+export interface ImageGenRequest {
+  model: string;
+  prompt: string;
+  images?: { dataUrl: string }[];
+  signal?: AbortSignal;
+}
+
+export interface ImageGenResult {
+  mime: ImageMime;
+  base64: string;
+}
+
 export interface LlmProvider {
   chatStream(req: LlmChatRequest): AsyncIterable<LlmStreamChunk>;
+  generateImage?(req: ImageGenRequest): Promise<ImageGenResult>;
 }

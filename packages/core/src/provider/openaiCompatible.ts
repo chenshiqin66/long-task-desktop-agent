@@ -1,5 +1,12 @@
 import type { ToolCall } from "../types.js";
-import type { LlmChatRequest, LlmProvider, LlmStreamChunk } from "./types.js";
+import type { ImageGenRequest, ImageGenResult, LlmChatRequest, LlmProvider, LlmStreamChunk } from "./types.js";
+import {
+  buildImageGenerationBody,
+  imageUrlFromGenerationResponse,
+  inferImageMimeFromUrl,
+  parseImageGenerationResponse,
+  parseImageMime,
+} from "./imageGeneration.js";
 
 function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -18,9 +25,58 @@ export class OpenAICompatibleProvider implements LlmProvider {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
+  private headers(): Record<string, string> {
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.apiKey}`,
+    };
+  }
+
   async *chatStream(req: LlmChatRequest): AsyncIterable<LlmStreamChunk> {
     const retry = yield* this.openStream(req, true);
     if (retry) yield* this.openStream(req, false);
+  }
+
+  async generateImage(req: ImageGenRequest): Promise<ImageGenResult> {
+    const url = `${this.baseUrl}/images/generations`;
+    const res = await this.fetchImpl(url, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(buildImageGenerationBody(req)),
+      signal: req.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(await res.text());
+    } catch (err) {
+      if (req.signal?.aborted || isAbortError(err)) throw err;
+      throw new Error("No image in response");
+    }
+    try {
+      return parseImageGenerationResponse(body, res.headers.get("content-type") ?? undefined);
+    } catch (err) {
+      const imageUrl = imageUrlFromGenerationResponse(body);
+      if (!imageUrl) throw err;
+      return await this.downloadGeneratedImage(imageUrl, req.signal);
+    }
+  }
+
+  private async downloadGeneratedImage(imageUrl: string, signal?: AbortSignal): Promise<ImageGenResult> {
+    const res = await this.fetchImpl(imageUrl, { signal });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength === 0) {
+      throw new Error("Empty image body");
+    }
+    const mime = parseImageMime(res.headers.get("content-type")) ?? inferImageMimeFromUrl(imageUrl) ?? "image/png";
+    return { mime, base64: Buffer.from(bytes).toString("base64") };
   }
 
   private async *openStream(
@@ -40,10 +96,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
     try {
       res = await this.fetchImpl(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: this.headers(),
         body: JSON.stringify({
           model: req.model,
           messages: req.messages,

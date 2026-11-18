@@ -19,6 +19,7 @@ export * from "./context/repairToolCalls.js";
 export * from "./context/assemble.js";
 export * from "./provider/types.js";
 export * from "./provider/openaiCompatible.js";
+export * from "./provider/imageGeneration.js";
 export * from "./runtime/errors.js";
 export * from "./runtime/permission.js";
 export * from "./runtime/askGate.js";

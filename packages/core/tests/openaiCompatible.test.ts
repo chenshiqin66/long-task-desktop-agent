@@ -198,4 +198,155 @@ describe("OpenAICompatibleProvider", () => {
     expect((bodies[1] as { stream_options?: unknown }).stream_options).toBeUndefined();
     expect(texts).toEqual(["ok"]);
   });
+
+  it("posts generateImage to images/generations without tools and returns b64_json", async () => {
+    const seen: { url?: string; body?: unknown } = {};
+    const fetchImpl: typeof fetch = async (input, init) => {
+      seen.url = String(input);
+      seen.body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: [{ b64_json: "QUJD" }] }), { status: 200 });
+    };
+    const p = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1/",
+      apiKey: "sk-test",
+      fetchImpl,
+    });
+    const result = await p.generateImage({ model: "draw", prompt: "一只猫" });
+    expect(seen.url).toBe("https://example.com/v1/images/generations");
+    expect(seen.body).toEqual({ model: "draw", prompt: "一只猫" });
+    expect(result).toEqual({ mime: "image/png", base64: "QUJD" });
+  });
+
+  it("downloads a url result and surfaces HTTP errors", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).endsWith("/images/generations")) {
+        return new Response(JSON.stringify({ data: [{ url: "https://cdn.example/a.png" }] }), { status: 200 });
+      }
+      return new Response(png, { status: 200, headers: { "Content-Type": "image/png" } });
+    };
+    const p = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk",
+      fetchImpl,
+    });
+    const result = await p.generateImage({ model: "draw", prompt: "x" });
+    expect(result.mime).toBe("image/png");
+    expect(Buffer.from(result.base64, "base64").equals(png)).toBe(true);
+
+    const failing = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk",
+      fetchImpl: async () => new Response("nope", { status: 400 }),
+    });
+    await expect(failing.generateImage({ model: "draw", prompt: "x" })).rejects.toThrow(/HTTP 400: nope/);
+  });
+
+  it("includes a single image or an image array in the generateImage body", async () => {
+    const bodies: unknown[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ data: [{ b64_json: "QUJD" }] }), { status: 200 });
+    };
+    const p = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk",
+      fetchImpl,
+    });
+    await p.generateImage({
+      model: "draw",
+      prompt: "一只猫",
+      images: [{ dataUrl: "data:image/png;base64,AAA" }],
+    });
+    await p.generateImage({
+      model: "draw",
+      prompt: "一只猫",
+      images: [
+        { dataUrl: "data:image/png;base64,AAA" },
+        { dataUrl: "data:image/png;base64,BBB" },
+      ],
+    });
+    expect(bodies[0]).toEqual({
+      model: "draw",
+      prompt: "一只猫",
+      image: "data:image/png;base64,AAA",
+    });
+    expect(bodies[1]).toEqual({
+      model: "draw",
+      prompt: "一只猫",
+      image: ["data:image/png;base64,AAA", "data:image/png;base64,BBB"],
+    });
+  });
+
+  it("infers mime from the image URL suffix when Content-Type is missing", async () => {
+    const webp = Buffer.from([0x52, 0x49, 0x46, 0x46]);
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).endsWith("/images/generations")) {
+        return new Response(JSON.stringify({ data: [{ url: "https://cdn.example/a.webp?x=1" }] }), { status: 200 });
+      }
+      return new Response(webp, { status: 200 });
+    };
+    const p = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk",
+      fetchImpl,
+    });
+    const result = await p.generateImage({ model: "draw", prompt: "x" });
+    expect(result.mime).toBe("image/webp");
+    expect(Buffer.from(result.base64, "base64").equals(webp)).toBe(true);
+  });
+
+  it("treats a non-2xx or empty image download as a generation failure", async () => {
+    const notFound = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk",
+      fetchImpl: async (input) => {
+        if (String(input).endsWith("/images/generations")) {
+          return new Response(JSON.stringify({ data: [{ url: "https://cdn.example/missing.png" }] }), { status: 200 });
+        }
+        return new Response("gone", { status: 404 });
+      },
+    });
+    await expect(notFound.generateImage({ model: "draw", prompt: "x" })).rejects.toThrow(/HTTP 404: gone/);
+
+    const empty = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk",
+      fetchImpl: async (input) => {
+        if (String(input).endsWith("/images/generations")) {
+          return new Response(JSON.stringify({ data: [{ url: "https://cdn.example/empty.png" }] }), { status: 200 });
+        }
+        return new Response(new Uint8Array(), { status: 200, headers: { "Content-Type": "image/png" } });
+      },
+    });
+    await expect(empty.generateImage({ model: "draw", prompt: "x" })).rejects.toThrow(/empty/i);
+  });
+
+  it("rethrows abort errors from generateImage without wrapping them", async () => {
+    const ac = new AbortController();
+    const abortErr = new Error("The operation was aborted");
+    abortErr.name = "AbortError";
+    const fetchImpl: typeof fetch = async () => {
+      ac.abort();
+      throw abortErr;
+    };
+    const p = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk",
+      fetchImpl,
+    });
+    await expect(p.generateImage({ model: "draw", prompt: "x", signal: ac.signal })).rejects.toBe(abortErr);
+  });
+
+  it("does not put the api key into a generateImage error", async () => {
+    const failing = new OpenAICompatibleProvider({
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-secret-key",
+      fetchImpl: async () => new Response("nope", { status: 400 }),
+    });
+    await expect(failing.generateImage({ model: "draw", prompt: "x" })).rejects.toSatisfy((err: unknown) => {
+      const message = String(err);
+      return /HTTP 400: nope/.test(message) && !message.includes("sk-secret-key");
+    });
+  });
 });
