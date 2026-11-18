@@ -199,7 +199,9 @@ function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[])
   if (images?.length) {
     const row = el("div", { class: "msg-images" });
     for (const src of images) {
-      row.append(el("img", { src, alt: "附件图片" }));
+      const btn = el("button", { type: "button", class: "msg-image-btn", "aria-label": "查看图片" });
+      btn.append(el("img", { src, alt: "附件图片" }));
+      row.append(btn);
     }
     place(row);
   }

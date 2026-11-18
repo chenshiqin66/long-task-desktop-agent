@@ -25,6 +25,7 @@ import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js
 import { attachMcpLibrary } from "./mcp.js";
 import { attachModelsLibrary } from "./models.js";
 import { escapeAction } from "./escapeKey.js";
+import { installImageViewer, isImageViewerOpen } from "./imageViewer.js";
 import { mountFavoriteFolders, mountWorkbench, mountWorkbenchNav, type WorkbenchPage } from "./workbench.js";
 import { appendMemorySaved, mountMemoryPage } from "./memory.js";
 import {
@@ -3323,7 +3324,7 @@ window.addEventListener("keydown", (ev) => {
   const action = escapeAction({
     handled: ev.defaultPrevented,
     composing: ev.isComposing,
-    dialogOpen: Boolean(document.querySelector("dialog[open]")),
+    dialogOpen: Boolean(document.querySelector("dialog[open]")) || isImageViewerOpen(),
     workbenchOpen: workbench.isOpen(),
     findOpen: !findBar.hidden || Boolean(explainApi && !explainApi.findBar.hidden),
     taskPanelOpen: taskPanelOpen && !taskPanelEl.hidden,
@@ -4104,5 +4105,6 @@ window.addEventListener("resize", () => {
 });
 
 mountQuestionNav(document.getElementById("question-nav")!, messagesEl);
+installImageViewer();
 
 void boot();
