@@ -1247,31 +1247,43 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .explain-title {
-  font-family: var(--font-ui);
-  font-size: var(--text);
-  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+
+.explain-title svg {
+  height: 28px;
+  width: auto;
+  display: block;
 }
 
 .explain-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   align-self: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
   margin-left: 8px;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  line-height: 1.2;
-  padding: 4px 8px;
-  border-radius: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  line-height: 0;
   cursor: pointer;
-  white-space: nowrap;
+}
+
+.explain-toggle svg {
+  height: 28px;
+  width: auto;
+  display: block;
 }
 
 .explain-toggle:hover {
-  color: var(--accent-ink);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: color-mix(in srgb, var(--teal-soft) 55%, #fff);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .main-bar.is-covered .view-tabs {

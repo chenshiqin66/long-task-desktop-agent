@@ -1,4 +1,5 @@
 import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelect } from "./composerModelFit.js";
+import { paintExplainIcons } from "./explainIcons.js";
 import { paintSendButton } from "./sendButton.js";
 import {
   appendMessage,
@@ -91,6 +92,7 @@ function toolTitle(name: string, argsJson?: string): string {
 }
 
 export function mountExplainPane(): ExplainPane {
+  paintExplainIcons();
   const pane = document.getElementById("explain-pane") as HTMLElement;
   const toggle = document.getElementById("explain-toggle") as HTMLButtonElement;
   const collapse = document.getElementById("explain-collapse") as HTMLButtonElement;
@@ -303,7 +305,6 @@ export function mountExplainPane(): ExplainPane {
     const open = slot?.open ?? false;
     pane.hidden = !open;
     toggle.hidden = open;
-    toggle.textContent = "<-解释";
     if (open && slot) {
       layout();
       showBoard(slot.board);
