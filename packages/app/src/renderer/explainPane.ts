@@ -1,3 +1,4 @@
+import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelect } from "./composerModelFit.js";
 import { paintSendButton } from "./sendButton.js";
 import {
   appendMessage,
@@ -203,6 +204,8 @@ export function mountExplainPane(): ExplainPane {
       modelEmpty.hidden = true;
     }
     paintingPicker = false;
+    fitComposerModelSelect(modelSelect);
+    fitComposerModelEmpty(modelEmpty);
   }
 
   async function refreshExplainModels(): Promise<void> {
@@ -753,6 +756,7 @@ export function mountExplainPane(): ExplainPane {
   modelEmpty.addEventListener("click", () => {
     document.getElementById("btn-config")?.click();
   });
+  attachComposerModelSizing(modelSelect);
   window.addEventListener("agent-models-changed", () => {
     void refreshExplainModels();
   });

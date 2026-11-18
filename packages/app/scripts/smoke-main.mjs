@@ -17,6 +17,7 @@ const scripts = [
   ["test-sticky-turns.mjs"],
   ["test-memory-view.mjs"],
   ["test-model-kind-label.mjs"],
+  ["test-composer-model-fit.mjs"],
   ["test-taskbar-attention.mjs"],
   ["test-taskbar-icon-win.mjs", "--experimental-test-module-mocks"],
 ];

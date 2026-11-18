@@ -1,3 +1,5 @@
+import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelect } from "./composerModelFit.js";
+
 type ModelKind = "text" | "image" | "video" | "audio";
 
 const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio"];
@@ -160,6 +162,8 @@ export function attachModelsLibrary(
       emptyBtn.hidden = true;
     }
     painting = false;
+    fitComposerModelSelect(select);
+    fitComposerModelEmpty(emptyBtn);
     window.dispatchEvent(new Event("agent-models-changed"));
   }
 
@@ -360,6 +364,8 @@ export function attachModelsLibrary(
     host.onOpen();
     void reload().catch(showNote);
   });
+
+  attachComposerModelSizing(select);
 
   return {
     reload: () => reload().catch(showNote),
