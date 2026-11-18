@@ -112,7 +112,7 @@ export type RuntimeEvent =
   | {
       type: "status";
       turn_id: string;
-      phase: "assembling" | "llm" | "tool" | "awaiting_permission" | "awaiting_user";
+      phase: "assembling" | "llm" | "tool" | "awaiting_permission" | "awaiting_user" | "generating_image";
     }
   | {
       type: "session_title";
@@ -125,7 +125,8 @@ export type RuntimeEvent =
   /** A task-notification user message was just appended. */
   | { type: "task_notification"; turn_id: string; content: string }
   /** A message typed during a continuation was appended. The bubble is already on screen. */
-  | { type: "held_user"; turn_id: string; session_id: string };
+  | { type: "held_user"; turn_id: string; session_id: string }
+  | { type: "generated_images"; turn_id: string; message_id: string; images: ImageAttachment[] };
 
 export interface TraceEvent {
   id: string;

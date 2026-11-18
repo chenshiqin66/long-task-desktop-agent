@@ -17,6 +17,7 @@ const IMAGE_REL_RE = /^images\/(?:explain-)?img_[a-f0-9]+\.(png|jpg|webp|gif)$/;
 
 /** Largest decoded image accepted from the renderer after it has resized. */
 export const MAX_IMAGE_BYTES = 1_500_000;
+export const MAX_GENERATED_IMAGE_BYTES = 15_000_000;
 export const MAX_IMAGES_PER_MESSAGE = 4;
 
 export function extForImageMime(mime: string): string | null {
@@ -108,7 +109,7 @@ export class SessionStore {
     sessionId: string,
     mime: ImageMime,
     base64: string,
-    opts?: { prefix?: string },
+    opts?: { prefix?: string; maxBytes?: number },
   ): Promise<ImageAttachment> {
     const ext = extForImageMime(mime);
     if (!ext) throw new Error(`Unsupported image type: ${mime}`);
@@ -116,8 +117,9 @@ export class SessionStore {
     if (prefix && !/^[a-z0-9-]+$/i.test(prefix)) throw new Error("Invalid image prefix");
     const cleaned = base64.replace(/\s/g, "");
     const bytes = Buffer.from(cleaned, "base64");
-    if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) {
-      throw new Error(`Image is empty or larger than ${MAX_IMAGE_BYTES} bytes`);
+    const limit = opts?.maxBytes ?? MAX_IMAGE_BYTES;
+    if (!bytes.length || bytes.length > limit) {
+      throw new Error(`Image is empty or larger than ${limit} bytes`);
     }
     const id = newId("img");
     const fileName = `${prefix}${id}.${ext}`;

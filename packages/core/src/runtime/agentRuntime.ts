@@ -7,10 +7,12 @@ import type {
   RuntimeEvent,
   SessionMeta,
   SubmittedImage,
+  SubmittedVideo,
   ToolCall,
   TraceEvent,
+  VideoAttachment,
 } from "../types.js";
-import { MAX_IMAGES_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
+import { MAX_GENERATED_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, MAX_VIDEOS_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
 import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
 import { TaskStore } from "../store/taskStore.js";
@@ -246,7 +248,7 @@ export class AgentRuntime {
   /** True only while the loop is leaving because the queue looked empty. */
   private exiting = false;
   private exitWake = false;
-  private heldSubmit: { text: string; images: SubmittedImage[] } | null = null;
+  private heldSubmit: { text: string; images: SubmittedImage[]; videos: SubmittedVideo[] } | null = null;
   private readonly skillsRoot: string;
   /** Bodies pinned for the submit currently running. Cleared when it ends. */
   private skillBodies: SkillBodyAttachment[] = [];
@@ -608,13 +610,14 @@ export class AgentRuntime {
     sessionId: string,
     text: string,
     images: SubmittedImage[],
+    videos: SubmittedVideo[],
     opts?: { allowHold?: boolean },
   ): Promise<boolean> {
     let held = false;
     await this.withInbox(async () => {
       if (this.running && this.turnKind === "wakeup" && this.activeSessionId === sessionId && !this.heldSubmit) {
         if (opts?.allowHold === false) throw new AgentError("A turn is already running", "busy");
-        this.heldSubmit = { text, images };
+        this.heldSubmit = { text, images, videos };
         if (this.exiting) this.exitWake = true;
         held = true;
         return;
@@ -746,6 +749,10 @@ export class AgentRuntime {
     for (const image of held.images) {
       storedImages.push(await this.store.saveImage(sessionId, image.mime as ImageMime, image.base64));
     }
+    const storedVideos = [];
+    for (const video of held.videos) {
+      storedVideos.push(await this.store.saveVideo(sessionId, video.mime, video.base64));
+    }
     const userMsgId = newId("msg");
     const userTraceId = newId("trace");
     const ok = await this.persistMessage(turnId, {
@@ -755,6 +762,7 @@ export class AgentRuntime {
       role: "user",
       content: held.text,
       ...(storedImages.length ? { images: storedImages } : {}),
+      ...(storedVideos.length ? { videos: storedVideos } : {}),
       trace_id: userTraceId,
       created_at: nowIso(),
     });
@@ -771,7 +779,7 @@ export class AgentRuntime {
         turn_id: turnId,
         type: "user_message",
         message_id: userMsgId,
-        detail: { content_chars: held.text.length, image_count: storedImages.length, held: true },
+        detail: { content_chars: held.text.length, image_count: storedImages.length, video_count: storedVideos.length, held: true },
       }))
     ) {
       return "failed";
@@ -799,24 +807,35 @@ export class AgentRuntime {
     return this.store.readImageDataUrl(sessionId, relativePath);
   }
 
-  async submit(sessionId: string, text: string, images?: SubmittedImage[]): Promise<void> {
+  async submit(sessionId: string, text: string, images?: SubmittedImage[], videos?: SubmittedVideo[]): Promise<void> {
     const trimmed = text.trim();
     const incoming = images ?? [];
-    if (!trimmed && incoming.length === 0) {
+    const incomingVideos = videos ?? [];
+    if (this.config.kind === "image" && !trimmed) {
+      throw new AgentError("生图请先输入提示词", "bad_request");
+    }
+    if (!trimmed && incoming.length === 0 && incomingVideos.length === 0) {
       throw new AgentError("Empty message", "empty");
     }
     if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
       throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
     }
+    if (incomingVideos.length > MAX_VIDEOS_PER_MESSAGE) {
+      throw new AgentError(`At most ${MAX_VIDEOS_PER_MESSAGE} video`, "bad_video");
+    }
     await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
-    const held = await this.beginUserTurn(sessionId, trimmed, incoming);
+    const held = await this.beginUserTurn(sessionId, trimmed, incoming, incomingVideos);
     if (held) return;
     try {
       const storedImages = [];
       for (const image of incoming) {
         storedImages.push(await this.store.saveImage(sessionId, image.mime as ImageMime, image.base64));
       }
-      await this.executeUserTurn(sessionId, trimmed, storedImages);
+      const storedVideos = [];
+      for (const video of incomingVideos) {
+        storedVideos.push(await this.store.saveVideo(sessionId, video.mime, video.base64));
+      }
+      await this.executeUserTurn(sessionId, trimmed, storedImages, storedVideos);
     } finally {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
@@ -827,21 +846,29 @@ export class AgentRuntime {
     }
   }
 
-  /** Send the original question again. `images` must already live in this session. */
-  async replay(sessionId: string, text: string, images: ImageAttachment[]): Promise<void> {
+  /** Send the original question again. `images` and `videos` must already live in this session. */
+  async replay(sessionId: string, text: string, images: ImageAttachment[] = [], videos: VideoAttachment[] = []): Promise<void> {
     const trimmed = text.trim();
     const incoming = images ?? [];
-    if (!trimmed && incoming.length === 0) {
+    const incomingVideos = videos ?? [];
+    if (this.config.kind === "image" && !trimmed) {
+      throw new AgentError("生图请先输入提示词", "bad_request");
+    }
+    if (!trimmed && incoming.length === 0 && incomingVideos.length === 0) {
       throw new AgentError("Empty message", "empty");
     }
     if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
       throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
     }
+    if (incomingVideos.length > MAX_VIDEOS_PER_MESSAGE) {
+      throw new AgentError(`At most ${MAX_VIDEOS_PER_MESSAGE} video`, "bad_video");
+    }
     const storedImages = await this.reuseStoredImages(sessionId, incoming);
+    const storedVideos = await this.reuseStoredVideos(sessionId, incomingVideos);
     await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
-    await this.beginUserTurn(sessionId, trimmed, [], { allowHold: false });
+    await this.beginUserTurn(sessionId, trimmed, [], [], { allowHold: false });
     try {
-      await this.executeUserTurn(sessionId, trimmed, storedImages);
+      await this.executeUserTurn(sessionId, trimmed, storedImages, storedVideos);
     } finally {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
@@ -877,7 +904,32 @@ export class AgentRuntime {
     return stored;
   }
 
-  private async executeUserTurn(sessionId: string, trimmed: string, storedImages: ImageAttachment[]): Promise<void> {
+  private async reuseStoredVideos(sessionId: string, videos: VideoAttachment[]): Promise<VideoAttachment[]> {
+    const stored: VideoAttachment[] = [];
+    for (const video of videos) {
+      const mime = video?.mime;
+      const id = video?.id;
+      const path = video?.path;
+      if (mime !== "video/mp4" && mime !== "video/webm" && mime !== "video/quicktime") {
+        throw new AgentError("Unsupported video type", "bad_video");
+      }
+      if (typeof id !== "string" || !/^vid_[a-f0-9]+$/.test(id)) {
+        throw new AgentError("Invalid video", "bad_video");
+      }
+      const ext = mime === "video/quicktime" ? "mov" : mime.slice("video/".length);
+      const expected = `videos/${id}.${ext}`;
+      if (path !== expected) throw new AgentError("Invalid video path", "bad_video");
+      try {
+        await this.store.readVideoForSend(sessionId, path);
+      } catch {
+        throw new AgentError("Video file is missing", "bad_video");
+      }
+      stored.push({ id, mime, path });
+    }
+    return stored;
+  }
+
+  private async executeUserTurn(sessionId: string, trimmed: string, storedImages: ImageAttachment[], storedVideos: VideoAttachment[] = []): Promise<void> {
     this.turnWritesAllowed = false;
     this.batchOutputDirs = [];
     this.abort = new AbortController();
@@ -902,6 +954,7 @@ export class AgentRuntime {
         role: "user",
         content: trimmed,
         ...(storedImages.length ? { images: storedImages } : {}),
+        ...(storedVideos.length ? { videos: storedVideos } : {}),
         trace_id: userTraceId,
         created_at: nowIso(),
       };
@@ -913,7 +966,7 @@ export class AgentRuntime {
           turn_id,
           type: "user_message",
           message_id: userMsgId,
-          detail: { content_chars: trimmed.length, image_count: storedImages.length },
+          detail: { content_chars: trimmed.length, image_count: storedImages.length, video_count: storedVideos.length },
         }))
       ) {
         return;
@@ -943,6 +996,7 @@ export class AgentRuntime {
 
   /** One model loop. The caller has already appended the user message this request should answer. */
   private async runModelLoop(sessionId: string, turn_id: string): Promise<void> {
+    if (await this.routeByKind(sessionId, turn_id)) return;
     this.pinTurnTools();
     await this.loadTurnMemory();
     let steps = 0;
@@ -971,13 +1025,23 @@ export class AgentRuntime {
         this.emit({ type: "status", turn_id, phase: "llm" });
         // Lightweight request meta only — full assembled payload is a separate concern.
         const requestId = newId("trace");
-        const prepared = await prepareOutbound(ctx.messages, async (relativePath) => {
-          try {
-            return await this.store.readImageForSend(sessionId, relativePath);
-          } catch {
-            return null;
-          }
-        });
+        const prepared = await prepareOutbound(
+          ctx.messages,
+          async (relativePath) => {
+            try {
+              return await this.store.readImageForSend(sessionId, relativePath);
+            } catch {
+              return null;
+            }
+          },
+          async (relativePath) => {
+            try {
+              return await this.store.readVideoForSend(sessionId, relativePath);
+            } catch {
+              return null;
+            }
+          },
+        );
         const apiMessages = prepared.messages;
         const fingerprint = toolsFingerprint(this.tools.listDefinitions());
         if (
@@ -2120,6 +2184,173 @@ export class AgentRuntime {
           reason: "user",
           pending_tool_call_ids: pendingToolCalls.map((t) => t.id),
         },
+      }))
+    ) {
+      return;
+    }
+    this.emit({ type: "done", turn_id, reason: "cancelled" });
+  }
+
+  private isAbortError(err: unknown): boolean {
+    return typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "AbortError";
+  }
+
+  /** Returns true when this turn was handled outside the text tool loop. */
+  private async routeByKind(sessionId: string, turn_id: string): Promise<boolean> {
+    const kind = this.config.kind;
+    if (kind !== "image" && kind !== "video" && kind !== "audio") return false;
+    if (this.abort?.signal.aborted) {
+      await this.finishGenerateCancel(sessionId, turn_id);
+      return true;
+    }
+    const messages = await this.store.readMessages(sessionId);
+    const last = messages[messages.length - 1];
+    const prompt = last?.role === "user" ? last.content.trim() : "";
+    const videos = last?.role === "user" ? (last.videos ?? []) : [];
+    const images = last?.role === "user" ? (last.images ?? []) : [];
+
+    if (kind === "video" || kind === "audio") {
+      const text = "这个类型第一版还不能用，请改选生文或生图";
+      this.emit({ type: "text", turn_id, delta: text });
+      const assistantMsgId = newId("msg");
+      const assistantTraceId = newId("trace");
+      if (
+        !(await this.persistMessage(turn_id, {
+          id: assistantMsgId,
+          session_id: sessionId,
+          turn_id,
+          role: "assistant",
+          content: text,
+          trace_id: assistantTraceId,
+          created_at: nowIso(),
+        }))
+      ) {
+        return true;
+      }
+      if (
+        !(await this.persistTrace(turn_id, {
+          id: assistantTraceId,
+          session_id: sessionId,
+          turn_id,
+          type: "llm_response",
+          message_id: assistantMsgId,
+          detail: { content: text },
+        }))
+      ) {
+        return true;
+      }
+      this.turnOutcome = "completed";
+      return true;
+    }
+
+    if (!prompt) {
+      this.emit({ type: "error", turn_id, message: "生图请先输入提示词", code: "bad_request" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (videos.length) {
+      this.emit({ type: "error", turn_id, message: "生图不发送视频，请先去掉视频，或改用生文模型", code: "bad_request" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+
+    this.emit({ type: "status", turn_id, phase: "generating_image" });
+    if (!this.provider.generateImage) {
+      this.emit({ type: "error", turn_id, message: "Image generation is not available", code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+
+    const refImages: { dataUrl: string }[] = [];
+    for (const image of images) {
+      try {
+        const loaded = await this.store.readImageForSend(sessionId, image.path);
+        refImages.push({ dataUrl: loaded.dataUrl });
+      } catch {
+        this.emit({ type: "error", turn_id, message: "Image file is missing", code: "bad_image" });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+    }
+
+    let result;
+    try {
+      result = await this.provider.generateImage({
+        model: this.config.model,
+        prompt,
+        ...(refImages.length ? { images: refImages } : {}),
+        signal: this.abort?.signal,
+      });
+    } catch (err) {
+      if (this.abort?.signal.aborted || this.isAbortError(err)) {
+        await this.finishGenerateCancel(sessionId, turn_id);
+        return true;
+      }
+      this.emit({ type: "error", turn_id, message: String(err), code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (this.abort?.signal.aborted) {
+      await this.finishGenerateCancel(sessionId, turn_id);
+      return true;
+    }
+
+    let saved;
+    try {
+      saved = await this.store.saveImage(sessionId, result.mime, result.base64, {
+        maxBytes: MAX_GENERATED_IMAGE_BYTES,
+      });
+    } catch (err) {
+      this.emit({ type: "error", turn_id, message: String(err), code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+
+    const assistantMsgId = newId("msg");
+    const assistantTraceId = newId("trace");
+    if (
+      !(await this.persistMessage(turn_id, {
+        id: assistantMsgId,
+        session_id: sessionId,
+        turn_id,
+        role: "assistant",
+        content: "",
+        images: [saved],
+        trace_id: assistantTraceId,
+        created_at: nowIso(),
+      }))
+    ) {
+      return true;
+    }
+    if (
+      !(await this.persistTrace(turn_id, {
+        id: assistantTraceId,
+        session_id: sessionId,
+        turn_id,
+        type: "llm_response",
+        message_id: assistantMsgId,
+        detail: { image_count: 1 },
+      }))
+    ) {
+      return true;
+    }
+    this.emit({
+      type: "generated_images",
+      turn_id,
+      message_id: assistantMsgId,
+      images: [saved],
+    });
+    this.turnOutcome = "completed";
+    return true;
+  }
+
+  private async finishGenerateCancel(sessionId: string, turn_id: string): Promise<void> {
+    if (
+      !(await this.persistTrace(turn_id, {
+        session_id: sessionId,
+        turn_id,
+        type: "cancel",
+        detail: { reason: "user" },
       }))
     ) {
       return;
