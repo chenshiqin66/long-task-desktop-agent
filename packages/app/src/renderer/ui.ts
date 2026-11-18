@@ -1,4 +1,5 @@
 import { formatMarkdown, linkifyPlainText } from "./markdown.js";
+import { shouldReleaseStuck } from "./stickyTurns.js";
 
 export { escapeHtml, formatMarkdown, looksOpenable, linkifyPlainText } from "./markdown.js";
 
@@ -373,8 +374,9 @@ function updateStickyTurns(container: HTMLElement): void {
     const one = oneLineHeight(node);
     if (node.classList.contains("is-stuck")) {
       const top = node.getBoundingClientRect().top;
-      // The pin lets go once the user scrolls up and the bar moves down by about a line.
-      if (top > edge + Math.max(one, 16)) {
+      // The pin lets go once the user scrolls up and the bar moves down by about a line,
+      // or once they are back at the start, where a first bubble cannot move down.
+      if (shouldReleaseStuck({ top, edge, one, scrollTop: container.scrollTop })) {
         node.classList.remove("is-stuck");
         node.classList.toggle("is-short", node.offsetHeight <= one + 2);
         releaseFoldOffset(container);

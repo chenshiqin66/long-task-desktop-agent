@@ -12,6 +12,7 @@ const scripts = [
   ["test-run-event-gate.mjs"],
   ["test-escape-key.mjs"],
   ["test-image-viewer.mjs"],
+  ["test-sticky-turns.mjs"],
   ["test-memory-view.mjs"],
   ["test-model-kind-label.mjs"],
   ["test-taskbar-attention.mjs"],
