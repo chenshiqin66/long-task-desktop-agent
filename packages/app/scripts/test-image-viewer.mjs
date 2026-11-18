@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import {
   ZOOM_MAX,
   ZOOM_MIN,
+  clampPan,
   clampZoom,
+  fitContain,
   neighborIndex,
   panAfterZoom,
   stepZoom,
@@ -32,5 +34,14 @@ assert.equal(still.y, -4);
 const reset = panAfterZoom(40, 20, 2, 1, 8, 6);
 assert.equal(reset.x, 0);
 assert.equal(reset.y, 0);
+
+assert.deepEqual(fitContain(1000, 800, 2000, 1000), { width: 1000, height: 500 });
+assert.deepEqual(fitContain(1000, 800, 500, 200), { width: 1000, height: 400 });
+assert.deepEqual(fitContain(0, 800, 2000, 1000), { width: 0, height: 0 });
+assert.deepEqual(fitContain(800, 600, 0, 100), { width: 0, height: 0 });
+
+assert.deepEqual(clampPan(40, 20, 1, 400, 300, 800, 600), { x: 0, y: 0 });
+assert.deepEqual(clampPan(10000, 50, 3, 400, 300, 800, 600), { x: 200, y: 50 });
+assert.deepEqual(clampPan(-10000, -400, 3, 400, 300, 800, 600), { x: -200, y: -150 });
 
 console.log("imageViewer tests ok");

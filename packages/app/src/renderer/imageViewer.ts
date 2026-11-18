@@ -37,6 +37,36 @@ export function panAfterZoom(
   };
 }
 
+/** Size of the image at zoom 1 so the whole picture fits in the stage. */
+export function fitContain(
+  stageW: number,
+  stageH: number,
+  natW: number,
+  natH: number,
+): { width: number; height: number } {
+  if (stageW <= 0 || stageH <= 0 || natW <= 0 || natH <= 0) return { width: 0, height: 0 };
+  const scale = Math.min(stageW / natW, stageH / natH);
+  return { width: natW * scale, height: natH * scale };
+}
+
+/** Keep the image from being panned completely out of the stage. */
+export function clampPan(
+  panX: number,
+  panY: number,
+  zoom: number,
+  fitW: number,
+  fitH: number,
+  stageW: number,
+  stageH: number,
+): { x: number; y: number } {
+  const maxX = Math.max(0, (fitW * zoom - stageW) / 2);
+  const maxY = Math.max(0, (fitH * zoom - stageH) / 2);
+  return {
+    x: Math.min(maxX, Math.max(-maxX, panX)),
+    y: Math.min(maxY, Math.max(-maxY, panY)),
+  };
+}
+
 let root: HTMLElement | null = null;
 let stage: HTMLElement | null = null;
 let imageEl: HTMLImageElement | null = null;
@@ -117,11 +147,19 @@ function ensureRoot(): HTMLElement {
     if (ev.target === stage) closeViewer();
   });
   btnClose.addEventListener("click", () => closeViewer());
-  btnZoomIn.addEventListener("click", () => applyZoom(stepZoom(zoom, 1)));
-  btnZoomOut.addEventListener("click", () => applyZoom(stepZoom(zoom, -1)));
+  btnZoomIn.addEventListener("click", () => applyZoom(stepZoom(zoom, 1), false, 0, 0));
+  btnZoomOut.addEventListener("click", () => applyZoom(stepZoom(zoom, -1), false, 0, 0));
   btnReset.addEventListener("click", () => applyZoom(1, true));
   btnPrev.addEventListener("click", () => showNeighbor(-1));
   btnNext.addEventListener("click", () => showNeighbor(1));
+  imageEl.addEventListener("load", () => {
+    if (!isImageViewerOpen()) return;
+    paintTransform();
+  });
+  window.addEventListener("resize", () => {
+    if (!isImageViewerOpen()) return;
+    paintTransform();
+  });
 
   stage.addEventListener(
     "wheel",
@@ -176,12 +214,12 @@ function onWindowKey(ev: KeyboardEvent): void {
   }
   if (ev.key === "+" || ev.key === "=") {
     ev.preventDefault();
-    applyZoom(stepZoom(zoom, 1));
+    applyZoom(stepZoom(zoom, 1), false, 0, 0);
     return;
   }
   if (ev.key === "-") {
     ev.preventDefault();
-    applyZoom(stepZoom(zoom, -1));
+    applyZoom(stepZoom(zoom, -1), false, 0, 0);
     return;
   }
   if (ev.key === "0") {
@@ -223,9 +261,11 @@ function showNeighbor(delta: number): void {
 function showCurrent(): void {
   const srcImg = siblings[index];
   if (!imageEl || !srcImg) return;
-  imageEl.src = srcImg.currentSrc || srcImg.src;
+  const nextSrc = srcImg.currentSrc || srcImg.src;
+  if (imageEl.getAttribute("src") !== nextSrc) imageEl.src = nextSrc;
   imageEl.alt = srcImg.alt || "附件图片";
   syncNav();
+  if (imageEl.complete && imageEl.naturalWidth > 0) paintTransform();
 }
 
 function applyZoom(next: number, resetPan = false, offsetX?: number, offsetY?: number): void {
@@ -245,6 +285,29 @@ function applyZoom(next: number, resetPan = false, offsetX?: number, offsetY?: n
 
 function paintTransform(): void {
   if (!imageEl || !stage) return;
+  const fit = fitContain(
+    stage.clientWidth,
+    stage.clientHeight,
+    imageEl.naturalWidth,
+    imageEl.naturalHeight,
+  );
+  if (fit.width > 0 && fit.height > 0) {
+    const pan = clampPan(
+      panX,
+      panY,
+      zoom,
+      fit.width,
+      fit.height,
+      stage.clientWidth,
+      stage.clientHeight,
+    );
+    panX = pan.x;
+    panY = pan.y;
+    imageEl.style.maxWidth = "none";
+    imageEl.style.maxHeight = "none";
+    imageEl.style.width = `${fit.width}px`;
+    imageEl.style.height = `${fit.height}px`;
+  }
   imageEl.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   stage.classList.toggle("is-panning", zoom > 1);
 }
@@ -310,6 +373,10 @@ export function closeViewer(): void {
   if (imageEl) {
     imageEl.removeAttribute("src");
     imageEl.style.transform = "";
+    imageEl.style.width = "";
+    imageEl.style.height = "";
+    imageEl.style.maxWidth = "";
+    imageEl.style.maxHeight = "";
   }
   const back = restoreFocus;
   restoreFocus = null;

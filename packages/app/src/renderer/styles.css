@@ -3293,10 +3293,16 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .image-viewer-stage {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: grid;
+  /* Definite tracks so the image is centered in the stage, not in an auto-sized row. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   overflow: hidden;
+  padding: 16px;
+  box-sizing: border-box;
   cursor: default;
 }
 
@@ -3309,8 +3315,12 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .image-viewer-img {
-  max-width: min(92vw, 100%);
-  max-height: min(82vh, 100%);
+  max-width: 92vw;
+  max-height: 82vh;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
   object-fit: contain;
   transform-origin: center center;
   user-select: none;
