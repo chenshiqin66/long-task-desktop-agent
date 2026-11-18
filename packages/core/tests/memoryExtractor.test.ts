@@ -119,6 +119,23 @@ describe("memory extractor", () => {
     expect(await readCursor(s.dir)).toBe(s.ids[0]);
   });
 
+  it("does not call a model and leaves the cursor when no text model is configured", async () => {
+    const s = await session([{ role: "user", content: "以后都用 pnpm。" }, { role: "assistant", content: "好的。" }]);
+    const provider = replying('{"ops":[]}');
+    const report = await extractOnce({
+      workspace,
+      sessionId: s.id,
+      home,
+      now: NOW,
+      settings: settings(provider, { provider: null, model: "" }),
+    });
+    expect(report.outcome).toBe("no_text_model");
+    expect(provider.requests).toHaveLength(0);
+    expect(await readCursor(s.dir)).toBeNull();
+    const [line] = await logLines(s.dir);
+    expect(line).toMatchObject({ outcome: "no_text_model" });
+  });
+
   it("skips the model when the new messages hold nothing the user said", async () => {
     const s = await session([
       { role: "user", content: "后台任务完成。这是完成回执", name: "task-notification" },

@@ -142,6 +142,14 @@ export function currentModelOf(stored: StoredConfig | null): StoredModel | null 
   return models.find((entry) => entry.id === stored?.currentModelId) ?? models[0]!;
 }
 
+/** Memory extraction always uses a text model, never the current image, video, or audio model. */
+export function textModelForMemory(stored: StoredConfig | null): StoredModel | null {
+  const models = modelsOf(stored);
+  const current = currentModelOf(stored);
+  if (current && modelKindOf(current) === "text") return current;
+  return models.find((entry) => modelKindOf(entry) === "text") ?? null;
+}
+
 /** Copy the current entry into the top-level fields older readers still use. */
 export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
   const models = modelsOf(stored);

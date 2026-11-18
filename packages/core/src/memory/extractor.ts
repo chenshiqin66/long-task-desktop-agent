@@ -42,7 +42,7 @@ export interface MemorySavedEvent {
 
 export interface ExtractorSettings {
   autoMemory: boolean;
-  provider: LlmProvider;
+  provider: LlmProvider | null;
   model: string;
   /** Configured keys and MCP credentials. A note holding one is rejected. */
   secrets: string[];
@@ -166,6 +166,9 @@ export async function extractOnce(job: ExtractJob): Promise<ExtractReport> {
   if (!job.settings.autoMemory) return finish({ outcome: "disabled", saved: [] });
   const evidenceIds = new Set(messages.slice(range.start, range.end).filter(isEvidence).map((message) => message.id));
   if (!evidenceIds.size) return finish({ outcome: "no_evidence", saved: [] });
+  if (!job.settings.provider || !job.settings.model) {
+    return finish({ outcome: "no_text_model", saved: [] });
+  }
 
   const store = new MemoryStore({
     workspacePath: job.workspace,

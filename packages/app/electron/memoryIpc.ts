@@ -13,6 +13,7 @@ import {
   isMemoryScope,
   loadStoredConfig,
   readInstructionFiles,
+  textModelForMemory,
 } from "@agent/core";
 import type {
   AgentConfig,
@@ -85,10 +86,11 @@ export function createMemoryExtractor(
   return new MemoryExtractor({
     settings: async () => {
       const [config, stored] = await Promise.all([deps.config(), loadStoredConfig()]);
+      const text = textModelForMemory(stored);
       return {
         autoMemory: autoMemoryOf(stored),
-        provider: new OpenAICompatibleProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey }),
-        model: config.model,
+        provider: text ? new OpenAICompatibleProvider({ baseUrl: text.baseUrl, apiKey: text.apiKey }) : null,
+        model: text?.model ?? "",
         secrets: memorySecrets(config, deps.mcp),
       };
     },

@@ -50,7 +50,8 @@ export type ExtractOutcome =
   | "cancelled"
   | "lock_timeout"
   | "write_failed"
-  | "session_gone";
+  | "session_gone"
+  | "no_text_model";
 
 export const EXTRACT_SYSTEM = `You maintain long-term memory notes for a coding assistant. Read the conversation excerpt and decide which facts are worth keeping for future sessions. Most excerpts hold nothing worth saving; then output {"ops":[]}.
 
