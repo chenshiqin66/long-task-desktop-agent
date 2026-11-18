@@ -38,6 +38,7 @@ import {
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { paintSendButton } from "./sendButton.js";
 import { paintAddButtons } from "./addButton.js";
+import { attachComposerResize } from "./composerResize.js";
 import { mountQuestionNav } from "./questionNav.js";
 
 type SubagentToolRow = {
@@ -317,6 +318,12 @@ const workbench = mountWorkbench(
 );
 
 paintAddButtons();
+attachComposerResize(
+  composerEl,
+  inputEl,
+  composerEl.querySelector(".composer-resize") as HTMLElement,
+);
+
 
 function reloadWorkbenchPage(_page?: WorkbenchPage): void {
   void favoriteFolders.reload().catch((err: unknown) => {

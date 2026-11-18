@@ -1,5 +1,6 @@
 import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelect } from "./composerModelFit.js";
 import { paintExplainIcons } from "./explainIcons.js";
+import { attachComposerResize } from "./composerResize.js";
 import { paintSendButton } from "./sendButton.js";
 import {
   appendMessage,
@@ -93,6 +94,11 @@ function toolTitle(name: string, argsJson?: string): string {
 
 export function mountExplainPane(): ExplainPane {
   paintExplainIcons();
+  attachComposerResize(
+    document.getElementById("explain-composer") as HTMLElement,
+    document.getElementById("explain-input") as HTMLTextAreaElement,
+    document.querySelector("#explain-composer .composer-resize") as HTMLElement,
+  );
   const pane = document.getElementById("explain-pane") as HTMLElement;
   const toggle = document.getElementById("explain-toggle") as HTMLButtonElement;
   const collapse = document.getElementById("explain-collapse") as HTMLButtonElement;
