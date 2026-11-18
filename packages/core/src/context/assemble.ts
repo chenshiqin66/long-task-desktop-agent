@@ -1,4 +1,4 @@
-import type { ImageAttachment, Message, ToolCall } from "../types.js";
+import type { ImageAttachment, Message, ToolCall, VideoAttachment } from "../types.js";
 import {
   readSkillHistoryStub,
   renderInstalledSkills,
@@ -22,6 +22,7 @@ export type OutboundContent =
   | Array<
       | { type: "text"; text: string }
       | { type: "image_url"; image_url: { url: string } }
+      | { type: "video_url"; video_url: { url: string } }
     >;
 
 export interface AssembledMessage {
@@ -32,6 +33,8 @@ export interface AssembledMessage {
   tool_calls?: ToolCall[];
   /** Present only before image bytes are inlined for the API call. */
   images?: ImageAttachment[];
+  /** Present only before video bytes are inlined for the API call. */
+  videos?: VideoAttachment[];
 }
 
 export interface AssembledContext {
@@ -351,5 +354,6 @@ function toAssembled(m: Message): AssembledMessage {
     tool_call_id: m.tool_call_id,
     tool_calls: m.tool_calls,
     ...(m.images?.length ? { images: m.images } : {}),
+    ...(m.videos?.length ? { videos: m.videos } : {}),
   };
 }
