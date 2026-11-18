@@ -3437,7 +3437,13 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 :is(#composer, #explain-composer).is-compact .composer-images,
-:is(#composer, #explain-composer).is-compact .btn-image {
+:is(#composer, #explain-composer).is-compact .btn-image,
+#explain-composer .composer-images,
+#explain-composer .btn-image {
+  display: none;
+}
+
+#explain-composer.is-compact .composer-lock-note {
   display: none;
 }
 
@@ -3472,9 +3478,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 :is(#composer, #explain-composer).is-compact .composer-model,
 :is(#composer, #explain-composer).is-compact .composer-model-empty {
-  max-width: 8rem;
-  height: 21px;
-  padding: 0 6px;
+  display: none;
 }
 
 :is(#composer, #explain-composer).is-compact.is-locked.has-draft .composer-lock-note {

@@ -160,6 +160,7 @@ export function attachModelsLibrary(
       emptyBtn.hidden = true;
     }
     painting = false;
+    window.dispatchEvent(new Event("agent-models-changed"));
   }
 
   async function loadConfig(): Promise<StoredConfig | null> {

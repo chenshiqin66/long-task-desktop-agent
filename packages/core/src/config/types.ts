@@ -19,6 +19,8 @@ export interface StoredConfig {
   models?: StoredModel[];
   /** Which models[] entry is current. Missing or unknown means the first entry. */
   currentModelId?: string;
+  /** Text model used by the explain pane. Missing or non-text falls back to a text model. */
+  currentExplainModelId?: string;
   /** Directories shown in the sidebar. Adding one does not remove the others. */
   workspacePaths?: string[];
   /** Sidebar labels keyed by workspace path. Missing key means show the folder name. Does not rename the directory. */

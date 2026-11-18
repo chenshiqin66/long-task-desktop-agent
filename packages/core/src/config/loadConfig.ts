@@ -150,28 +150,63 @@ export function textModelForMemory(stored: StoredConfig | null): StoredModel | n
   return models.find((entry) => modelKindOf(entry) === "text") ?? null;
 }
 
+/** The explain pane uses a text model of its own, not the current image, video, or audio model. */
+export function textModelForExplain(stored: StoredConfig | null): StoredModel | null {
+  const models = modelsOf(stored);
+  const chosen = models.find((entry) => entry.id === stored?.currentExplainModelId);
+  if (chosen && modelKindOf(chosen) === "text") return chosen;
+  return textModelForMemory(stored);
+}
+
+export function withExplainModel(stored: StoredConfig, modelId: string): StoredConfig {
+  const models = modelsOf(stored);
+  const chosen = models.find((entry) => entry.id === modelId);
+  if (!chosen || modelKindOf(chosen) !== "text") throw new Error("请选择生文模型");
+  return normalizeStoredConfig({ ...stored, currentExplainModelId: chosen.id });
+}
+
+function explainModelIdOf(stored: StoredConfig, models: StoredModel[]): string | undefined {
+  const chosen = models.find((entry) => entry.id === stored.currentExplainModelId);
+  return chosen && modelKindOf(chosen) === "text" ? chosen.id : undefined;
+}
+
+function withExplainModelId(next: StoredConfig, explainId: string | undefined): StoredConfig {
+  if (explainId) {
+    next.currentExplainModelId = explainId;
+    return next;
+  }
+  delete next.currentExplainModelId;
+  return next;
+}
+
 /** Copy the current entry into the top-level fields older readers still use. */
 export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
   const models = modelsOf(stored);
   const current = currentModelOf(stored);
   if (!current) {
-    return {
-      ...stored,
-      models: [],
-      currentModelId: undefined,
-      baseUrl: "",
-      model: "",
-      apiKey: "",
-    };
+    return withExplainModelId(
+      {
+        ...stored,
+        models: [],
+        currentModelId: undefined,
+        baseUrl: "",
+        model: "",
+        apiKey: "",
+      },
+      undefined,
+    );
   }
-  return {
-    ...stored,
-    models,
-    currentModelId: current.id,
-    baseUrl: current.baseUrl,
-    model: current.model,
-    apiKey: current.apiKey,
-  };
+  return withExplainModelId(
+    {
+      ...stored,
+      models,
+      currentModelId: current.id,
+      baseUrl: current.baseUrl,
+      model: current.model,
+      apiKey: current.apiKey,
+    },
+    explainModelIdOf(stored, models),
+  );
 }
 
 export function withCurrentModel(stored: StoredConfig, modelId: string): StoredConfig {

@@ -110,6 +110,8 @@ export function mountExplainPane(): ExplainPane {
   const imageRow = document.getElementById("explain-images") as HTMLElement;
   const lockNote = document.getElementById("explain-lock") as HTMLElement;
   const composer = document.getElementById("explain-composer") as HTMLElement;
+  const modelSelect = document.getElementById("explain-model") as HTMLSelectElement;
+  const modelEmpty = document.getElementById("explain-model-empty") as HTMLButtonElement;
   const floatStack = document.getElementById("explain-float") as HTMLElement;
   const placeholder = document.getElementById("explain-messages") as HTMLElement;
 
@@ -120,7 +122,8 @@ export function mountExplainPane(): ExplainPane {
   let shown: HTMLElement | null = placeholder;
   let pending: PendingImage[] = [];
   let pendingVideos: PendingVideo[] = [];
-  let currentKind: ModelKind = "text";
+  let hasTextModel = false;
+  let paintingPicker = false;
   let runKey: string | null = null;
   let runPhase = "";
 
@@ -159,23 +162,55 @@ export function mountExplainPane(): ExplainPane {
       : "text";
   }
 
-  function kindFromConfig(cfg: unknown): ModelKind {
-    if (!cfg || typeof cfg !== "object") return "text";
-    const stored = cfg as { models?: unknown; currentModelId?: unknown };
-    const models = Array.isArray(stored.models) ? stored.models : [];
+  function paintExplainPicker(cfg: unknown): void {
+    const stored = cfg && typeof cfg === "object" ? (cfg as { models?: unknown; currentModelId?: unknown; currentExplainModelId?: unknown }) : {};
+    const entries = Array.isArray(stored.models)
+      ? stored.models.filter((row): row is { id?: unknown; name?: unknown; model?: unknown; kind?: unknown } => Boolean(row) && typeof row === "object")
+      : [];
+    const textModels = entries.filter((row) => typeof row.id === "string" && parseModelKind(row.kind) === "text");
+    const explainId = typeof stored.currentExplainModelId === "string" ? stored.currentExplainModelId : "";
     const currentId = typeof stored.currentModelId === "string" ? stored.currentModelId : "";
-    const entries = models.filter(
-      (row): row is { id?: unknown; kind?: unknown } => Boolean(row) && typeof row === "object",
-    );
-    const chosen = entries.find((row) => row.id === currentId) ?? entries[0];
-    return parseModelKind(chosen?.kind);
+    const selected =
+      textModels.find((row) => row.id === explainId) ??
+      textModels.find((row) => row.id === currentId) ??
+      textModels[0];
+    hasTextModel = Boolean(selected);
+    paintingPicker = true;
+    modelSelect.replaceChildren();
+    if (!textModels.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "未配置模型";
+      modelSelect.append(option);
+      modelSelect.value = "";
+      modelSelect.hidden = true;
+      modelSelect.disabled = true;
+      modelEmpty.hidden = false;
+    } else {
+      for (const entry of textModels) {
+        const option = document.createElement("option");
+        option.value = String(entry.id);
+        const name =
+          (typeof entry.name === "string" && entry.name) ||
+          (typeof entry.model === "string" && entry.model) ||
+          "未命名模型";
+        option.textContent = `${name}（生文）`;
+        modelSelect.append(option);
+      }
+      modelSelect.value = String(selected!.id);
+      modelSelect.hidden = false;
+      modelSelect.disabled = false;
+      modelEmpty.hidden = true;
+    }
+    paintingPicker = false;
   }
 
-  async function refreshKind(): Promise<void> {
+  async function refreshExplainModels(): Promise<void> {
     try {
-      currentKind = kindFromConfig(await window.agent.getConfig());
+      paintExplainPicker(await window.agent.getConfig());
     } catch {
-      currentKind = "text";
+      hasTextModel = false;
+      paintExplainPicker(null);
     }
     paintComposer();
   }
@@ -242,13 +277,13 @@ export function mountExplainPane(): ExplainPane {
   function paintComposer(): void {
     const here = Boolean(current && runKey === current.sessionId);
     const elsewhere = Boolean(runKey) && !here;
-    const blocked = currentKind !== "text";
+    const blocked = !hasTextModel;
     input.disabled = here || elsewhere || blocked;
-    imageBtn.disabled = input.disabled;
-    videoBtn.disabled = input.disabled;
-    lockNote.hidden = !elsewhere && !blocked;
-    lockNote.textContent = blocked ? "解释请改选生文模型" : "另一个会话的解释正在进行";
-    composer.classList.toggle("is-locked", elsewhere || blocked);
+    imageBtn.disabled = true;
+    videoBtn.disabled = true;
+    lockNote.hidden = !elsewhere;
+    lockNote.textContent = "另一个会话的解释正在进行";
+    composer.classList.toggle("is-locked", elsewhere);
     const empty = !input.value.trim() && pending.length === 0 && pendingVideos.length === 0;
     sendBtn.disabled = elsewhere || (blocked && !here) || (!here && empty);
     paintSendButton(sendBtn, here ? "stop" : "send");
@@ -497,7 +532,7 @@ export function mountExplainPane(): ExplainPane {
     sourceMessageIds: string[] | null,
   ): Promise<void> {
     if (!current) return;
-    if (currentKind !== "text") {
+    if (!hasTextModel) {
       const slot = slotFor(current.workspace, current.sessionId);
       slot.open = true;
       applyVisibility();
@@ -652,7 +687,7 @@ export function mountExplainPane(): ExplainPane {
     applyVisibility();
     void window.agent.explainSetOpen(current.workspace, current.sessionId, open);
     if (open) {
-      void refreshKind();
+      void refreshExplainModels();
       input.focus();
     }
   }
@@ -669,7 +704,7 @@ export function mountExplainPane(): ExplainPane {
     const images = pending.slice();
     const videos = pendingVideos.slice();
     if (!text && images.length === 0 && videos.length === 0) return;
-    if (currentKind !== "text") return;
+    if (!hasTextModel) return;
     pending = [];
     pendingVideos = [];
     paintImages();
@@ -704,16 +739,24 @@ export function mountExplainPane(): ExplainPane {
     videoInput.value = "";
     void addVideoFiles(files);
   });
-  const modelSelect = document.getElementById("composer-model");
-  modelSelect?.addEventListener("change", () => {
-    void refreshKind();
+  modelSelect.addEventListener("change", () => {
+    if (paintingPicker) return;
+    const id = modelSelect.value;
+    if (!id) return;
+    void (async () => {
+      const cur = await window.agent.getConfig();
+      if (!cur || typeof cur !== "object") return;
+      await window.agent.saveConfig({ ...(cur as object), currentExplainModelId: id });
+      await refreshExplainModels();
+    })();
   });
-  if (modelSelect) {
-    new MutationObserver(() => {
-      void refreshKind();
-    }).observe(modelSelect, { childList: true, subtree: true, attributes: true, attributeFilter: ["value"] });
-  }
-  void refreshKind();
+  modelEmpty.addEventListener("click", () => {
+    document.getElementById("btn-config")?.click();
+  });
+  window.addEventListener("agent-models-changed", () => {
+    void refreshExplainModels();
+  });
+  void refreshExplainModels();
   window.agent?.onExplainEvent?.((event) => onEvent(event));
   window.addEventListener("resize", () => {
     if (!pane.hidden) layout();
@@ -743,7 +786,7 @@ export function mountExplainPane(): ExplainPane {
       }
       const slot = slotFor(current.workspace, current.sessionId);
       restoreDraft(current.sessionId);
-      void refreshKind();
+      void refreshExplainModels();
       void slot.loaded.then(() => {
         if (current?.sessionId !== slot.sessionId) return;
         applyVisibility();
@@ -753,7 +796,7 @@ export function mountExplainPane(): ExplainPane {
     ask(text, sourceMessageIds) {
       const trimmed = text.trim();
       if (!trimmed || !current) return;
-      if (currentKind !== "text") {
+      if (!hasTextModel) {
         const slot = slotFor(current.workspace, current.sessionId);
         slot.open = true;
         applyVisibility();

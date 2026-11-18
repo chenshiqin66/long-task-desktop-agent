@@ -20,6 +20,8 @@ import {
   takeConfigQuarantine,
   toAgentConfig,
   normalizeStoredConfig,
+  textModelForExplain,
+  withCurrentModel,
   assertValidSessionId,
   DeferredPermissionGate,
   DeferredAskGate,
@@ -276,6 +278,17 @@ async function readAgentConfig() {
   return toAgentConfig(stored);
 }
 
+async function readExplainAgentConfig() {
+  const stored = (await loadStoredConfig()) ?? {
+    baseUrl: "",
+    model: "",
+    apiKey: "",
+  };
+  const text = textModelForExplain(stored);
+  if (!text) throw new AgentError("还没有配置生文模型", "bad_kind");
+  return toAgentConfig(withCurrentModel(stored, text.id));
+}
+
 function agentConfigKey(config: AgentConfig): string {
   return JSON.stringify([
     config.baseUrl,
@@ -388,7 +401,7 @@ function normalizeSubmittedVideos(raw: unknown): SubmittedVideo[] | undefined {
 }
 
 async function ensureExplainRuntime(workspace: string): Promise<ExplainRuntime> {
-  const config = await readAgentConfig();
+  const config = await readExplainAgentConfig();
   const key = `${workspace}\0${agentConfigKey(config)}\0${config.kind}`;
   if (explainRt?.isRunning) {
     if (!samePath(explainRt.workspacePath, workspace)) {
@@ -914,7 +927,7 @@ app.whenReady().then(async () => {
         const main = await new SessionStore(path).readMessages(sessionId);
         context = sourceTurnContext(main, ids, text);
       }
-      const config = await readAgentConfig();
+      const config = await readExplainAgentConfig();
       const submittedVideos = config.kind === "text" ? normalizeSubmittedVideos(videos) : undefined;
       await rt.submit(sessionId, text, normalizeSubmittedImages(images), context, submittedVideos);
     },
