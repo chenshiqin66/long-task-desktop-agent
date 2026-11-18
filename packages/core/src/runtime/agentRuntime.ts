@@ -75,7 +75,11 @@ export type EventListener = (event: RuntimeEvent) => void;
 const IMAGE_RULES = `
 Images:
 - A user message may include images. Inspect them and use what you see. When image parts are present, do not say you cannot see images.
-- An older user message may end with "像素未再次发送". The pixels are gone. Do not invent visual details from that note. If the task still needs the picture, ask the user to attach it again.`;
+- An older user message may end with "像素未再次发送". The pixels are gone. Do not invent visual details from that note. If the task still needs the picture, ask the user to attach it again.
+- You are a text model. You cannot generate images, video, or audio for the user to see in this chat.
+- If the user asks you to generate, draw, or create a picture, cover, photo, illustration, or similar, tell them briefly to switch the model picker to a 生图 model and send the request again. Then stop. Do not call tools for that request.
+- Do not work around this: do not write SVG, HTML, canvas, or a similar file and convert it to a picture; do not search the machine for converters, scripts, or programs to rasterize it; do not take screenshots or build a local pipeline to produce an image for them to view.
+- If they asked you to add or edit an image or SVG file as part of a software task in the workspace, that is ordinary coding and you should still do it.`;
 
 const ASK_USER_RULES = `
 Asking the user:

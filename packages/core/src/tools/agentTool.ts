@@ -180,7 +180,8 @@ Call keyword_search once for a path: set path, and put every term in queries.
 If the task omits the file, the question, or what finished looks like, say what is missing and stop. Do not guess.
 In the final message, name paths, line numbers, and the facts the parent needs. Do not paste whole files.
 When the task is done, or no rounds remain, stop calling tools.
-You share this session's task list. You may call task_list, task_get, claim_task, and complete_task. Omit owner. You cannot create, edit, or delete tasks, and you cannot message another subagent. A task assigned to you is already claimed as you. Call complete_task for it when the work is finished.`;
+You share this session's task list. You may call task_list, task_get, claim_task, and complete_task. Omit owner. You cannot create, edit, or delete tasks, and you cannot message another subagent. A task assigned to you is already claimed as you. Call complete_task for it when the work is finished.
+Do not generate pictures for the user to view, and do not convert files into raster images or search the machine for converters.`;
 }
 
 export function workerSystemPrompt(workspacePath: string, outputDir: string, toolRounds: number): string {
@@ -198,7 +199,8 @@ If the task tells you to fix or extend something without the fault, the behavior
 The parent agent cannot see your tool results. Your last message is a short receipt: the paths you wrote, roughly how long each file is, the section titles, and anything you did not finish.
 Do not paste the document body into that receipt.
 When the files are written, or no rounds remain, stop calling tools.
-You share this session's task list. You may call task_list, task_get, claim_task, and complete_task. Omit owner. You cannot create, edit, or delete tasks, and you cannot message another subagent. A task assigned to you is already claimed as you. Call complete_task for it when the work is finished.`;
+You share this session's task list. You may call task_list, task_get, claim_task, and complete_task. Omit owner. You cannot create, edit, or delete tasks, and you cannot message another subagent. A task assigned to you is already claimed as you. Call complete_task for it when the work is finished.
+Do not generate pictures for the user to view, and do not convert files into raster images or search the machine for converters.`;
 }
 
 export const agentTool: Tool = {

@@ -119,6 +119,15 @@ describe("AgentRuntime", () => {
     expect(prompt).toContain("leave options empty");
   });
 
+  it("tells a text model not to generate images by converting SVG or searching for converters", () => {
+    const prompt = buildDefaultSystemPrompt("/tmp/demo");
+    expect(prompt).toContain("You are a text model.");
+    expect(prompt).toContain("switch the model picker to a 生图 model");
+    expect(prompt).toContain("Do not work around this");
+    expect(prompt).toContain("ordinary coding and you should still do it");
+    expect(prompt).toContain("Do not call tools for that request");
+  });
+
   let workspace: string;
 
   beforeEach(async () => {
