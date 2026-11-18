@@ -1,3 +1,4 @@
+import { paintSendButton } from "./sendButton.js";
 import {
   appendMessage,
   appendToolStep,
@@ -248,11 +249,9 @@ export function mountExplainPane(): ExplainPane {
     lockNote.hidden = !elsewhere && !blocked;
     lockNote.textContent = blocked ? "解释请改选生文模型" : "另一个会话的解释正在进行";
     composer.classList.toggle("is-locked", elsewhere || blocked);
-    sendBtn.classList.toggle("is-stop", here);
-    sendBtn.classList.remove("is-stopping");
-    sendBtn.textContent = here ? "停止" : "发送";
     const empty = !input.value.trim() && pending.length === 0 && pendingVideos.length === 0;
     sendBtn.disabled = elsewhere || (blocked && !here) || (!here && empty);
+    paintSendButton(sendBtn, here ? "stop" : "send");
     pad();
   }
 
@@ -661,7 +660,8 @@ export function mountExplainPane(): ExplainPane {
   collapse.addEventListener("click", () => setPanelOpen(false));
   sendBtn.addEventListener("click", () => {
     if (runKey && current && runKey === current.sessionId) {
-      sendBtn.classList.add("is-stopping");
+      sendBtn.disabled = true;
+      paintSendButton(sendBtn, "stopping");
       void window.agent.explainCancel();
       return;
     }

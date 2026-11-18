@@ -2873,8 +2873,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 :is(#btn-send, #explain-send):disabled {
   opacity: 1;
   color: #7d8694;
-  background: #e6ebf1;
-  border-color: #d5dbe3;
+  background: transparent;
+  border-color: transparent;
   filter: none;
 }
 
@@ -3373,31 +3373,88 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 :is(#btn-send, #explain-send) {
   box-sizing: border-box;
-  height: 26px;
-  padding: 0 12px;
-  line-height: 24px;
-  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  line-height: 0;
+  flex-shrink: 0;
+  filter: none;
 }
 
-:is(#btn-send, #explain-send).is-stop {
-  color: var(--danger);
-  background: #fff;
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+:is(#btn-send, #explain-send) svg {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+:is(#btn-send, #explain-send) path {
+  fill: #14b8a6;
+}
+
+:is(#btn-send, #explain-send):disabled path,
+:is(#btn-send, #explain-send).is-stopping path {
+  fill: #dbdbdb;
+}
+
+:is(#btn-send, #explain-send):hover:not(:disabled) {
+  background: transparent;
+  filter: brightness(1.05);
+}
+
+:is(#btn-send, #explain-send).is-stop,
+:is(#btn-send, #explain-send).is-stop:hover:not(:disabled) {
+  color: inherit;
+  background: transparent;
+  border: none;
+  filter: none;
 }
 
 :is(#btn-send, #explain-send).is-stop:hover:not(:disabled) {
-  background: var(--danger-soft);
-  filter: none;
+  filter: brightness(1.05);
 }
 
 :is(#btn-send, #explain-send).is-stopping,
 :is(#btn-send, #explain-send).is-stopping:disabled {
-  color: #7d8694;
-  background: #e6ebf1;
-  border-color: #d5dbe3;
+  color: inherit;
+  background: transparent;
+  border: none;
   cursor: default;
   filter: none;
   opacity: 1;
+}
+
+:is(#btn-send, #explain-send).is-answer {
+  width: auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--teal) 40%, var(--teal-bright));
+  background: var(--teal-bright);
+  color: #fff;
+  line-height: 24px;
+}
+
+:is(#btn-send, #explain-send).is-answer:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+:is(#composer, #explain-composer).is-compact :is(#btn-send, #explain-send):not(.is-answer) {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+}
+
+:is(#composer, #explain-composer).is-compact :is(#btn-send, #explain-send):not(.is-answer) svg {
+  width: 26px;
+  height: 26px;
 }
 
 /* One row: placeholder and the buttons. The other pane stays like this until it is clicked. */

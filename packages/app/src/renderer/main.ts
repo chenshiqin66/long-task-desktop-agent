@@ -36,6 +36,7 @@ import {
   type MemoryScope,
 } from "./memoryView.js";
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
+import { paintSendButton } from "./sendButton.js";
 import { mountQuestionNav } from "./questionNav.js";
 
 type SubagentToolRow = {
@@ -1492,13 +1493,7 @@ function updateChrome(): void {
   const stopHere = running && !asking && !wakeDraft;
   const stopping = stopHere && Boolean(run?.stopRequested);
   btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose || !hasDraft;
-  btnSend.textContent = asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : "发送";
-  btnSend.classList.toggle("is-stop", stopHere && !stopping);
-  btnSend.classList.toggle("is-stopping", stopping);
-  btnSend.setAttribute(
-    "aria-label",
-    asking ? "回答" : stopping ? "正在停止" : stopHere ? "停止" : canCompose && hasDraft ? "发送" : "发送已禁用",
-  );
+  paintSendButton(btnSend, asking ? "answer" : stopping ? "stopping" : stopHere ? "stop" : "send");
   btnNew.disabled = !hasWorkspace || creatingSession;
   inputEl.disabled = creatingSession || (running && !asking && !wakeHere);
   composerEl.classList.remove("is-locked");
