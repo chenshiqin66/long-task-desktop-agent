@@ -23,7 +23,8 @@
   messages.jsonl                 模型下次能看见的对话，一行一条 Message
   trace.jsonl                    审计事件，一行一条 TraceEvent
   context.jsonl                  每次模型调用实际发出的上下文
-  images/                        随消息上传的图片 img_*，解释侧栏的图片 explain-img_*
+  images/                        随消息上传的图片 img_*，生图结果，以及解释侧栏里已有的 explain-img_*
+  videos/                        随消息上传的视频 vid_*（mp4 / webm / mov）
   inbox.jsonl                    完成通知队列。不在对话里，排空后才写进 messages.jsonl
   tasks/                         本会话的任务清单
     {id}.json                    一个任务。编号是十进制字符串，删掉也不复用
@@ -54,7 +55,7 @@
 
 ### `messages.jsonl`
 
-一行一条 `Message`：`id`、`session_id`、`turn_id`、`role`、`content`、`created_at`，以及按需出现的 `images`、`name`、`tool_call_id`、`tool_calls`、`is_error`、`trace_id`、`interrupted`。
+一行一条 `Message`：`id`、`session_id`、`turn_id`、`role`、`content`、`created_at`，以及按需出现的 `images`、`videos`、`name`、`tool_call_id`、`tool_calls`、`is_error`、`trace_id`、`interrupted`。
 
 `role=tool` 的消息可以带 `tool_call_arguments`，只给界面和审计看。组装上下文时不会再发给模型，因为参数已经在配对的那条助手消息的 `tool_calls` 上。
 
@@ -78,13 +79,13 @@
 两种行：
 
 - `{type: "tools", sha256, tools}`：一份工具定义，同一个哈希只写一次。
-- `{type: "request", id, turn_id, model, tools_sha256, messages}`：一次请求。每条消息记角色、正文、`name`、`tool_call_id`、`tool_calls`；图片只记路径和字节数，不存像素。
+- `{type: "request", id, turn_id, model, tools_sha256, messages}`：一次请求。每条消息记角色、正文、`name`、`tool_call_id`、`tool_calls`；图片和视频只记路径和字节数，不存像素或视频数据。
 
-工具定义不写进 system 正文。同一份定义按 sha256 只在 `{type: "tools"}` 行写一次，请求行用 `tools_sha256` 指向它。
+工具定义不写进 system 正文。同一份定义按 sha256 只在 `{type: "tools"}` 行写一次，请求行用 `tools_sha256` 指向它。生图请求也写一行，带 `kind: "image"`，没有工具定义，也没有 `tools_sha256`；消息里是提示词和可选参考图的路径、字节数。空提示词或这一轮附了视频而被拒绝时，不写这一行。生视频和生音的提示回复也不写。
 
 ## 标识与关系
 
-id 的格式是 `<前缀>_<32 位十六进制>`。前缀有 `sess`、`turn`、`msg`、`trace`、`perm`、`ask`、`subagent`、`note`、`img`、`memj`、`memx`。`memj` 是一次记忆变更的 id，写在用户目录的 `journal.jsonl` 里；`memx` 是一次后台提取的 id，写在会话目录的 `memory-extract.jsonl` 里。两个都不出现在三份日志中。deferred 子代理的完成通知 id 是 `note_<子代理 id>`，所以同一个子代理只会入队一次。早先的子代理目录叫 `agent_…`，现在仍能读。
+id 的格式是 `<前缀>_<32 位十六进制>`。前缀有 `sess`、`turn`、`msg`、`trace`、`perm`、`ask`、`subagent`、`note`、`img`、`vid`、`memj`、`memx`。`memj` 是一次记忆变更的 id，写在用户目录的 `journal.jsonl` 里；`memx` 是一次后台提取的 id，写在会话目录的 `memory-extract.jsonl` 里。两个都不出现在三份日志中。deferred 子代理的完成通知 id 是 `note_<子代理 id>`，所以同一个子代理只会入队一次。早先的子代理目录叫 `agent_…`，现在仍能读。
 
 ```mermaid
 flowchart TB
@@ -108,11 +109,13 @@ flowchart TB
 
 有几处例外：取消时写的 `llm_response` 没有 `request_id`；完成通知消息，以及一轮开头、续跑和存储失败时补齐出来的 tool 消息，没有 `trace_id`，也不写事件；自动标题那次模型调用不进 trace，也不进 context。后台提取同样不进这两份，写在会话目录自己的 `memory-extract.jsonl`。停止时补的「Cancelled」tool 消息不算例外：它们有 `trace_id`，也写 `tool_call` 和带 `cancelled: true` 的 `tool_result` 事件。
 
-## 图片
+## 图片与视频
 
-每张最大 1,500,000 字节，每条消息最多 4 张，格式是 PNG、JPEG、WebP、GIF。主输入框和解释侧栏上传前都会重新编码：长边缩到 1600 像素，PNG 保持 PNG，其余转成质量 0.86 的 JPEG，GIF 只留第一帧。主输入框还多一步：编码结果超过 900,000 字节时，改成质量 0.8 的 JPEG，PNG 也一样。
+每张上传的图片最大 1,500,000 字节，每条消息最多 4 张，格式是 PNG、JPEG、WebP、GIF。主输入框上传前会重新编码：长边缩到 1600 像素，PNG 保持 PNG，其余转成质量 0.86 的 JPEG，GIF 只留第一帧。编码结果超过 900,000 字节时，改成质量 0.8 的 JPEG，PNG 也一样。生图写入同一目录，单张最大 15,000,000 字节。
 
-消息里只记 `images/` 下的相对路径。组请求时，只有最后一条用户消息上的图片会变成像素；子代理从不发像素。
+每条消息最多 1 个视频，最大 20 MiB，格式是 `video/mp4`、`video/webm`、`video/quicktime`，落在 `videos/vid_<十六进制>.mp4`、`.webm` 或 `.mov`。
+
+消息里只记 `images/` 或 `videos/` 下的相对路径。组请求时，只有最后一条用户消息上的图片和视频会变成像素或数据；更早的图片换成「（此轮附有 N 张图片，像素未再次发送。）」，视频换成「（此轮附有 N 个视频，未再次发送。）」。只有媒体、没有文字时，正文分别是「请看图片。」「请看视频。」或「请看附件。」。子代理从不发这些附件。
 
 ## 配置
 
