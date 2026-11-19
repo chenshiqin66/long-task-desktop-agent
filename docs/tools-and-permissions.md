@@ -63,7 +63,7 @@ shell 是最难管的工具：一条命令可能读、可能写，也可能在�
    - 磁盘级工具：`mkfs`、`dd of=/dev/…`、`Format-Volume`、`Clear-Disk`、`Initialize-Disk`、`Remove-Partition`、`format X:`、`diskpart`、`wipefs`、`blkdiscard`，以及用 `shred`、`fdisk`、`parted` 这类工具或重定向写 `/dev/` 下的磁盘设备。
    - 递归删除整个盘、根目录、用户目录或系统目录。这一步不按固定写法匹配，而是把命令拆成语句、管道阶段和词，去掉引号（包括 PowerShell 认的弯引号），`bash -c '…'`、`cmd /c "…"` 里的命令再拆一遍。删除命令（`rm`、`rmdir`、`rd`、`del`、`erase`、`Remove-Item`、`ri`）带了递归参数（`-r`、`--recursive`、`/s`、`-Recurse` 及其缩写），目标归一化之后是下面这些，就拦：`/`、`//`、`/*`、`/tmp/..`、`C:\`、`C:/`、`C:\*`、`$env:SystemDrive\`；`~`、`$HOME`、`$env:USERPROFILE`、`%USERPROFILE%`，以及它们后面只跟 `/` 或 `/*`；`C:\Windows`、`C:\Users`、`C:\Program Files`、`C:\Program Files (x86)`、`/etc`、`/usr`，以及它们后面只跟 `*`；单独一个变量再加 `/` 或 `/*`，比如 `"$DIR/"`。这些目录经管道送进删除命令也算。
 
-   `"$DIR/build"`、先 `cd` 再 `rm -rf *`、写在脚本文件里的删除，以及 `C:\Users\x`、`~/code` 这种再往下的一层，都认不出。这些落到后面的步骤，按写操作要确认，见 [已知问题](roadmap.md#已知问题)。
+   `"$DIR/build"`、先 `cd` 再 `rm -rf *`、写在脚本文件里的删除，以及 `C:\Users\x`、`~/code` 这种再往下的一层，都认不出。这些落到后面的步骤，按写操作要确认，见 [后续改进](roadmap.md#后续改进)。
 2. **扫描**：按每种 shell 自己的规则，标出引号、转义、注释之外还在起作用的字符。遇到这次不建模的语法就要求确认：命令替换 `$(...)` 和反引号、圆括号和花括号、bash 的 heredoc（`<<`）、PowerShell 的 here-string（`@'`、`@"`）、块注释 `<#`、停止解析符 `--%`、词中间的 `#`。命令里有控制字符也要确认。
 3. **切段**：在 `;`、`&&`、`||`、换行、单独的 `&` 处切开，再按管道 `|` 切成若干阶段。每一段的每个阶段都必须只读。切分只看引号外的字符，所以 `echo "a;b"` 不会被切开。
 4. **重定向**：`>`、`>>`、`2>`、`*>`、`&>` 这类，目标只要不是 `/dev/null`、`$null`、`&1`、`&2`，就算写。
@@ -112,7 +112,7 @@ Windows PowerShell 5.1 里 `curl` 是 `Invoke-WebRequest` 的别名，所以 `cu
 
 **它保证的：**
 
-- 文件工具读写不出工作区，写入类工具不碰 `.agent`；换大小写、走目录联接都绕不过去。`write_file` 的目标若已经是符号链接，写入前拒绝，不跟着链接写。硬链接认不出来，见 [已知问题](roadmap.md#已知问题)。
+- 文件工具读写不出工作区，写入类工具不碰 `.agent`；换大小写、走目录联接都绕不过去。`write_file` 的目标若已经是符号链接，写入前拒绝，不跟着链接写。硬链接认不出来，见 [后续改进](roadmap.md#后续改进)。
 - 自动执行的 shell 命令，在上面规则覆盖的范围内，不写文件、不执行别的程序。
 - 递归删除整个盘、根目录、用户目录或列出的系统目录，以及格式化或擦除磁盘，点过允许也不执行。`"$DIR/build"`、先 `cd` 再 `rm -rf *`、脚本里的删除，认不出，见上面第 1 步。
 - 配置里的 `apiKey` 不由 runtime 写进会话日志（`llm_request` 只记模型名、条数、字数、图片张数和 `context_id`）。
@@ -130,4 +130,4 @@ Windows PowerShell 5.1 里 `curl` 是 `Invoke-WebRequest` 的别名，所以 `cu
 - **git 会按本地配置运行程序。** `git status`、`diff`、`log`、`show` 可能按 `.git/config` 调用 pager、外部 diff 或 fsmonitor；而这一轮早先放行的写入，可能已经改过 `.git/config`。
 - **网关的错误正文原样落盘。** 有的服务商会在错误信息里回显打了码的 key。
 
-已知的代码缺陷单独列在 [路线图](roadmap.md#已知问题)。
+尚未覆盖的边界和后续计划列在 [路线图](roadmap.md#后续改进)。
