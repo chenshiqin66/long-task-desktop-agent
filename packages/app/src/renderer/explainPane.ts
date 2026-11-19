@@ -2,6 +2,7 @@ import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelec
 import { paintExplainIcons } from "./explainIcons.js";
 import { attachComposerResize } from "./composerResize.js";
 import { paintSendButton } from "./sendButton.js";
+import { createThinkingHint, thinkingLabel } from "./thinkingHint.js";
 import {
   appendMessage,
   appendToolStep,
@@ -26,8 +27,8 @@ type ExplainMessage = {
   created_at?: string;
 };
 
-type ModelKind = "text" | "image" | "video" | "audio";
-const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio"];
+type ModelKind = "text" | "image" | "video" | "audio" | "search";
+const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio", "search"];
 
 type PendingImage = { previewUrl: string; mime: "image/png" | "image/jpeg"; base64: string };
 type PendingVideo = { previewUrl: string; mime: "video/mp4" | "video/webm" | "video/quicktime"; base64: string };
@@ -135,6 +136,15 @@ export function mountExplainPane(): ExplainPane {
   let paintingPicker = false;
   let runKey: string | null = null;
   let runPhase = "";
+  /**
+   * This session's explain is running: the composer is folded and its placeholder carries the
+   * phase ("思考中……"), so the run line above it stays hidden. There is no ask_user here, so it
+   * stays folded until the run ends.
+   */
+  let thinking = false;
+  let statusIsRun = false;
+  const idlePlaceholder = input.placeholder;
+  const thinkingHint = createThinkingHint(input);
 
   function layout(): void {
     const sidebar = document.getElementById("sidebar");
@@ -159,9 +169,13 @@ export function mountExplainPane(): ExplainPane {
     board.scrollTop = board.scrollHeight;
   }
 
-  function setStatus(text: string, busy = false): void {
+  /** `run`: the text is the run phase. Errors and notices pass false and always show. */
+  function setStatus(text: string, busy = false, run = false): void {
+    const folded = run && thinking && Boolean(text);
     statusEl.textContent = text;
-    statusEl.hidden = !busy || !text;
+    statusEl.hidden = !busy || !text || folded;
+    statusIsRun = run && Boolean(text);
+    if (folded) thinkingHint.show(thinkingLabel(text));
     pad();
   }
 
@@ -295,6 +309,15 @@ export function mountExplainPane(): ExplainPane {
     lockNote.hidden = !elsewhere;
     lockNote.textContent = "另一个会话的解释正在进行";
     composer.classList.toggle("is-locked", elsewhere);
+    thinking = here;
+    composer.classList.toggle("is-thinking", thinking);
+    if (thinking) {
+      thinkingHint.show(thinkingLabel(runPhase));
+      if (statusIsRun) statusEl.hidden = true;
+    } else {
+      thinkingHint.hide();
+      input.placeholder = idlePlaceholder;
+    }
     const empty = !input.value.trim() && pending.length === 0 && pendingVideos.length === 0;
     sendBtn.disabled = elsewhere || (blocked && !here) || (!here && empty);
     paintSendButton(sendBtn, here ? "stop" : "send");
@@ -315,7 +338,7 @@ export function mountExplainPane(): ExplainPane {
       layout();
       showBoard(slot.board);
       const runningHere = runKey === current.sessionId;
-      setStatus(runningHere ? runPhase : "", runningHere);
+      setStatus(runningHere ? runPhase : "", runningHere, true);
     }
     paintComposer();
   }
@@ -464,7 +487,7 @@ export function mountExplainPane(): ExplainPane {
     if (!slot) return;
     if (event.type === "status") {
       runPhase = PHASE[event.phase || ""] ?? event.phase ?? "";
-      if (current?.sessionId === sessionId) setStatus(runPhase, true);
+      if (current?.sessionId === sessionId) setStatus(runPhase, true, true);
       return;
     }
     if (event.type === "text" && event.delta) {
@@ -572,7 +595,7 @@ export function mountExplainPane(): ExplainPane {
     stick(slot.board);
     runKey = current.sessionId;
     runPhase = "思考中……";
-    setStatus(runPhase, true);
+    setStatus(runPhase, true, true);
     paintComposer();
     drafts.delete(current.sessionId);
     try {

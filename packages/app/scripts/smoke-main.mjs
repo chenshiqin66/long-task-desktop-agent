@@ -10,9 +10,12 @@ console.log("electron module resolvable");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = [
   ["test-run-event-gate.mjs"],
+  ["test-stream-paint.mjs"],
   ["test-escape-key.mjs"],
   ["test-image-viewer.mjs"],
   ["test-send-button.mjs"],
+  ["test-thinking-hint.mjs"],
+  ["test-error-summary.mjs"],
   ["test-add-button.mjs"],
   ["test-sticky-turns.mjs"],
   ["test-memory-view.mjs"],

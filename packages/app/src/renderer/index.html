@@ -214,8 +214,12 @@
                   <option value="image">生图</option>
                   <option value="video">生视频</option>
                   <option value="audio">生音</option>
+                  <option value="search">网搜</option>
                 </select>
               </label>
+              <p id="model-kind-hint" class="models-intro" hidden>
+                网搜模型只给 web_search 用，不会出现在输入框的模型选择里。它和对话模型各有一个「当前」，可以同时使用。接口按 DeepSeek 的搜索接口格式请求，Model 可以留空。
+              </p>
               <label class="field">Base URL
                 <input id="model-baseUrl" type="url" autocomplete="off" />
               </label>

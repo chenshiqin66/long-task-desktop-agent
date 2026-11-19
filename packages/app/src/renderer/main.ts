@@ -20,6 +20,12 @@ import {
   setToolDetailContent,
 } from "./ui.js";
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
+import {
+  discardStreamPaint,
+  paintStream,
+  resetStreamTarget as resetStreamPaintTarget,
+  type StreamPaintEnv,
+} from "./streamPaint.js";
 import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
 import { attachMcpLibrary } from "./mcp.js";
@@ -37,6 +43,7 @@ import {
 } from "./memoryView.js";
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { paintSendButton } from "./sendButton.js";
+import { createThinkingHint, thinkingLabel } from "./thinkingHint.js";
 import { paintAddButtons } from "./addButton.js";
 import { attachComposerResize } from "./composerResize.js";
 import { mountQuestionNav } from "./questionNav.js";
@@ -115,7 +122,7 @@ declare global {
         active: string | null;
         labels: Record<string, string>;
       }>;
-      createSession(title?: string): Promise<{ session_id: string; title?: string }>;
+      createSession(title?: string, workspace?: string): Promise<{ session_id: string; title?: string }>;
       listSessions(): Promise<Array<{ session_id: string; title?: string; updated_at?: string }>>;
       loadMessages(sessionId: string): Promise<
         Array<{
@@ -361,6 +368,10 @@ let currentSessionTitle = "";
 let hasWorkspace = false;
 let workspacePaths: string[] = [];
 let workspaceLabels: Record<string, string> = {};
+/**
+ * The sidebar-selected workspace: its row is lit, 新建 creates sessions in it, and the main process's
+ * default workspace follows it. Not necessarily the workspace of the session on screen (see viewWorkspace).
+ */
 let activeWorkspace: string | null = null;
 /** Workspace of the session currently shown. May differ while another workspace's turn is running. */
 let viewWorkspace: string | null = null;
@@ -382,6 +393,13 @@ type StashedSessionView = { holder: HTMLElement; scrollTop: number; followTail: 
 const sessionViews = new Map<string, StashedSessionView>();
 const sessionLoads = new Map<string, Promise<void>>();
 let statusIsRun = false;
+/**
+ * The main agent is working and not waiting for you: the composer is folded to one row and its
+ * placeholder carries the phase ("思考中……"), so the status line above it stays hidden.
+ * Asking (`ask_user`) opens the composer again.
+ */
+let composerThinking = false;
+const thinkingHint = createThinkingHint(inputEl);
 let creatingSession = false;
 
 type RunPrompt =
@@ -517,10 +535,18 @@ const storeInflight = new Map<string, object>();
 let sessionListEpoch = 0;
 const STORE_STRING_PREVIEW = 1600;
 
+const streamPaintEnv: StreamPaintEnv<HTMLElement> = {
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (handle) => cancelAnimationFrame(handle),
+  render: (el, text) => {
+    const stick = followTail && !!el.closest("#messages");
+    setRichText(el, text, true);
+    if (stick) revealTail();
+  },
+};
+
 function cancelStreamRichPaint(run: RunPaint | null = drawing): void {
-  if (!run?.streamRaf) return;
-  cancelAnimationFrame(run.streamRaf);
-  run.streamRaf = 0;
+  if (run) discardStreamPaint(run, streamPaintEnv);
 }
 
 function distanceFromTail(): number {
@@ -550,28 +576,12 @@ function keepTail(mutate: () => void): void {
 }
 
 function paintStreamRich(immediate = false, run: RunPaint | null = drawing): void {
-  if (!run?.streamingEl) return;
-  const paint = () => {
-    run.streamRaf = 0;
-    if (!run.streamingEl) return;
-    const stick = followTail && !!run.streamingEl.closest("#messages");
-    setRichText(run.streamingEl, run.streamBuffer, true);
-    if (stick) revealTail();
-  };
-  if (immediate) {
-    cancelStreamRichPaint(run);
-    paint();
-    return;
-  }
-  if (run.streamRaf) return;
-  run.streamRaf = requestAnimationFrame(paint);
+  if (run) paintStream(run, streamPaintEnv, immediate);
 }
 
+/** Paints a still-pending frame before dropping it, so the tail of a reply is never lost. */
 function resetStreamTarget(el: HTMLElement | null = null, run: RunPaint | null = drawing): void {
-  if (!run) return;
-  cancelStreamRichPaint(run);
-  run.streamingEl = el;
-  run.streamBuffer = "";
+  if (run) resetStreamPaintTarget(run, streamPaintEnv, el);
 }
 
 /** Soft-truncate long strings so jsonl dumps stay readable in the dock. */
@@ -1362,9 +1372,11 @@ function errText(err: unknown): string {
 }
 
 function setStatus(text: string, busy = false, source: "page" | "run" = "page"): void {
+  const folded = source === "run" && composerThinking && Boolean(text);
   statusEl.textContent = text || "";
-  statusEl.hidden = !busy || !text;
+  statusEl.hidden = !busy || !text || folded;
   statusIsRun = source === "run" && Boolean(text);
+  if (folded) thinkingHint.show(thinkingLabel(text));
   syncHomeBar();
   syncFloatPad();
 }
@@ -1505,13 +1517,27 @@ function updateChrome(): void {
   btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose || !hasDraft;
   paintSendButton(btnSend, asking ? "answer" : stopping ? "stopping" : stopHere ? "stop" : "send");
   btnNew.disabled = !hasWorkspace || creatingSession;
+  // Sessions are created in the active workspace; say which one, so 新建 never lands somewhere unexpected.
+  btnNew.title = activeWorkspace ? `在「${workspaceLabel(activeWorkspace)}」新建会话` : "请先选择工作区";
   inputEl.disabled = creatingSession || (running && !asking && !wakeHere);
   composerEl.classList.remove("is-locked");
   composerEl.classList.remove("has-draft");
   composerLockNote.hidden = true;
-  inputEl.placeholder = asking
-    ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
-    : "向CSQ-Agent发送消息...";
+  // Folded while the agent works; open again for ask_user, when a wake-up turn takes input, and when idle.
+  composerThinking = running && !asking && !wakeHere;
+  composerEl.classList.toggle("is-thinking", composerThinking);
+  if (composerThinking) {
+    thinkingHint.show(thinkingLabel(run?.liveStatus));
+    if (statusIsRun && !statusEl.hidden) {
+      statusEl.hidden = true;
+      syncFloatPad();
+    }
+  } else {
+    thinkingHint.hide();
+    inputEl.placeholder = asking
+      ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
+      : "向CSQ-Agent发送消息...";
+  }
   if (running && run?.liveStatus) {
     setStatus(run.liveStatus, true, "run");
   }
@@ -1781,6 +1807,8 @@ function closeSessionMenus(): void {
   });
 }
 
+const MENU_PLUS =
+  '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
 const MENU_FOLDER =
   '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.8 4.2h4.1l1.2 1.4H14.2v6.8a.8.8 0 0 1-.8.8H2.6a.8.8 0 0 1-.8-.8z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
 const MENU_PENCIL =
@@ -1966,6 +1994,12 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   pathBtn.setAttribute("aria-label", open ? `折叠 ${label}` : `展开 ${label}`);
   pathBtn.onclick = (ev) => {
     ev.preventDefault();
+    // Clicking an unselected workspace selects it; the session on screen stays put.
+    // Clicking the selected one folds/unfolds it.
+    if (!sameWorkspace(path, activeWorkspace)) {
+      void selectWorkspace(path).catch(showStatusError);
+      return;
+    }
     toggleWorkspaceList(path, open);
   };
 
@@ -1994,6 +2028,10 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   pop.setAttribute("role", "menu");
   pop.hidden = true;
 
+  const newSessionItem = menuRow(MENU_PLUS, "新建会话", () => {
+    closeSessionMenus();
+    void openNewChatIn(path).catch(showStatusError);
+  });
   const openFolder = menuRow(MENU_FOLDER, "打开文件夹", () => {
     closeSessionMenus();
     void window.agent.openWorkspaceFolder(path).catch(showStatusError);
@@ -2005,7 +2043,7 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   const removeItem = menuRow(MENU_TRASH, "从列表中移除", () => {
     /* replaced when the menu opens, after the session count is known */
   });
-  pop.append(openFolder, renameItem, removeItem);
+  pop.append(newSessionItem, openFolder, renameItem, removeItem);
 
   more.onclick = (ev) => {
     ev.preventDefault();
@@ -2026,6 +2064,46 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   block.append(row, ul);
   treesEl.appendChild(block);
   return ul;
+}
+
+/**
+ * Select `path` in the sidebar: its row lights up, it expands, and 新建 creates sessions there.
+ * The session on screen and the lit session row do not move.
+ */
+async function selectWorkspace(path: string): Promise<void> {
+  if (creatingSession) {
+    setStatus("正在新建会话，请稍后再切换工作区", true);
+    return;
+  }
+  workspaceExpanded.set(path, true);
+  void window.agent.setWorkspaceExpanded(path, true).catch(showStatusError);
+  if (sameWorkspace(path, activeWorkspace)) {
+    await refreshSessions();
+    return;
+  }
+  const previous = activeWorkspace;
+  // A blank chat belongs to the selected workspace, so it moves with the selection.
+  // Its draft is saved under the old workspace first and restored under the new one.
+  const onBlank = !currentSessionId && previous != null;
+  if (onBlank) {
+    viewWorkspace = viewWorkspace ?? previous;
+    rememberComposer();
+  }
+  await window.agent.activateWorkspace(path);
+  activeWorkspace = path;
+  hasWorkspace = true;
+  if (onBlank) {
+    viewWorkspace = path;
+    restoreComposer();
+  }
+  await refreshSessions();
+  updateChrome();
+}
+
+/** 新建 in `path`: select it, then open a blank chat there. */
+async function openNewChatIn(path: string): Promise<void> {
+  await selectWorkspace(path);
+  await showNewPage();
 }
 
 function toggleWorkspaceList(path: string, open: boolean): void {
@@ -2266,6 +2344,8 @@ async function showSession(workspace: string, sessionId: string, title: string):
   rememberComposer();
   stashVisibleView();
   try {
+    // Opening a session selects the workspace it lives in (its row lights up). Not guarded by creatingSession:
+    // session creation already passes its workspace explicitly, so the selection can move safely.
     if (!sameWorkspace(workspace, activeWorkspace)) {
       await window.agent.activateWorkspace(workspace);
       activeWorkspace = workspace;
@@ -2534,19 +2614,16 @@ document.getElementById("btn-workspace")!.onclick = async () => {
       setStatus("未增加工作区");
       return;
     }
-    const first = workspacePaths.length === 0;
     workspacePaths = added.paths;
-    activeWorkspace = added.active;
-    hasWorkspace = Boolean(activeWorkspace);
-    workspaceExpanded.set(added.added, true);
-    void window.agent.setWorkspaceExpanded(added.added, true).catch(showStatusError);
-    if (first) {
-      currentSessionId = null;
-      viewWorkspace = null;
-      currentSessionTitle = "";
-      messagesEl.innerHTML = "";
+    if (sameWorkspace(added.added, activeWorkspace)) {
+      // Already the active workspace: keep the current view, just make sure it is open.
+      workspaceExpanded.set(added.added, true);
+      void window.agent.setWorkspaceExpanded(added.added, true).catch(showStatusError);
+      await refreshSessions();
+    } else {
+      // Newly added (or already listed but not selected): select it and open a blank chat there.
+      await openNewChatIn(added.added);
     }
-    await refreshSessions();
     setStatus(added.already ? "这个工作区已经在列表里" : "", false);
     syncEmptyState();
     updateChrome();
@@ -2773,7 +2850,8 @@ async function ensureSession(): Promise<string | null> {
   creatingSession = true;
   updateChrome();
   try {
-    const meta = await window.agent.createSession("会话");
+    // A blank chat belongs to the selected workspace; create the session there explicitly.
+    const meta = await window.agent.createSession("会话", activeWorkspace ?? undefined);
     currentSessionId = meta.session_id;
     viewWorkspace = activeWorkspace;
     currentSessionTitle = meta.title || "会话";
@@ -2901,15 +2979,6 @@ async function reask(
   if (trimmed && !(await acceptSkillTokens(trimmed))) return;
   const workspace = viewWorkspace ?? activeWorkspace;
   if (!workspace) return;
-  try {
-    if (!sameWorkspace(workspace, activeWorkspace)) {
-      await window.agent.activateWorkspace(workspace);
-      activeWorkspace = workspace;
-    }
-  } catch (err) {
-    showStatusError(err);
-    return;
-  }
   const sessionId = await ensureSession();
   if (!sessionId) return;
   const preview = await imageDataUrls(workspace, sessionId, images);
@@ -2994,15 +3063,6 @@ async function sendMessage(): Promise<void> {
   const draftKey = currentComposerKey();
   const workspace = viewWorkspace ?? activeWorkspace;
   if (!workspace) return;
-  try {
-    if (!sameWorkspace(workspace, activeWorkspace)) {
-      await window.agent.activateWorkspace(workspace);
-      activeWorkspace = workspace;
-    }
-  } catch (err) {
-    showStatusError(err);
-    return;
-  }
   const sessionId = await ensureSession();
   if (!sessionId) return;
   composerDrafts.delete(draftKey);
@@ -3850,6 +3910,10 @@ function applyTranscript(host: HTMLElement, e: {
 function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
   const hostEl = run.streamingEl?.closest(".messages");
   const host = hostEl instanceof HTMLElement ? hostEl : onScreen ? messagesEl : ensureSessionView(runKeyOf(run.workspace, run.sessionId)).holder;
+  // Flush the last throttled paint for every end reason. resetStreamTarget() below cancels the
+  // pending requestAnimationFrame, so without this the tail deltas that arrived in the same frame
+  // as `done` never reach the DOM and the reply looks cut off (the stored message is complete).
+  if (run.streamingEl && run.streamBuffer) paintStreamRich(true, run);
   if (reason === "cancelled" && run.streamingEl && !run.streamBuffer.trim()) {
     run.streamingEl.textContent = CANCELLED_TURN_NOTICE;
     run.streamingEl.closest(".msg")?.classList.add("is-cancelled");
@@ -3862,8 +3926,6 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
     discardImagePlaceholder(run);
   } else if (reason === "completed") {
     void fillGeneratedOnDone(run, host);
-  } else if (run.streamingEl && run.streamBuffer) {
-    paintStreamRich(true, run);
   }
   resetStreamTarget(null, run);
   run.prompt = null;

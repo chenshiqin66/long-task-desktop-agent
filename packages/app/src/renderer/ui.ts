@@ -1,4 +1,5 @@
 import { formatMarkdown, linkifyPlainText } from "./markdown.js";
+import { errorSummary } from "./errorSummary.js";
 import { shouldReleaseStuck } from "./stickyTurns.js";
 
 export { escapeHtml, formatMarkdown, looksOpenable, linkifyPlainText } from "./markdown.js";
@@ -263,6 +264,9 @@ export function appendMessage(
   content: string,
   opts?: { rich?: boolean; images?: string[]; videos?: string[]; messageId?: string; at?: string },
 ) {
+  if (role === "error") return appendErrorRow(container, content);
+  // The next question means the error has been dealt with; a new failure opens its own row.
+  if (role === "user") foldErrorRows(container);
   const div = el("div", { class: `msg ${role}` });
   if (opts?.messageId) div.dataset.messageId = opts.messageId;
   appendMediaRows(div, opts?.images, opts?.videos);
@@ -679,6 +683,29 @@ export function appendToolStep(
   else placeTranscript(container, wrap, false);
   if (!wrap.classList.contains("tool-step-ask")) adoptToolGroup(wrap);
   return body;
+}
+
+/**
+ * A failure is a row like a tool row, in red. The newest one stays open so the cause is readable;
+ * `foldErrorRows` closes it once the next question is sent. It is never grouped with tool rows.
+ */
+function appendErrorRow(container: HTMLElement, raw: string): HTMLElement {
+  const wrap = el("div", { class: "msg tool-step tool-step-ask error-step is-error" });
+  const details = document.createElement("details");
+  details.open = true;
+  const summary = el("summary", { class: "tool-summary" }, errorSummary(raw));
+  const body = el("div", { class: "tool-detail" });
+  setToolDetailContent(body, `错误：${raw}`);
+  details.append(summary, body);
+  wrap.append(details);
+  placeTranscript(container, wrap, false);
+  return body;
+}
+
+export function foldErrorRows(container: HTMLElement): void {
+  container.querySelectorAll(".error-step > details[open]").forEach((node) => {
+    (node as HTMLDetailsElement).open = false;
+  });
 }
 
 const PERMISSION_CMD_PREVIEW = 2400;

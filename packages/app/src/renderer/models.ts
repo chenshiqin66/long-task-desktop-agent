@@ -1,8 +1,8 @@
 import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelect } from "./composerModelFit.js";
 
-type ModelKind = "text" | "image" | "video" | "audio";
+type ModelKind = "text" | "image" | "video" | "audio" | "search";
 
-const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio"];
+const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio", "search"];
 
 type StoredModel = {
   id: string;
@@ -19,8 +19,26 @@ type StoredConfig = {
   apiKey: string;
   models?: StoredModel[];
   currentModelId?: string;
+  /** web_search's model. Separate from currentModelId: both are in use at the same time. */
+  currentSearchModelId?: string;
   [key: string]: unknown;
 };
+
+export type KindedModel = { id: string; kind?: unknown };
+
+/** Models the composer picker lists. Search models are left out: they only serve web_search. */
+export function chatModelsOf<T extends KindedModel>(models: readonly T[] | undefined): T[] {
+  return (models ?? []).filter((entry) => parseModelKind(entry.kind) !== "search");
+}
+
+export function searchModelsOf<T extends KindedModel>(models: readonly T[] | undefined): T[] {
+  return (models ?? []).filter((entry) => parseModelKind(entry.kind) === "search");
+}
+
+/** The id in use within one pool: the saved id when it belongs to the pool, else the pool's first. */
+export function inUseId(pool: readonly KindedModel[], savedId: string | undefined): string | undefined {
+  return (pool.find((entry) => entry.id === savedId) ?? pool[0])?.id;
+}
 
 export interface ModelsHost {
   onOpen: () => void;
@@ -109,9 +127,18 @@ export function attachModelsLibrary(
   const modelInput = page.querySelector("#model-model") as HTMLInputElement;
   const apiKeyInput = page.querySelector("#model-apiKey") as HTMLInputElement;
   const cancelBtn = page.querySelector("#models-cancel") as HTMLButtonElement;
+  const kindHint = page.querySelector("#model-kind-hint") as HTMLElement | null;
 
   let editing: string | null = null;
   let painting = false;
+
+  /** The search kind has no model name to fill, and its Base URL has a default worth showing. */
+  function syncKindFields(): void {
+    const search = parseModelKind(kindSelect.value) === "search";
+    modelInput.placeholder = search ? "可留空：搜索接口不使用模型名" : "";
+    baseUrlInput.placeholder = search ? "https://api.deepseek.com" : "";
+    if (kindHint) kindHint.hidden = !search;
+  }
 
   const showNote = (err: unknown) => {
     note.hidden = false;
@@ -122,12 +149,14 @@ export function attachModelsLibrary(
     editing = null;
     form.hidden = true;
     form.reset();
+    syncKindFields();
   }
 
   function openForm(entry?: StoredModel): void {
     editing = entry?.id ?? null;
     nameInput.value = entry?.name ?? "";
     kindSelect.value = modelKindOf(entry);
+    syncKindFields();
     baseUrlInput.value = entry?.baseUrl ?? "";
     modelInput.value = entry?.model ?? "";
     apiKeyInput.value = entry?.apiKey ?? "";
@@ -136,8 +165,9 @@ export function attachModelsLibrary(
   }
 
   function paintPicker(cfg: StoredConfig | null): void {
-    const models = cfg?.models ?? [];
-    const currentId = cfg?.currentModelId ?? models[0]?.id ?? "";
+    // Search models never appear here: they only serve web_search and have their own "use" in the models page.
+    const models = chatModelsOf(cfg?.models);
+    const currentId = inUseId(models, cfg?.currentModelId) ?? "";
     painting = true;
     select.replaceChildren();
     if (!models.length) {
@@ -188,7 +218,11 @@ export function attachModelsLibrary(
   }
 
   function modelRow(entry: StoredModel, cfg: StoredConfig): HTMLElement {
-    const current = entry.id === (cfg.currentModelId ?? cfg.models?.[0]?.id);
+    // A search model has its own "current", so one chat model and one search model are in use at once.
+    const isSearch = modelKindOf(entry) === "search";
+    const current = isSearch
+      ? entry.id === inUseId(searchModelsOf(cfg.models), cfg.currentSearchModelId)
+      : entry.id === inUseId(chatModelsOf(cfg.models), cfg.currentModelId);
     const row = document.createElement("article");
     row.className = current ? "mcp-row is-current-model" : "mcp-row";
     const main = document.createElement("div");
@@ -259,6 +293,11 @@ export function attachModelsLibrary(
     const models = cur.models ?? [];
     const chosen = models.find((entry) => entry.id === id);
     if (!chosen) throw new Error("找不到这个模型");
+    if (modelKindOf(chosen) === "search") {
+      // Only web_search's model changes. The chat model stays exactly as it was.
+      await persist({ ...cur, models, currentSearchModelId: chosen.id });
+      return;
+    }
     await persist({
       ...cur,
       models,
@@ -272,11 +311,9 @@ export function attachModelsLibrary(
   async function deleteModel(id: string): Promise<void> {
     const cur = (await loadConfig()) ?? emptyConfig();
     const models = (cur.models ?? []).filter((entry) => entry.id !== id);
-    const current =
-      cur.currentModelId && cur.currentModelId !== id
-        ? models.find((entry) => entry.id === cur.currentModelId)
-        : undefined;
-    const chosen = current ?? models[0];
+    // The chat model and the search model are picked from their own pools.
+    const chat = chatModelsOf(models);
+    const chosen = chat.find((entry) => entry.id === cur.currentModelId) ?? chat[0];
     await persist({
       ...cur,
       models,
@@ -284,6 +321,7 @@ export function attachModelsLibrary(
       baseUrl: chosen?.baseUrl ?? "",
       model: chosen?.model ?? "",
       apiKey: chosen?.apiKey ?? "",
+      currentSearchModelId: inUseId(searchModelsOf(models), cur.currentSearchModelId),
     });
   }
 
@@ -317,6 +355,7 @@ export function attachModelsLibrary(
   };
 
   cancelBtn.onclick = () => closeForm();
+  kindSelect.addEventListener("change", syncKindFields);
 
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
@@ -325,26 +364,30 @@ export function attachModelsLibrary(
       const baseUrl = baseUrlInput.value.trim();
       const model = modelInput.value.trim();
       const apiKey = apiKeyInput.value.trim();
+      const kind = parseModelKind(kindSelect.value);
       if (!name) throw new Error("请填写显示名");
       if (!baseUrl) throw new Error("请填写 Base URL");
-      if (!model) throw new Error("请填写 Model");
+      // The search API takes no model name, but it cannot work without a key.
+      if (kind !== "search" && !model) throw new Error("请填写 Model");
+      if (kind === "search" && !apiKey) throw new Error("网搜模型需要填写 API Key");
       const cur = (await loadConfig()) ?? emptyConfig();
       const models = [...(cur.models ?? [])];
       const id = editing ?? newModelId();
-      const entry: StoredModel = { id, name, baseUrl, model, apiKey, kind: parseModelKind(kindSelect.value) };
+      const entry: StoredModel = { id, name, baseUrl, model, apiKey, kind };
       const index = models.findIndex((item) => item.id === id);
       if (index >= 0) models[index] = entry;
       else models.push(entry);
-      const currentId =
-        cur.currentModelId && models.some((item) => item.id === cur.currentModelId) ? cur.currentModelId : id;
-      const chosen = models.find((item) => item.id === currentId) ?? entry;
+      // A new chat model becomes current when none is. A search model never takes over as the chat model.
+      const chat = chatModelsOf(models);
+      const chosen = chat.find((item) => item.id === cur.currentModelId) ?? (kind === "search" ? chat[0] : entry);
       await persist({
         ...cur,
         models,
-        currentModelId: chosen.id,
-        baseUrl: chosen.baseUrl,
-        model: chosen.model,
-        apiKey: chosen.apiKey,
+        currentModelId: chosen?.id,
+        baseUrl: chosen?.baseUrl ?? "",
+        model: chosen?.model ?? "",
+        apiKey: chosen?.apiKey ?? "",
+        currentSearchModelId: inUseId(searchModelsOf(models), cur.currentSearchModelId),
       });
       closeForm();
     });

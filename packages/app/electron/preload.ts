@@ -33,7 +33,8 @@ contextBridge.exposeInMainWorld("agent", {
   renameWorkspace: (path: string, name: string) =>
     ipcRenderer.invoke("agent:renameWorkspace", path, name),
   removeWorkspace: (path: string) => ipcRenderer.invoke("agent:removeWorkspace", path),
-  createSession: (title?: string) => ipcRenderer.invoke("agent:createSession", title),
+  createSession: (title?: string, workspace?: string) =>
+    ipcRenderer.invoke("agent:createSession", title, workspace),
   listSessions: () => ipcRenderer.invoke("agent:listSessions"),
   loadMessages: (sessionId: string) => ipcRenderer.invoke("agent:loadMessages", sessionId),
   loadSubagentSteps: (sessionId: string) => ipcRenderer.invoke("agent:loadSubagentSteps", sessionId),

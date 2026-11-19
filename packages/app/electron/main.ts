@@ -759,9 +759,11 @@ app.whenReady().then(async () => {
     return { paths, active: workspacePath, labels };
   });
 
-  ipcMain.handle("agent:createSession", async (_e, title?: string) => {
-    if (!workspacePath) throw new Error("No workspace selected");
-    return new SessionStore(workspacePath).createSession(title);
+  ipcMain.handle("agent:createSession", async (_e, title?: string, workspaceRaw?: unknown) => {
+    const workspace =
+      typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
+    if (!workspace) throw new Error("No workspace selected");
+    return new SessionStore(workspace).createSession(title);
   });
   ipcMain.handle("agent:listSessions", async () => {
     if (!workspacePath) return [];

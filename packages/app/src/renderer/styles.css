@@ -2085,8 +2085,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 /* Assistant answers + tables track the main pane when the window grows. */
 .msg.assistant,
 .msg.tool-step,
-.msg.tool,
-.msg.error {
+.msg.tool {
   max-width: 100%;
   width: 100%;
 }
@@ -2631,16 +2630,25 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   pointer-events: none;
 }
 
-.msg.error .msg-role {
+/* A failure: a folded row like a tool row, red. Open, it shows the full text in the red box. */
+.tool-step.error-step > details::before {
+  background: var(--danger);
+}
+
+.tool-step.error-step > details > .tool-summary::before {
   color: var(--danger);
 }
 
-.msg.error .msg-body {
+.error-step .tool-detail {
+  margin: 4px 10px 8px 12px;
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--danger-soft);
   color: var(--danger);
   border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  line-height: 1.5;
 }
 
 .float-stack {
@@ -3004,7 +3012,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   display: block;
 }
 
-:is(#composer, #explain-composer).is-compact .composer-resize {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-resize {
   display: none;
 }
 
@@ -3462,23 +3470,26 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   line-height: 24px;
 }
 
+/* Must set the background here: the generic hover rule above makes it transparent, which hid the white label. */
 :is(#btn-send, #explain-send).is-answer:hover:not(:disabled) {
-  filter: brightness(1.05);
+  background: var(--teal);
+  color: #fff;
+  filter: none;
 }
 
-:is(#composer, #explain-composer).is-compact :is(#btn-send, #explain-send):not(.is-answer) {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#btn-send, #explain-send):not(.is-answer) {
   width: 26px;
   height: 26px;
   min-width: 26px;
 }
 
-:is(#composer, #explain-composer).is-compact :is(#btn-send, #explain-send):not(.is-answer) svg {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#btn-send, #explain-send):not(.is-answer) svg {
   width: 26px;
   height: 26px;
 }
 
 /* One row: placeholder and the buttons. The other pane stays like this until it is clicked. */
-:is(#composer, #explain-composer).is-compact {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3487,8 +3498,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   box-shadow: var(--shadow-soft);
 }
 
-:is(#composer, #explain-composer).is-compact .composer-images,
-:is(#composer, #explain-composer).is-compact .btn-image,
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-images,
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .btn-image,
 #explain-composer .composer-images,
 #explain-composer .btn-image {
   display: none;
@@ -3498,12 +3509,17 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   display: none;
 }
 
-:is(#composer, #explain-composer).is-compact .composer-input {
+/* The phase moved from the status line into the placeholder; keep its colour. */
+:is(#composer, #explain-composer).is-thinking :is(#input, #explain-input)::placeholder {
+  color: var(--teal);
+}
+
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-input {
   flex: 1 1 auto;
   grid-column: auto;
 }
 
-:is(#composer, #explain-composer).is-compact :is(#input, #explain-input) {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#input, #explain-input) {
   display: block;
   box-sizing: border-box;
   height: 26px;
@@ -3516,23 +3532,23 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow: hidden;
 }
 
-:is(#composer, #explain-composer).is-compact :is(#input, #explain-input)::placeholder {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#input, #explain-input)::placeholder {
   line-height: 26px;
 }
 
-:is(#composer, #explain-composer).is-compact .composer-actions {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-actions {
   flex: none;
   grid-column: auto;
   gap: 2px;
   justify-content: flex-end;
 }
 
-:is(#composer, #explain-composer).is-compact .composer-model,
-:is(#composer, #explain-composer).is-compact .composer-model-empty {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-model,
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-model-empty {
   display: none;
 }
 
-:is(#composer, #explain-composer).is-compact.is-locked.has-draft .composer-lock-note {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking).is-locked.has-draft .composer-lock-note {
   position: absolute;
   margin: 0;
   max-width: 100%;
@@ -4022,7 +4038,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .mcp-summary {
-  flex: 1;
+  /* A zero basis never wraps the row, so a narrow window squeezes the URL to one character per line. */
+  flex: 1 1 12rem;
   min-width: 0;
   color: var(--ink-muted);
 }
