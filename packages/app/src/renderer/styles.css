@@ -2770,6 +2770,46 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   box-shadow: var(--shadow-soft);
 }
 
+.ask-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ask-toggle {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-btn-lg);
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent-ink);
+}
+
+.ask-preview {
+  display: none;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ask-card.is-folded .ask-preview {
+  display: block;
+}
+
+.ask-card.is-folded .ask-body {
+  display: none;
+}
+
 .ask-title {
   font-family: var(--font-ui);
   font-size: var(--text);

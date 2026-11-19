@@ -779,6 +779,12 @@ export function appendPermissionCard(
   return card;
 }
 
+/**
+ * The question the user folded. Repainting the same question keeps it folded;
+ * a new question always opens expanded.
+ */
+let foldedAskRequestId: string | null = null;
+
 export function appendAskCard(
   container: HTMLElement,
   opts: {
@@ -790,9 +796,18 @@ export function appendAskCard(
   },
 ): HTMLElement {
   const card = el("div", { class: "ask-card", "data-request-id": opts.requestId });
+  const folded = foldedAskRequestId === opts.requestId;
+  card.classList.toggle("is-folded", folded);
   const title = el("div", { class: "ask-title" }, "需要你回答后才能继续");
+  const toggle = el("button", { type: "button", class: "ask-toggle" }, folded ? "▲ 展开" : "▼ 收起");
+  toggle.setAttribute("aria-expanded", String(!folded));
+  const head = el("div", { class: "ask-head" });
+  head.append(title, toggle);
+  // Visible only while folded, so the question you are looking past is still named.
+  const preview = el("p", { class: "ask-preview" }, opts.question);
+  const body = el("div", { class: "ask-body" });
   const question = el("p", { class: "ask-question" }, opts.question);
-  card.append(title, question);
+  body.append(question);
   if (opts.options.length) {
     const choices = el("div", { class: "ask-options" });
     for (const option of opts.options) {
@@ -800,7 +815,7 @@ export function appendAskCard(
       btn.onclick = () => opts.onAnswer(option);
       choices.append(btn);
     }
-    card.append(choices);
+    body.append(choices);
   }
   const hint = el(
     "p",
@@ -813,7 +828,15 @@ export function appendAskCard(
   stop.onclick = () => opts.onCancel();
   const row = el("div", { class: "ask-row" });
   row.append(hint, stop);
-  card.append(row);
+  body.append(row);
+  card.append(head, preview, body);
+  toggle.onclick = () => {
+    const nowFolded = !card.classList.contains("is-folded");
+    card.classList.toggle("is-folded", nowFolded);
+    toggle.textContent = nowFolded ? "▲ 展开" : "▼ 收起";
+    toggle.setAttribute("aria-expanded", String(!nowFolded));
+    foldedAskRequestId = nowFolded ? opts.requestId : null;
+  };
   container.hidden = false;
   container.appendChild(card);
   card.scrollIntoView({ block: "nearest", behavior: "smooth" });
