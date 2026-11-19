@@ -20,15 +20,15 @@
 
 | 工具 | 分级 | 要点 |
 | --- | --- | --- |
-| `read_file` | 自动 | 整个文件读进来，按 `maxReadChars` 截断 |
+| `read_file` | 自动 | 不带 `offset`/`limit` 时整个文件读进来，最多 `maxReadChars` 字（按行边界截断），多出的部分丢弃，截断处写明「读到第几行、共几行」，并让模型先用 `keyword_search` 找行号，再用 `offset`/`limit` 读那一段，不要从头翻页。带 `offset`（从 1 起）和可选 `limit` 时只读这一段，每行前带行号，末尾写明读到哪一行、共几行，不提示下一段；这一段被字数上限截断时才提示减少行数。`offset` 超出文件末尾会报错。小文件直接整读，不要加 `offset`/`limit`。同一轮里，和紧挨着的上一次调用完全相同的读取（中间没有别的调用）不再执行，只返回一句说明 |
 | `list_dir` | 自动 | 跳过名为 `node_modules`、`.git`、`.agent` 的子项 |
 | `keyword_search` | 自动 | 一次最多 8 个词，按字面、区分大小写；跳过大于 1,000,000 字节的文件；条数上限 `maxSearchResults` |
-| `web_search` | 自动 | 调 DeepSeek 搜索接口。`searchApiKey` 空着就用聊天的 API key；`count` 默认 8、最大 50；查询超过 128 字截断 |
+| `web_search` | 自动 | 调 DeepSeek 搜索接口。地址和密钥取自「模型」页里的网搜模型，与当前对话模型无关；`count` 默认 8、最大 50；查询超过 128 字截断 |
 | `read_skill` | 自动 | 读已安装技能的正文或附件，见 [技能](skills.md) |
 | `memory_read` | 自动 | 读记忆：不带 `name` 列出两个作用域的全部条目，带 `name` 返回那一条的全部字段和正文。主会话没有写记忆的工具，原因见 [主会话为什么不能写](memory.md#主会话为什么不能写)；子代理和解释侧栏没有这个工具 |
 | `task_create`、`task_list`、`task_get`、`task_update`、`task_delete`、`claim_task`、`complete_task` | 自动 | 只改本会话 `.agent` 里的任务清单，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
 | `ask_user` | 不经许可门 | 问题最长 2000 字。选项最多 6 个、每个最长 200 字，每条都是用户可能给出的回答，不是模型自己的下一步。回答最长 8000 字，只作为工具结果，界面不画成用户气泡 |
-| `write_file`、`str_replace`、`delete_file` | 确认 | 结果文件最长 500,000 字；`str_replace` 要求唯一匹配，否则传 `replace_all`，`new_string` 按字面写入；`delete_file` 不删目录 |
+| `write_file`、`str_replace`、`delete_file` | 确认 | 结果文件最长 500,000 字；`write_file` 缺 `content` 时报错、不写任何文件，传空字符串才是建空文件；`str_replace` 要求唯一匹配，否则传 `replace_all`，`new_string` 按字面写入；`delete_file` 不删目录 |
 | `run_skill_script` | 确认 | 只跑技能目录里的 `.py`、`.js`、`.mjs`、`.cjs`；参数是数组，最多 32 个、每个最长 2000 字，不经 shell |
 | `subagent` | explore 自动；worker 确认 | 派一个子代理，见 [子代理、任务清单与完成通知](subagents-and-tasks.md) |
 | `powershell` / `bash` | 看命令 | 命令最长 8000 字；超时 `bashTimeoutMs`；输出超过 `maxToolOutputChars` 时结束进程，返回带截断标记的输出，不算失败 |
@@ -37,7 +37,7 @@
 
 shell 命令的执行环境：Windows 上以 `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` 启动，命令按 UTF-16LE 编码传入，不经过命令行的引号转义。外层包装把输出编码设为 UTF-8，并把外部程序的非零退出码当作工具失败。其他系统用 `bash -lc`。工作目录是当前工作区，环境变量继承应用进程。标准输出和标准错误按 UTF-8 流解码。超时或取消时，已经拿到的输出留在结果里，这一次仍算失败。`run_skill_script` 同样如此。
 
-`web_search` 的地址：`searchBaseUrl` 有值时用它（以 `/tools/search` 或 `/v1` 结尾就直接接上，否则补 `/v1/tools/search`）；空着则由聊天的 Base URL 推出来，以 `/v1` 结尾时拼 `/tools/search`，否则拼 `/v1/tools/search`。密钥同样先看 `searchApiKey`，空着再用聊天的 API key。返回体只认 DeepSeek 的 JSON；对不上时这个工具报错。返回给模型的是编号的纯文本结果，工具说明要求模型用 `[n]` 标注来源。这两项写在 `config.json` 里，没有单独的设置界面。
+`web_search` 指向「模型」页里类型为「网搜」的那条模型，有几条时用标着「当前」的那一条。地址取这条的 Base URL：以 `/tools/search` 或 `/v1` 结尾就直接接上，否则补 `/v1/tools/search`；Base URL 留空则用 `https://api.deepseek.com`。密钥取这条的 API Key，Model 不参与请求，可以留空。搜索不看对话模型，也不会借用对话模型的地址和 key；没有可用的密钥时工具报错。没有网搜模型时，才读 `config.json` 里旧的 `searchBaseUrl` 和 `searchApiKey`。返回体只认 DeepSeek 的 JSON；对不上时这个工具报错。返回给模型的是编号的纯文本结果，工具说明要求模型用 `[n]` 标注来源。
 
 ## 文件工具的路径沙箱
 
