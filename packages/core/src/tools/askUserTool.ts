@@ -15,6 +15,21 @@ export interface AskUserCall {
   options: string[];
 }
 
+const KEYS_SHOWN_MAX = 8;
+
+/**
+ * Says what the model actually sent, so it can fix the call on the next try
+ * instead of guessing which key name was wrong.
+ */
+function missingQuestionError(args: object): string {
+  if ("question" in args) return "ask_user requires a non-empty question";
+  const keys = Object.keys(args);
+  if (!keys.length) return "ask_user requires a question (received no arguments)";
+  const shown = keys.slice(0, KEYS_SHOWN_MAX).map((key) => key.slice(0, 40));
+  const more = keys.length > KEYS_SHOWN_MAX ? `, and ${keys.length - KEYS_SHOWN_MAX} more` : "";
+  return `ask_user requires a question (received keys: ${shown.join(", ")}${more})`;
+}
+
 export function parseAskUserArgs(
   raw: unknown,
 ): { ok: true; call: AskUserCall } | { ok: false; error: string } {
@@ -32,7 +47,7 @@ export function parseAskUserArgs(
   }
 
   const question = String(args.question ?? "").trim();
-  if (!question) return { ok: false, error: "ask_user requires a question" };
+  if (!question) return { ok: false, error: missingQuestionError(args) };
   const options = Array.isArray(args.options)
     ? args.options
         .map((item) => String(item ?? "").trim().slice(0, OPTION_MAX))

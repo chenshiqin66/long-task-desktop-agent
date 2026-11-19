@@ -51,6 +51,36 @@ describe("ask_user", () => {
     expect(parseAskUserArgs({ question: "  " }).ok).toBe(false);
   });
 
+  it("names the keys it received when the question is missing", () => {
+    const wrongKey = parseAskUserArgs({ prompt: "用哪一种？" });
+    expect(wrongKey).toEqual({
+      ok: false,
+      error: "ask_user requires a question (received keys: prompt)",
+    });
+    expect(parseAskUserArgs({})).toEqual({
+      ok: false,
+      error: "ask_user requires a question (received no arguments)",
+    });
+    expect(parseAskUserArgs({ question: "  ", options: [] })).toEqual({
+      ok: false,
+      error: "ask_user requires a non-empty question",
+    });
+    const many = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`k${i}`, 1]));
+    const parsed = parseAskUserArgs(many);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.error).toBe(
+      "ask_user requires a question (received keys: k0, k1, k2, k3, k4, k5, k6, k7, and 2 more)",
+    );
+  });
+
+  it("names the keys when the arguments arrive as a JSON string", () => {
+    expect(parseAskUserArgs('{"prompt":"x"}')).toEqual({
+      ok: false,
+      error: "ask_user requires a question (received keys: prompt)",
+    });
+  });
+
   it("tells the model that each option is the user's answer, not the agent's prompt", () => {
     const params = askUserTool.definition.parameters as {
       properties?: { options?: { description?: string } };
