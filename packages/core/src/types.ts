@@ -158,7 +158,7 @@ export interface AgentConfig {
   maxToolOutputChars: number;
   maxReadChars: number;
   maxSearchResults: number;
-  /** Set only when config.json has a non-empty value. Empty keeps the chat URL and key. */
+  /** web_search target. Comes from the current search model, never from the chat model. Set only when non-empty. */
   searchBaseUrl?: string;
   searchApiKey?: string;
 }

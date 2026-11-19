@@ -9,35 +9,38 @@ function baseCtx(over: Partial<ToolContext> = {}): ToolContext {
     maxToolOutputChars: 8_000,
     maxReadChars: 50,
     maxSearchResults: 10,
-    apiKey: "sk-test",
-    llmBaseUrl: "https://api.deepseek.com/v1",
+    searchApiKey: "sk-test",
     ...over,
   };
 }
 
 describe("web_search", () => {
-  it("resolveWebSearchUrl derives /v1/tools/search from chat base", () => {
-    expect(resolveWebSearchUrl({ llmBaseUrl: "https://api.deepseek.com/v1" })).toBe(
-      "https://api.deepseek.com/v1/tools/search",
-    );
-    expect(resolveWebSearchUrl({ llmBaseUrl: "https://api.deepseek.com" })).toBe(
-      "https://api.deepseek.com/v1/tools/search",
-    );
+  it("resolveWebSearchUrl defaults to DeepSeek and ignores the chat model", () => {
+    expect(resolveWebSearchUrl({})).toBe("https://api.deepseek.com/v1/tools/search");
+    expect(resolveWebSearchUrl({ searchBaseUrl: "   " })).toBe("https://api.deepseek.com/v1/tools/search");
     expect(resolveWebSearchUrl({ searchBaseUrl: "https://gw.example/v1" })).toBe(
       "https://gw.example/v1/tools/search",
     );
-    expect(resolveWebSearchUrl({ searchBaseUrl: "   " })).toBe("https://api.deepseek.com/v1/tools/search");
+    expect(resolveWebSearchUrl({ searchBaseUrl: "https://gw.example/v1/tools/search" })).toBe(
+      "https://gw.example/v1/tools/search",
+    );
   });
 
-  it("errors without api key", async () => {
+  it("errors without searchApiKey and sends no request", async () => {
+    let called = false;
+    const fetchImpl: typeof fetch = async () => {
+      called = true;
+      return new Response("{}", { status: 200 });
+    };
     const host = new ToolHost(createBuiltinTools());
     const r = await host.execute(
       "web_search",
       JSON.stringify({ query: "hello" }),
-      baseCtx({ apiKey: "" }),
+      baseCtx({ searchApiKey: "", fetchImpl }),
     );
     expect(r.is_error).toBe(true);
-    expect(r.content).toMatch(/api key/i);
+    expect(r.content).toMatch(/API key/);
+    expect(called).toBe(false);
   });
 
   it("posts to DeepSeek search and formats results", async () => {
@@ -87,7 +90,7 @@ describe("web_search", () => {
     expect(body.need_content).toBe(false);
   });
 
-  it("uses searchBaseUrl and searchApiKey, and falls back when they are blank", async () => {
+  it("uses searchBaseUrl and searchApiKey, and defaults the URL to DeepSeek when blank", async () => {
     const calls: Array<{ url: string; auth: string }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -107,7 +110,7 @@ describe("web_search", () => {
     await host.execute(
       "web_search",
       JSON.stringify({ query: "q" }),
-      baseCtx({ fetchImpl, searchBaseUrl: "  ", searchApiKey: "" }),
+      baseCtx({ fetchImpl, searchBaseUrl: "  ", searchApiKey: "sk-search" }),
     );
     expect(calls[0]).toEqual({
       url: "https://search.example/v1/tools/search",
@@ -115,7 +118,7 @@ describe("web_search", () => {
     });
     expect(calls[1]).toEqual({
       url: "https://api.deepseek.com/v1/tools/search",
-      auth: "Bearer sk-test",
+      auth: "Bearer sk-search",
     });
   });
 
@@ -130,6 +133,64 @@ describe("web_search", () => {
     );
     expect(r.is_error).toBe(true);
     expect(r.content).toMatch(/429/);
+  });
+
+  it("three calls in flight at once each get their own answer, and one 429 does not affect the others", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    // If the calls were sequential, the first would wait here forever. The timer
+    // stops that from hanging the suite and makes peak < 3 fail the assertion.
+    const guard = setTimeout(release, 3_000);
+    const fetchImpl: typeof fetch = async (_u, init) => {
+      const query = (JSON.parse(String(init?.body)) as { query: string }).query;
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      if (inFlight === 3) release();
+      await gate;
+      inFlight -= 1;
+      if (query === "fail") return new Response("quota exceeded", { status: 429 });
+      return new Response(JSON.stringify({ results: [{ title: `T-${query}`, url: `https://e.example/${query}` }] }), {
+        status: 200,
+      });
+    };
+    const host = new ToolHost(createBuiltinTools());
+    const ctx = baseCtx({ fetchImpl });
+    const [a, b, c] = await Promise.all(
+      ["alpha", "fail", "gamma"].map((query) => host.execute("web_search", JSON.stringify({ query }), ctx)),
+    );
+    clearTimeout(guard);
+    expect(peak).toBe(3);
+    expect(a!.is_error).toBe(false);
+    expect(a!.content).toContain("T-alpha");
+    expect(b!.is_error).toBe(true);
+    expect(b!.content).toMatch(/429/);
+    expect(c!.is_error).toBe(false);
+    expect(c!.content).toContain("T-gamma");
+  });
+
+  it("each call honors only its own abort signal", async () => {
+    const fetchImpl: typeof fetch = (_u, init) =>
+      new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(new Response(JSON.stringify({ results: [] }), { status: 200 })), 80);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    const host = new ToolHost(createBuiltinTools());
+    const stopped = new AbortController();
+    const kept = new AbortController();
+    const pending = Promise.all([
+      host.execute("web_search", JSON.stringify({ query: "stop me" }), baseCtx({ fetchImpl, signal: stopped.signal })),
+      host.execute("web_search", JSON.stringify({ query: "keep me" }), baseCtx({ fetchImpl, signal: kept.signal })),
+    ]);
+    setTimeout(() => stopped.abort(), 10);
+    const [s, k] = await pending;
+    expect(s!.is_error).toBe(true);
+    expect(s!.content).toBe("web_search cancelled");
+    expect(k!.is_error).toBe(false);
   });
 
   it("truncates overlong query to 128 chars", async () => {

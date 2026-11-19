@@ -16,6 +16,8 @@ import { newId, nowIso } from "../ids.js";
 
 /** Arguments longer than this are replaced on the outbound copy after a successful write. */
 const TOOL_ARG_OMIT_THRESHOLD = 500;
+/** Share of contextCharLimit that the current turn's tool results may fill before the oldest are shortened. */
+const TURN_RESULT_SHARE = 0.5;
 
 export type OutboundContent =
   | string
@@ -62,10 +64,9 @@ export function assembleContext(opts: {
   ].filter((part) => part.length > 0);
   const systemContent = preface.join("\n\n");
   // Outbound copy only. Disk jsonl stays complete.
-  const viewed = elideStaleToolResults(
-    elidePriorReadSkills(elideStaleFailedWrites(elideSettledWrites([...opts.history, opts.currentUser]))),
-  );
-  const keepCalls = latestBatchCallIds(viewed);
+  const prepared = elidePriorReadSkills(elideStaleFailedWrites(elideSettledWrites([...opts.history, opts.currentUser])));
+  const keepCalls = currentTurnKeepIds(prepared, Math.floor(opts.contextCharLimit * TURN_RESULT_SHARE));
+  const viewed = elideStaleToolResults(prepared, keepCalls);
   const history = viewed.slice(0, -1);
   const currentUser = viewed[viewed.length - 1]!;
   const budget = Math.max(
@@ -114,27 +115,30 @@ function shrinkWriteCall(tc: ToolCall, outcome: "succeeded" | "failed"): ToolCal
   }
   const path = typeof args.path === "string" ? args.path : "";
   if (!path) return tc;
-  const failed = outcome === "failed" ? { succeeded: false as const } : {};
-  const stub =
-    tc.function.name === "write_file"
-      ? {
-          path,
-          content_chars: typeof args.content === "string" ? args.content.length : 0,
-          omitted: true,
-          ...failed,
-        }
-      : {
-          path,
-          old_chars: typeof args.old_string === "string" ? args.old_string.length : 0,
-          new_chars: typeof args.new_string === "string" ? args.new_string.length : 0,
-          ...(args.replace_all === true ? { replace_all: true } : {}),
-          omitted: true,
-          ...failed,
-        };
+  const failed = outcome === "failed";
+  const note = writeStubNote(tc.function.name, path, args, failed);
+  // The wire format needs a JSON string here. Its one field is prose, not a parameter,
+  // so the model is not shown an argument shape it could copy.
   return {
     ...tc,
-    function: { ...tc.function, arguments: JSON.stringify(stub) },
+    function: { ...tc.function, arguments: JSON.stringify({ note }) },
   };
+}
+
+/**
+ * The text a stubbed write leaves in the model's own call. It says what was cut and that it
+ * is a note, not a parameter. The file on disk is untouched.
+ */
+function writeStubNote(name: string, path: string, args: Record<string, unknown>, failed: boolean): string {
+  const tail = failed ? "这次调用失败，没有写入成功。" : "";
+  if (name === "write_file") {
+    const chars = typeof args.content === "string" ? args.content.length : 0;
+    return `此处原为 write_file 写入 ${path} 的内容，共 ${chars} 字，已从发给模型的副本中省略。这是系统说明，不是你发出的参数，不要照这个格式调用工具。需要内容时用 read_file 读取磁盘上的文件。${tail}`;
+  }
+  const oldChars = typeof args.old_string === "string" ? args.old_string.length : 0;
+  const newChars = typeof args.new_string === "string" ? args.new_string.length : 0;
+  const all = args.replace_all === true ? "（全部替换）" : "";
+  return `此处原为 str_replace 修改 ${path} 的参数：旧文本 ${oldChars} 字，新文本 ${newChars} 字${all}，已从发给模型的副本中省略。这是系统说明，不是你发出的参数，不要照这个格式调用工具。${tail}`;
 }
 
 /** Outbound copy only. read_skill results from earlier user turns become a one-line stub. */
@@ -204,17 +208,41 @@ export function elideStaleFailedWrites(messages: Message[]): Message[] {
   });
 }
 
-function latestBatchCallIds(messages: Message[]): Set<string> {
+/**
+ * Call ids whose results stay in full:
+ * - the latest batch of tool calls, always, even over budget (the model just got these);
+ * - the other tool results of the current user turn, newest first, until their total
+ *   would pass keepChars. Older results in the turn are shortened like any other
+ *   stale result. Without the cap, a long turn would keep every read and push the
+ *   request past the context budget.
+ */
+export function currentTurnKeepIds(messages: Message[], keepChars: number): Set<string> {
   let currentTurn = "";
   for (const message of messages) {
     if (message.role === "user") currentTurn = message.turn_id;
   }
-  let assistant: Message | undefined;
+  const ids = new Set<string>();
+  let used = 0;
+  let latest: Message | undefined;
   for (const message of messages) {
     if (message.turn_id !== currentTurn || message.role !== "assistant" || !message.tool_calls?.length) continue;
-    assistant = message;
+    latest = message;
   }
-  return new Set(assistant?.tool_calls?.map((call) => call.id) ?? []);
+  const latestIds = new Set(latest?.tool_calls?.map((call) => call.id) ?? []);
+  for (const message of messages) {
+    if (message.role !== "tool" || !message.tool_call_id || !latestIds.has(message.tool_call_id)) continue;
+    ids.add(message.tool_call_id);
+    used += message.content.length;
+  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (message.turn_id !== currentTurn || message.role !== "tool" || !message.tool_call_id) continue;
+    if (ids.has(message.tool_call_id)) continue;
+    used += message.content.length;
+    if (used > keepChars) break;
+    ids.add(message.tool_call_id);
+  }
+  return ids;
 }
 
 function protectIdsForCalls(messages: Message[], callIds: ReadonlySet<string>): Set<string> {
@@ -311,8 +339,7 @@ function omittedResult(name: string, detail: string, chars: number, note: string
 }
 
 /** Outbound copy only. Tool bodies the model has already used become one stable line. */
-export function elideStaleToolResults(messages: Message[]): Message[] {
-  const keepCalls = latestBatchCallIds(messages);
+export function elideStaleToolResults(messages: Message[], keepCalls: ReadonlySet<string>): Message[] {
   const writes = successfulWritePaths(messages);
   return messages.map((message, index) => {
     if (message.role !== "tool" || !message.name || !isBulkResult(message.name)) return message;

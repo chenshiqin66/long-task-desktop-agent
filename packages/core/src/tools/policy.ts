@@ -560,6 +560,28 @@ export function classifyBashCommand(command: string): PolicyVerdict {
   return { risk: "write", summary: `Needs confirmation: ${trimmed.slice(0, 120)}`, command: trimmed };
 }
 
+/** Tools that only read. Calls to these may run at the same time when they sit next to each other in one response. */
+const PARALLEL_READ_TOOLS = new Set([
+  "read_file",
+  "list_dir",
+  "keyword_search",
+  "read_skill",
+  "web_search",
+  "memory_read",
+]);
+
+/**
+ * True when a call reads and nothing else. Task tools and MCP tools are read risk too,
+ * but they can change state or reach a server we do not know, so they stay in order.
+ */
+export function isParallelReadCall(toolName: string, argsJson: string): boolean {
+  if (PARALLEL_READ_TOOLS.has(toolName)) return true;
+  if (toolName === "bash" || toolName === "powershell") {
+    return classifyToolCall(toolName, argsJson).risk === "read";
+  }
+  return false;
+}
+
 export function classifyToolCall(
   toolName: string,
   argsJson: string,

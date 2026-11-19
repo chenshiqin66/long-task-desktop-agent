@@ -16,16 +16,19 @@ describe("modelKind", () => {
     expect(modelKindOf({ kind: "image" })).toBe("image");
     expect(modelKindOf({ kind: "video" })).toBe("video");
     expect(modelKindOf({ kind: "audio" })).toBe("audio");
+    expect(modelKindOf({ kind: "search" })).toBe("search");
     expect(modelKindOf({ kind: "text" })).toBe("text");
   });
 
-  it("labels the four kinds in Chinese", () => {
+  it("labels the five kinds in Chinese", () => {
     expect(MODEL_KIND_LABELS).toEqual({
       text: "生文",
       image: "生图",
       video: "生视频",
       audio: "生音",
+      search: "网搜",
     });
     expect(modelKindLabel("image")).toBe("生图");
+    expect(modelKindLabel("search")).toBe("网搜");
   });
 });

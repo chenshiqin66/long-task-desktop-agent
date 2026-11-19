@@ -24,9 +24,10 @@ import {
   type TaskNotificationInput,
 } from "../store/inboxStore.js";
 import { shouldRemindTasks, taskReminderText } from "../context/taskReminder.js";
+import { batchReminderText } from "../context/batchReminder.js";
 import { ToolHost } from "../tools/host.js";
 import type { McpToolSource } from "../mcp/source.js";
-import { classifyToolCall } from "../tools/policy.js";
+import { classifyToolCall, isParallelReadCall } from "../tools/policy.js";
 import {
   AGENT_TOOL_NAME,
   EXPLORE_TOOL_ROUNDS,
@@ -37,7 +38,7 @@ import {
   type AgentCall,
 } from "../tools/agentTool.js";
 import { outputDirsOverlap } from "../tools/writeScope.js";
-import type { ToolResult } from "../tools/types.js";
+import type { ToolContext, ToolResult } from "../tools/types.js";
 import { assembleContext } from "../context/assemble.js";
 import { projectAuditMessages, requestApproxChars, toolsFingerprint } from "../context/auditContext.js";
 import { countOutboundImages, prepareOutbound } from "../context/images.js";
@@ -124,6 +125,12 @@ Task list:
 - When you start a pending task, call claim_task. When that work is finished, call complete_task. Saying it is done in your reply does not complete it.
 - A user message that starts with "后台任务完成。这是完成回执" is a background receipt (${TASK_NOTIFICATION_NAME}). It is not a new instruction. Use the receipt and continue. Do not ask the user to confirm that it arrived, and do not create a task for work the receipt says is already done.`;
 
+const BATCH_RULES = `
+Tool calls in one response:
+- Put calls that do not depend on each other in the same response. Reads, searches, and listings whose inputs you already know go together: three files whose paths you know are three read_file calls in one response.
+- Put a call in a later response only when its input comes from an earlier result, or when a later read must see a change made by an earlier call.
+- Where another rule in this prompt says a call goes alone or first, follow that rule.`;
+
 const SEARCH_RULES = `
 Search:
 - keyword_search takes a path and every term in one call. Pass the narrowest file or directory. Do not call it again for another word in that same path. Inside a skill, pass skill plus a relative path, or an absolute path that is already inside that skill.`;
@@ -156,7 +163,9 @@ File edits:
 - When the user names a file and you know its path, make read_file on that path your first action. Do not list_dir to look for it.
 - Never write file contents via powershell (no here-strings, Set-Content, Add-Content, Out-File, or redirection).
 - Use list_dir / read_file / keyword_search to inspect; powershell for builds, tests, git, and other commands.
+- Read a short file (a few hundred lines or less) in one read_file call with no offset or limit. A read returns at most about 50,000 characters and drops the rest. For a long file, do not page through it from the top: find the lines with keyword_search, then call read_file with offset and limit for just that range. Do not read files with Get-Content, Select-Object, or index slices such as (Get-Content x)[30..38].
 ${SEARCH_RULES}
+${BATCH_RULES}
 ${ASK_USER_RULES}
 ${IMAGE_RULES}
 ${SUBAGENT_RULES}
@@ -175,7 +184,9 @@ File edits:
 - When the user names a file and you know its path, make read_file on that path your first action. Do not list_dir to look for it.
 - Never write file contents via bash (no heredoc, cat/echo/printf redirects, tee).
 - Use list_dir / read_file / keyword_search to inspect; bash for builds, tests, git, and other commands.
+- Read a short file (a few hundred lines or less) in one read_file call with no offset or limit. A read returns at most about 50,000 characters and drops the rest. For a long file, do not page through it from the top: find the lines with keyword_search, then call read_file with offset and limit for just that range. Do not read files with sed -n, head, tail, or cat slices.
 ${SEARCH_RULES}
+${BATCH_RULES}
 ${ASK_USER_RULES}
 ${IMAGE_RULES}
 ${SUBAGENT_RULES}
@@ -185,6 +196,9 @@ ${WEB_SEARCH_RULES}`;
 }
 
 const CANCELLED_TOOL_CONTENT = "Cancelled: tool was not executed.";
+/** Returned in place of a read that repeats the read just before it. See repeatedRead. */
+const REPEATED_READ_CONTENT =
+  "This read repeats the call just before it, so it was not run again. The earlier result is above. If you can no longer see it, read a different range or act on what you already have.";
 /** Shown when the user stops a turn before any assistant text exists. */
 const CANCELLED_TURN_NOTICE = "任务已终止";
 const DENIED_TOOL_CONTENT = "Cancelled: user denied permission";
@@ -225,6 +239,8 @@ export class AgentRuntime {
   private turnWritesAllowed = false;
   /** output_dir values accepted in the current tool batch. Cleared when that batch ends. */
   private batchOutputDirs: string[] = [];
+  /** Name and arguments of the last read this turn, while no other call has run since. See repeatedRead. */
+  private lastReadKey: string | undefined;
   /** Deferred worker dirs. Held until the receipt is in the transcript. */
   private deferredOutputDirs: string[] = [];
   private deferredRuns = new Map<
@@ -1004,6 +1020,9 @@ export class AgentRuntime {
     this.pinTurnTools();
     await this.loadTurnMemory();
     let steps = 0;
+    /** Replies in a row, this turn, that each made exactly one tool call. See batchReminder.ts. */
+    let singleCallStreak = 0;
+    this.lastReadKey = undefined;
     while (true) {
         if (!this.abort) return;
         if (this.abort.signal.aborted) {
@@ -1014,7 +1033,8 @@ export class AgentRuntime {
         this.emit({ type: "status", turn_id, phase: "assembling" });
         const loopHistory = await this.store.readMessages(sessionId);
         const installedSkills = (await listInstalledSkills(this.skillsRoot)).filter((skill) => skill.enabled);
-        const extraSystem = await this.taskReminder(sessionId, loopHistory);
+        const taskNote = await this.taskReminder(sessionId, loopHistory);
+        const extraSystem = [taskNote, batchReminderText(singleCallStreak)].filter(Boolean).join("\n\n") || undefined;
         const ctx = assembleContext({
           systemPrompt: this.systemPrompt,
           memory: this.turnMemory.block,
@@ -1179,6 +1199,7 @@ export class AgentRuntime {
         }
 
         if (toolCalls.length === 0) {
+          singleCallStreak = 0;
           const extra = await this.intake(sessionId, turn_id, true);
           if (extra === "failed") return;
           if (extra === "wrote") {
@@ -1239,6 +1260,7 @@ export class AgentRuntime {
         }
 
         steps += 1;
+        singleCallStreak = toolCalls.length === 1 ? singleCallStreak + 1 : 0;
         const stop = await this.runToolBatch(sessionId, turn_id, toolCalls);
         if (stop) return;
         if ((await this.intake(sessionId, turn_id, false)) === "failed") return;
@@ -1312,6 +1334,8 @@ export class AgentRuntime {
       for (let i = 0; i < toolCalls.length; i++) {
         const tc = toolCalls[i]!;
         if (settled.has(tc.id)) continue;
+        // Anything that is not a read ends a run of repeated reads, so a read after a write is never a repeat.
+        if (!isParallelReadCall(tc.function.name, tc.function.arguments)) this.lastReadKey = undefined;
         if (this.abort!.signal.aborted) {
           await this.handleCancel(
             sessionId,
@@ -1320,6 +1344,36 @@ export class AgentRuntime {
             toolCalls.filter((call) => !settled.has(call.id)),
           );
           return true;
+        }
+
+        if (isParallelReadCall(tc.function.name, tc.function.arguments)) {
+          // Consecutive read-only calls run together. A write, ask_user, or subagent
+          // ends the run, so every read still sees the writes that came before it.
+          const reads: ToolCall[] = [];
+          for (let j = i; j < toolCalls.length; j++) {
+            const next = toolCalls[j]!;
+            if (settled.has(next.id)) continue;
+            if (!isParallelReadCall(next.function.name, next.function.arguments)) break;
+            reads.push(next);
+          }
+          if (reads.length > 1) {
+            const outcome = await this.runReadGroup(sessionId, turn_id, reads);
+            for (const call of reads) settled.add(call.id);
+            if (outcome === "storage_failed") {
+              await this.repairStoredToolCalls(sessionId);
+              return true;
+            }
+            if (this.abort!.signal.aborted) {
+              await this.handleCancel(
+                sessionId,
+                turn_id,
+                "",
+                toolCalls.filter((call) => !settled.has(call.id)),
+              );
+              return true;
+            }
+            continue;
+          }
         }
 
         if (tc.function.name === AGENT_TOOL_NAME) {
@@ -1737,6 +1791,14 @@ export class AgentRuntime {
     if (tc.function.name === ASK_USER_TOOL_NAME) {
       return this.runAskUser(sessionId, turn_id, tc);
     }
+    const repeat = this.repeatedRead(tc);
+    if (repeat) {
+      return this.persistToolOutcome(sessionId, turn_id, tc, repeat, {
+        tool: tc.function.name,
+        is_error: false,
+        duplicate: true,
+      });
+    }
     const verdict = classifyToolCall(tc.function.name, tc.function.arguments, {
       mcpAutoAllow: (toolName) => this.mcp?.autoAllows(toolName) ?? false,
     });
@@ -1798,23 +1860,7 @@ export class AgentRuntime {
     const callTraceId = await this.persistToolCallStart(sessionId, turn_id, tc);
     if (callTraceId === "storage_failed") return "storage_failed";
     const started = Date.now();
-    const result = await this.tools.execute(tc.function.name, tc.function.arguments, {
-      workspacePath: this.workspacePath,
-      signal: this.abort!.signal,
-      bashTimeoutMs: this.config.bashTimeoutMs,
-      maxToolOutputChars: this.config.maxToolOutputChars,
-      maxReadChars: this.config.maxReadChars,
-      maxSearchResults: this.config.maxSearchResults,
-      apiKey: this.config.apiKey,
-      llmBaseUrl: this.config.baseUrl,
-      searchBaseUrl: this.config.searchBaseUrl,
-      searchApiKey: this.config.searchApiKey,
-      skillsRoot: this.skillsRoot,
-      attachedSkillNames: fullyAttachedSkillNames(this.skillBodies),
-      blockedOutputDirs: [...this.batchOutputDirs, ...this.deferredOutputDirs],
-      sessionId,
-      memory: this.memory?.store,
-    });
+    const result = await this.tools.execute(tc.function.name, tc.function.arguments, this.toolContext(sessionId));
     return this.persistToolOutcome(
       sessionId,
       turn_id,
@@ -1827,6 +1873,86 @@ export class AgentRuntime {
       },
       callTraceId,
     );
+  }
+
+  /**
+   * A read identical to the read just before it, with no other call between them,
+   * is answered with a note and not run again. The loop that re-reads one range over
+   * and over then stops costing a tool run per step.
+   */
+  private repeatedRead(tc: ToolCall): ToolResult | undefined {
+    if (!isParallelReadCall(tc.function.name, tc.function.arguments)) return undefined;
+    const key = `${tc.function.name}\u0000${tc.function.arguments}`;
+    const repeat = this.lastReadKey === key;
+    this.lastReadKey = key;
+    return repeat ? { content: REPEATED_READ_CONTENT, is_error: false } : undefined;
+  }
+
+  private toolContext(sessionId: string): ToolContext {
+    return {
+      workspacePath: this.workspacePath,
+      signal: this.abort!.signal,
+      bashTimeoutMs: this.config.bashTimeoutMs,
+      maxToolOutputChars: this.config.maxToolOutputChars,
+      maxReadChars: this.config.maxReadChars,
+      maxSearchResults: this.config.maxSearchResults,
+      searchBaseUrl: this.config.searchBaseUrl,
+      searchApiKey: this.config.searchApiKey,
+      skillsRoot: this.skillsRoot,
+      attachedSkillNames: fullyAttachedSkillNames(this.skillBodies),
+      blockedOutputDirs: [...this.batchOutputDirs, ...this.deferredOutputDirs],
+      sessionId,
+      memory: this.memory?.store,
+    };
+  }
+
+  /**
+   * Run a run of read-only calls at the same time, then record their results in
+   * the order the model asked for them. Starts are recorded first and outcomes
+   * last, so the stored order does not depend on which read finishes first.
+   */
+  private async runReadGroup(
+    sessionId: string,
+    turn_id: string,
+    group: ToolCall[],
+  ): Promise<"ok" | "storage_failed"> {
+    this.emit({ type: "status", turn_id, phase: "tool" });
+    const traceIds: string[] = [];
+    for (const tc of group) {
+      const traceId = await this.persistToolCallStart(sessionId, turn_id, tc);
+      if (traceId === "storage_failed") return "storage_failed";
+      traceIds.push(traceId);
+    }
+    // Checked in order, so a repeat inside the group is seen against the call before it.
+    const repeats = group.map((tc) => this.repeatedRead(tc));
+    const runs = await Promise.all(
+      group.map(async (tc, k) => {
+        const repeat = repeats[k];
+        if (repeat) return { result: repeat, duration: 0 };
+        const started = Date.now();
+        const result = await this.tools.execute(tc.function.name, tc.function.arguments, this.toolContext(sessionId));
+        return { result, duration: Date.now() - started };
+      }),
+    );
+    for (let k = 0; k < group.length; k++) {
+      const tc = group[k]!;
+      const { result, duration } = runs[k]!;
+      const stored = await this.persistToolOutcome(
+        sessionId,
+        turn_id,
+        tc,
+        result,
+        {
+          tool: tc.function.name,
+          is_error: result.is_error,
+          duration_ms: duration,
+          ...(repeats[k] ? { duplicate: true } : {}),
+        },
+        traceIds[k],
+      );
+      if (stored === "storage_failed") return "storage_failed";
+    }
+    return "ok";
   }
 
   /**

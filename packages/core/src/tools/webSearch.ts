@@ -3,19 +3,14 @@ import { truncateOutput } from "./bash.js";
 
 const QUERY_MAX = 128;
 
-export function resolveWebSearchUrl(opts: {
-  searchBaseUrl?: string;
-  llmBaseUrl?: string;
-}): string {
-  const explicit = opts.searchBaseUrl?.trim().replace(/\/$/, "");
-  if (explicit) {
-    if (explicit.endsWith("/tools/search")) return explicit;
-    if (explicit.endsWith("/v1")) return `${explicit}/tools/search`;
-    return `${explicit}/v1/tools/search`;
-  }
-  const chat = (opts.llmBaseUrl ?? "https://api.deepseek.com/v1").trim().replace(/\/$/, "");
-  if (chat.endsWith("/v1")) return `${chat}/tools/search`;
-  return `${chat}/v1/tools/search`;
+/** DeepSeek's search API. Used when searchBaseUrl is blank. Never derived from the chat model's base URL. */
+export const DEFAULT_SEARCH_BASE_URL = "https://api.deepseek.com";
+
+export function resolveWebSearchUrl(opts: { searchBaseUrl?: string }): string {
+  const base = (opts.searchBaseUrl?.trim() || DEFAULT_SEARCH_BASE_URL).replace(/\/$/, "");
+  if (base.endsWith("/tools/search")) return base;
+  if (base.endsWith("/v1")) return `${base}/tools/search`;
+  return `${base}/v1/tools/search`;
 }
 
 interface SearchHit {
@@ -71,10 +66,12 @@ export const webSearchTool: Tool = {
     },
   },
   async execute(args, ctx): Promise<ToolResult> {
-    const apiKey = ctx.searchApiKey?.trim() || ctx.apiKey?.trim();
+    // Only the search key counts. The chat model's key is not used, so switching models never changes search.
+    const apiKey = ctx.searchApiKey?.trim();
     if (!apiKey) {
       return {
-        content: "web_search requires an API key in agent config",
+        content:
+          "web_search needs a search model with an API key: add a model of type 网搜 on the models page (the chat model's key is not used)",
         is_error: true,
       };
     }
@@ -99,10 +96,7 @@ export const webSearchTool: Tool = {
       body.ori_question = [...ori].slice(0, QUERY_MAX).join("");
     }
 
-    const url = resolveWebSearchUrl({
-      searchBaseUrl: ctx.searchBaseUrl,
-      llmBaseUrl: ctx.llmBaseUrl,
-    });
+    const url = resolveWebSearchUrl({ searchBaseUrl: ctx.searchBaseUrl });
     const fetchImpl = ctx.fetchImpl ?? fetch;
 
     try {

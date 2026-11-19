@@ -29,8 +29,17 @@ export const writeFileTool: Tool = {
   },
   async execute(args, ctx): Promise<ToolResult> {
     const requested = String(args.path ?? "");
-    const content = args.content == null ? "" : String(args.content);
     if (!requested) return { content: "Missing path", is_error: true };
+    // A missing content used to become "" and write an empty file, reported as success.
+    // An empty string is still allowed: it is how you ask for an empty file.
+    if (args.content == null) {
+      return {
+        content:
+          "Missing content: write_file needs the full file text in `content`. To create an empty file, pass content as an empty string. Nothing was written.",
+        is_error: true,
+      };
+    }
+    const content = String(args.content);
     const scoped = await writeScopeError({
       workspacePath: ctx.workspacePath,
       requested,

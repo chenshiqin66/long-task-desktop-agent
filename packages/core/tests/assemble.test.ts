@@ -81,11 +81,12 @@ describe("assembleContext", () => {
       contextCharLimit: 100_000,
     });
     const sent = assembled.messages.find((m) => m.role === "assistant");
-    expect(JSON.parse(sent?.tool_calls?.[0]?.function.arguments ?? "")).toEqual({
-      path: "long-horizon-agent-architecture.html",
-      content_chars: html.length,
-      omitted: true,
-    });
+    const note = JSON.parse(sent?.tool_calls?.[0]?.function.arguments ?? "{}").note as string;
+    expect(note).toContain("long-horizon-agent-architecture.html");
+    expect(note).toContain(`共 ${html.length} 字`);
+    expect(note).toContain("这是系统说明，不是你发出的参数");
+    // The stub must not look like a parameter object any more.
+    expect(Object.keys(JSON.parse(sent?.tool_calls?.[0]?.function.arguments ?? "{}"))).toEqual(["note"]);
     expect(assistant.tool_calls?.[0]?.function.arguments).toBe(args);
   });
 
@@ -181,15 +182,13 @@ describe("assembleContext", () => {
       contextCharLimit: 100_000,
     });
     const sent = assembled.messages.find((m) => m.role === "assistant");
-    expect(JSON.parse(sent?.tool_calls?.[0]?.function.arguments ?? "")).toEqual({
-      path: "note.html",
-      old_chars: 400,
-      new_chars: 400,
-      omitted: true,
-    });
+    const note = JSON.parse(sent?.tool_calls?.[0]?.function.arguments ?? "{}").note as string;
+    expect(note).toContain("str_replace 修改 note.html");
+    expect(note).toContain("旧文本 400 字，新文本 400 字");
+    expect(note).toContain("不要照这个格式调用工具");
   });
 
-  it("stubs earlier tool results in the same turn and keeps every result from the latest batch", () => {
+  it("keeps same-turn results in full while they fit the turn budget, and the latest batch in full", () => {
     const oldBody = "A".repeat(800);
     const left = "L".repeat(800);
     const right = "R".repeat(800);
@@ -232,9 +231,8 @@ describe("assembleContext", () => {
     const sentOld = assembled.messages.find((m) => m.tool_call_id === "call_old");
     const sentLeft = assembled.messages.find((m) => m.tool_call_id === "call_left");
     const sentRight = assembled.messages.find((m) => m.tool_call_id === "call_right");
-    expect(sentOld?.content).toBe(
-      "此前 read_file 的结果已省略（src/old.ts，800 字）。原文仍在磁盘上，需要时再读。",
-    );
+    // Same turn, 2400 chars in total, far under the 50_000 turn budget: nothing is stubbed.
+    expect(sentOld?.content).toBe(oldBody);
     expect(sentLeft?.content).toBe(left);
     expect(sentRight?.content).toBe(right);
     expect(oldTool.content).toBe(oldBody);
@@ -295,7 +293,7 @@ describe("assembleContext", () => {
     );
   });
 
-  it("stubs an earlier read_skill in the same turn once the next batch has started", () => {
+  it("keeps an earlier read_skill in the same turn while it fits the turn budget", () => {
     const body = "K".repeat(600);
     const assembled = assembleContext({
       systemPrompt: "sys",
@@ -320,9 +318,7 @@ describe("assembleContext", () => {
       }),
       contextCharLimit: 100_000,
     });
-    expect(assembled.messages.find((m) => m.tool_call_id === "call_skill")?.content).toBe(
-      "此前读过技能 demo 的正文。需要时再调用 read_skill。",
-    );
+    expect(assembled.messages.find((m) => m.tool_call_id === "call_skill")?.content).toBe(body);
     expect(assembled.messages.find((m) => m.tool_call_id === "call_read")?.content).toBe("fresh");
   });
 
@@ -424,7 +420,7 @@ describe("assembleContext", () => {
           is_error: false,
         }),
       ],
-      currentUser: userMessage("u2", "t", "go on"),
+      currentUser: userMessage("u2", "t2", "go on"),
       contextCharLimit: 100_000,
     });
     expect(assembled.messages.find((m) => m.tool_call_id === "call_read")?.content).toBe(
@@ -479,12 +475,9 @@ describe("assembleContext", () => {
       currentUser: userMessage("u2", "t3", "and now?"),
       contextCharLimit: 100_000,
     }).messages.find((m) => m.tool_calls?.[0]?.id === "call_write");
-    expect(JSON.parse(stubbed?.tool_calls?.[0]?.function.arguments ?? "")).toEqual({
-      path: "a.html",
-      content_chars: 800,
-      omitted: true,
-      succeeded: false,
-    });
+    const note = JSON.parse(stubbed?.tool_calls?.[0]?.function.arguments ?? "{}").note as string;
+    expect(note).toContain("write_file 写入 a.html 的内容，共 800 字");
+    expect(note).toContain("这次调用失败，没有写入成功。");
   });
 
   it("counts the last message's tool arguments against the history budget", () => {

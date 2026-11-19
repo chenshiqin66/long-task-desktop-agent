@@ -57,7 +57,13 @@ export const strReplaceTool: Tool = {
       const before = await readFile(resolved.realTarget, "utf8");
       const count = before.split(oldString).length - 1;
       if (count === 0) {
-        return { content: `old_string not found in ${requested}`, is_error: true };
+        // read_file prints "N<TAB>" before each line. Those numbers are not file text,
+        // so a copied line that starts with one is the likely cause of the miss.
+        const numbered = oldString.split("\n").some((line) => /^\d+\t/.test(line));
+        const hint = numbered
+          ? ". old_string has lines that start with a line number and a tab (read_file output). Those numbers are not file content; remove them and try again."
+          : "";
+        return { content: `old_string not found in ${requested}${hint}`, is_error: true };
       }
       if (count > 1 && !replaceAll) {
         return {

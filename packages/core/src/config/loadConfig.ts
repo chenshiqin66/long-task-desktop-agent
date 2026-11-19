@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { replaceFile } from "../store/fileLock.js";
 import type { StoredConfig, StoredModel } from "./types.js";
-import { modelKindOf } from "./modelKind.js";
+import { isSearchModel, modelKindOf } from "./modelKind.js";
 import { newId } from "../ids.js";
 import type { AgentConfig } from "../types.js";
 import { DEFAULT_AGENT_CONFIG } from "../types.js";
@@ -136,10 +136,18 @@ export function modelsOf(stored: StoredConfig | null): StoredModel[] {
   return one ? [one] : [];
 }
 
+/** The current chat model. A search model is never chosen, not even as the first-entry fallback. */
 export function currentModelOf(stored: StoredConfig | null): StoredModel | null {
-  const models = modelsOf(stored);
-  if (!models.length) return null;
-  return models.find((entry) => entry.id === stored?.currentModelId) ?? models[0]!;
+  const chat = modelsOf(stored).filter((entry) => !isSearchModel(entry));
+  if (!chat.length) return null;
+  return chat.find((entry) => entry.id === stored?.currentModelId) ?? chat[0]!;
+}
+
+/** The model web_search points to: the chosen search model, else the first one, else none. */
+export function searchModelOf(stored: StoredConfig | null): StoredModel | null {
+  const search = modelsOf(stored).filter((entry) => isSearchModel(entry));
+  if (!search.length) return null;
+  return search.find((entry) => entry.id === stored?.currentSearchModelId) ?? search[0]!;
 }
 
 /** Memory extraction always uses a text model, never the current image, video, or audio model. */
@@ -165,6 +173,13 @@ export function withExplainModel(stored: StoredConfig, modelId: string): StoredC
   return normalizeStoredConfig({ ...stored, currentExplainModelId: chosen.id });
 }
 
+/** Point web_search at a search model. The chat model and the explain model stay as they are. */
+export function withSearchModel(stored: StoredConfig, modelId: string): StoredConfig {
+  const chosen = modelsOf(stored).find((entry) => entry.id === modelId);
+  if (!chosen || !isSearchModel(chosen)) throw new Error("请选择网搜模型");
+  return normalizeStoredConfig({ ...stored, currentSearchModelId: chosen.id });
+}
+
 function explainModelIdOf(stored: StoredConfig, models: StoredModel[]): string | undefined {
   const chosen = models.find((entry) => entry.id === stored.currentExplainModelId);
   return chosen && modelKindOf(chosen) === "text" ? chosen.id : undefined;
@@ -179,40 +194,61 @@ function withExplainModelId(next: StoredConfig, explainId: string | undefined): 
   return next;
 }
 
-/** Copy the current entry into the top-level fields older readers still use. */
+function withSearchModelId(next: StoredConfig, searchId: string | undefined): StoredConfig {
+  if (searchId) {
+    next.currentSearchModelId = searchId;
+    return next;
+  }
+  delete next.currentSearchModelId;
+  return next;
+}
+
+/**
+ * Copy the current chat entry into the top-level fields older readers still use.
+ * The list always keeps its search models, even when there is no chat model.
+ */
 export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
   const models = modelsOf(stored);
   const current = currentModelOf(stored);
+  const searchId = searchModelOf({ ...stored, models })?.id;
   if (!current) {
-    return withExplainModelId(
-      {
-        ...stored,
-        models: [],
-        currentModelId: undefined,
-        baseUrl: "",
-        model: "",
-        apiKey: "",
-      },
-      undefined,
+    return withSearchModelId(
+      withExplainModelId(
+        {
+          ...stored,
+          models,
+          currentModelId: undefined,
+          baseUrl: "",
+          model: "",
+          apiKey: "",
+        },
+        undefined,
+      ),
+      searchId,
     );
   }
-  return withExplainModelId(
-    {
-      ...stored,
-      models,
-      currentModelId: current.id,
-      baseUrl: current.baseUrl,
-      model: current.model,
-      apiKey: current.apiKey,
-    },
-    explainModelIdOf(stored, models),
+  return withSearchModelId(
+    withExplainModelId(
+      {
+        ...stored,
+        models,
+        currentModelId: current.id,
+        baseUrl: current.baseUrl,
+        model: current.model,
+        apiKey: current.apiKey,
+      },
+      explainModelIdOf(stored, models),
+    ),
+    searchId,
   );
 }
 
 export function withCurrentModel(stored: StoredConfig, modelId: string): StoredConfig {
   const models = modelsOf(stored);
-  const current = models.find((entry) => entry.id === modelId) ?? models[0];
-  if (!current) return normalizeStoredConfig({ ...stored, models: [], currentModelId: undefined });
+  // A search model can't be the chat model, so an id that points at one is ignored.
+  const chat = models.filter((entry) => !isSearchModel(entry));
+  const current = chat.find((entry) => entry.id === modelId) ?? chat[0];
+  if (!current) return normalizeStoredConfig({ ...stored, models, currentModelId: undefined });
   return normalizeStoredConfig({ ...stored, models, currentModelId: current.id });
 }
 
@@ -224,7 +260,13 @@ export function upsertModel(stored: StoredConfig, entry: StoredModel): StoredCon
   const index = models.findIndex((item) => item.id === next.id);
   if (index >= 0) models[index] = next;
   else models.push(next);
-  const currentId = previous && models.some((item) => item.id === previous.id) ? previous.id : next.id;
+  // A new search model does not take over as the chat model.
+  const currentId =
+    previous && models.some((item) => item.id === previous.id)
+      ? previous.id
+      : isSearchModel(next)
+        ? undefined
+        : next.id;
   return normalizeStoredConfig({ ...stored, models, currentModelId: currentId });
 }
 
@@ -269,7 +311,20 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
       stored.maxToolOutputChars ?? DEFAULT_AGENT_CONFIG.maxToolOutputChars,
     maxReadChars: stored.maxReadChars ?? DEFAULT_AGENT_CONFIG.maxReadChars,
     maxSearchResults: stored.maxSearchResults ?? DEFAULT_AGENT_CONFIG.maxSearchResults,
-    ...(stored.searchBaseUrl?.trim() ? { searchBaseUrl: stored.searchBaseUrl.trim() } : {}),
-    ...(stored.searchApiKey?.trim() ? { searchApiKey: stored.searchApiKey.trim() } : {}),
+    ...searchTargetOf(stored),
+  };
+}
+
+/**
+ * Where web_search goes. The current search model wins. The older searchBaseUrl / searchApiKey
+ * fields apply only when there is no search model. Never the chat model's address or key.
+ */
+function searchTargetOf(stored: StoredConfig): { searchBaseUrl?: string; searchApiKey?: string } {
+  const search = searchModelOf(stored);
+  const baseUrl = (search ? search.baseUrl : asString(stored.searchBaseUrl)).trim();
+  const apiKey = (search ? search.apiKey : asString(stored.searchApiKey)).trim();
+  return {
+    ...(baseUrl ? { searchBaseUrl: baseUrl } : {}),
+    ...(apiKey ? { searchApiKey: apiKey } : {}),
   };
 }

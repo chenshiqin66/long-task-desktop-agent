@@ -222,13 +222,14 @@ describe("memory in the assembled context", () => {
 
   it("shortens an old memory_read result like other bulk reads", () => {
     const toolCall = (id: string, name: string, args: string) => ({ id, type: "function" as const, function: { name, arguments: args } });
+    // Empty keep set: nothing is protected, so the old read is shortened.
     const out = elideStaleToolResults([
       msg("u1", "user", "go"),
       msg("a1", "assistant", "", { tool_calls: [toolCall("c1", "memory_read", '{"name":"deadline"}')] }),
       msg("t1", "tool", "y".repeat(800), { name: "memory_read", tool_call_id: "c1", tool_call_arguments: '{"name":"deadline"}' }),
       msg("a2", "assistant", "", { tool_calls: [toolCall("c2", "list_dir", '{"path":"."}')] }),
       msg("t2", "tool", "a.txt", { name: "list_dir", tool_call_id: "c2", tool_call_arguments: '{"path":"."}' }),
-    ]);
+    ], new Set());
     expect(out[2]!.content).toBe("此前 memory_read 的结果已省略（deadline，800 字）。需要时再调用。");
   });
 });

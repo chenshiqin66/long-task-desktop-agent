@@ -21,6 +21,11 @@ export interface StoredConfig {
   currentModelId?: string;
   /** Text model used by the explain pane. Missing or non-text falls back to a text model. */
   currentExplainModelId?: string;
+  /**
+   * Search model web_search points to. It is used alongside the current chat model, not instead of it.
+   * Missing or not a search model means the first search model.
+   */
+  currentSearchModelId?: string;
   /** Directories shown in the sidebar. Adding one does not remove the others. */
   workspacePaths?: string[];
   /** Sidebar labels keyed by workspace path. Missing key means show the folder name. Does not rename the directory. */
@@ -39,8 +44,11 @@ export interface StoredConfig {
   maxToolOutputChars?: number;
   maxReadChars?: number;
   maxSearchResults?: number;
-  /** Search endpoint. Empty uses the chat base URL. Still expects DeepSeek's JSON. */
+  /**
+   * Older way to configure web_search, used only when no search model exists.
+   * Empty means DeepSeek's default address. Still expects DeepSeek's JSON.
+   */
   searchBaseUrl?: string;
-  /** Search key. Empty uses apiKey. */
+  /** Older search key, used only when no search model exists. */
   searchApiKey?: string;
 }

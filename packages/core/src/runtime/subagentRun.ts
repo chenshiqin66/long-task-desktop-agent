@@ -240,8 +240,6 @@ export async function runIsolatedSubagent(opts: {
           maxToolOutputChars: opts.config.maxToolOutputChars,
           maxReadChars: opts.config.maxReadChars,
           maxSearchResults: opts.config.maxSearchResults,
-          apiKey: opts.config.apiKey,
-          llmBaseUrl: opts.config.baseUrl,
           searchBaseUrl: opts.config.searchBaseUrl,
           searchApiKey: opts.config.searchApiKey,
           skillsRoot: opts.skillsRoot,

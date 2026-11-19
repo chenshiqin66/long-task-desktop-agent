@@ -105,6 +105,22 @@ describe("tools", () => {
     expect(read.content).toContain("hello-write");
   });
 
+  it("write_file without content is an error and writes nothing", async () => {
+    const missing = await host.execute("write_file", JSON.stringify({ path: "keep.txt" }), ctx);
+    expect(missing.is_error).toBe(true);
+    expect(missing.content).toMatch(/Missing content/);
+    const nullish = await host.execute("write_file", JSON.stringify({ path: "keep.txt", content: null }), ctx);
+    expect(nullish.is_error).toBe(true);
+    await expect(readFile(join(workspace, "keep.txt"), "utf8")).rejects.toThrow();
+  });
+
+  it("write_file with an empty string still creates an empty file", async () => {
+    const r = await host.execute("write_file", JSON.stringify({ path: "empty.txt", content: "" }), ctx);
+    expect(r.is_error).toBe(false);
+    expect(r.content).toBe("Wrote 0 chars to empty.txt");
+    expect(await readFile(join(workspace, "empty.txt"), "utf8")).toBe("");
+  });
+
   it("write_file rejects path outside workspace", async () => {
     const r = await host.execute(
       "write_file",
@@ -199,6 +215,29 @@ describe("tools", () => {
     expect(read.content).toContain("cost $& $$ $' $`");
   });
 
+  it("str_replace explains a read_file line-number prefix copied into old_string", async () => {
+    await writeFile(join(workspace, "numbered.txt"), "const a = 1;\nconst b = 2;\n", "utf8");
+    const r = await host.execute(
+      "str_replace",
+      JSON.stringify({ path: "numbered.txt", old_string: "2\tconst b = 2;", new_string: "x" }),
+      ctx,
+    );
+    expect(r.is_error).toBe(true);
+    expect(r.content).toMatch(/^old_string not found in numbered\.txt\. .*line number/);
+    const after = await host.execute("read_file", JSON.stringify({ path: "numbered.txt" }), ctx);
+    expect(after.content).toContain("const b = 2;");
+  });
+
+  it("str_replace finds old_string that really contains a tab and digits", async () => {
+    await writeFile(join(workspace, "tabbed.txt"), "12\tkeep\n", "utf8");
+    const r = await host.execute(
+      "str_replace",
+      JSON.stringify({ path: "tabbed.txt", old_string: "12\tkeep", new_string: "12\tdone" }),
+      ctx,
+    );
+    expect(r.is_error).toBe(false);
+  });
+
   it("str_replace errors when old_string is missing or ambiguous", async () => {
     const missing = await host.execute(
       "str_replace",
@@ -254,6 +293,59 @@ describe("tools", () => {
     );
     expect(r.is_error).toBe(false);
     expect(r.content.includes("truncated") || r.content.length <= 50).toBe(true);
+  });
+
+  it("read_file with offset and limit returns numbered lines and the range, with no next-page hint", async () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line${i + 1}`);
+    await writeFile(join(workspace, "ten.txt"), lines.join("\n") + "\n", "utf8");
+    const part = await host.execute(
+      "read_file",
+      JSON.stringify({ path: "ten.txt", offset: 3, limit: 2 }),
+      { ...ctx, maxReadChars: 1000 },
+    );
+    expect(part.is_error).toBe(false);
+    expect(part.content).toBe("3\tline3\n4\tline4\n[lines 3-4 of 10]");
+    expect(part.content).not.toMatch(/offset=/);
+    const tail = await host.execute("read_file", JSON.stringify({ path: "ten.txt", offset: 9 }), {
+      ...ctx,
+      maxReadChars: 1000,
+    });
+    expect(tail.content).toBe("9\tline9\n10\tline10\n[lines 9-10 of 10]");
+  });
+
+  it("read_file range rejects an offset past the end and a non-positive offset", async () => {
+    await writeFile(join(workspace, "two.txt"), "a\nb\n", "utf8");
+    const past = await host.execute("read_file", JSON.stringify({ path: "two.txt", offset: 5 }), ctx);
+    expect(past.is_error).toBe(true);
+    expect(past.content).toMatch(/past the end; the file has 2 lines/);
+    const zero = await host.execute("read_file", JSON.stringify({ path: "two.txt", offset: 0 }), ctx);
+    expect(zero.is_error).toBe(true);
+    expect(zero.content).toMatch(/offset must be/);
+  });
+
+  it("read_file range cut by the size limit says so and asks for fewer lines", async () => {
+    await writeFile(join(workspace, "wide.txt"), Array.from({ length: 30 }, (_, i) => `row ${i + 1}`).join("\n"), "utf8");
+    const r = await host.execute("read_file", JSON.stringify({ path: "wide.txt", offset: 1, limit: 30 }), ctx);
+    expect(r.is_error).toBe(false);
+    expect(r.content).toMatch(/\[lines 1-\d+ of 30\. This range was cut at the read limit of 50 characters; ask for fewer lines\.\]$/);
+  });
+
+  it("read_file marks a first line that is longer than the limit", async () => {
+    await writeFile(join(workspace, "oneline.txt"), "z".repeat(200), "utf8");
+    const r = await host.execute("read_file", JSON.stringify({ path: "oneline.txt", offset: 1 }), ctx);
+    expect(r.content).toContain("this line is longer than 50 characters and was cut");
+  });
+
+  it("read_file without a range drops the rest of a long file and points to keyword_search", async () => {
+    await writeFile(join(workspace, "long.txt"), Array.from({ length: 30 }, (_, i) => `row ${i + 1}`).join("\n"), "utf8");
+    const r = await host.execute("read_file", JSON.stringify({ path: "long.txt" }), ctx);
+    expect(r.is_error).toBe(false);
+    expect(r.content).toMatch(/\.\.\.\[cut after line \d+ of 30: one read returns at most 50 characters/);
+    expect(r.content).toMatch(/keyword_search .*then call read_file with offset and limit/);
+    expect(r.content).toMatch(/Do not page through the file from here\./);
+    // The rest is dropped, and nothing tells the model to continue from the next line.
+    expect(r.content).not.toMatch(/offset=\d+/);
+    expect(r.content).not.toContain("row 30");
   });
 
   it("write_file refuses to follow an existing symlink", async () => {

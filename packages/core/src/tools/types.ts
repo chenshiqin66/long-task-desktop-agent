@@ -18,13 +18,9 @@ export interface ToolContext {
   maxToolOutputChars: number;
   maxReadChars: number;
   maxSearchResults: number;
-  /** API key for network tools. web_search uses searchApiKey when that is set. Never logged by tools. */
-  apiKey?: string;
-  /** Chat-completions base URL; used to derive `/v1/tools/search` when searchBaseUrl is empty. */
-  llmBaseUrl?: string;
-  /** Optional override for the search endpoint. */
+  /** web_search endpoint. Empty means DeepSeek's default. Independent of the chat model. */
   searchBaseUrl?: string;
-  /** Optional key for web_search. Empty falls back to apiKey. */
+  /** DeepSeek API key for web_search. Required; never logged by tools. No fallback to the chat model's key. */
   searchApiKey?: string;
   fetchImpl?: typeof fetch;
   /** Skill names whose bodies are already attached to this submit. */
