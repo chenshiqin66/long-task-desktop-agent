@@ -1481,6 +1481,12 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   background: var(--accent);
 }
 
+/* While another view (such as 日志) is open, the session title is still a button. A grey rule says so. */
+.view-tabs.has-files #main-title:not(.active)::after {
+  height: 2px;
+  background: #aab4b0;
+}
+
 .view-tabs.has-files .logs-tab::after,
 .view-tabs.has-files .logs-tab.active::after {
   background: transparent;

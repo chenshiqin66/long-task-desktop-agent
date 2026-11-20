@@ -1117,8 +1117,11 @@ mainTitle.addEventListener("click", () => {
 });
 logsBtn.addEventListener("click", () => {
   if (logsBtn.hidden) return;
+  // Read before leaving the skills page: coming from there is a first click, not a second one.
+  const alreadyOnLogs = !libraryOpen() && activeView !== "chat";
   leaveSkillsPage();
-  setMainView(activeStoreTab);
+  // A second click on 日志 while a log file is showing goes back to the session title.
+  setMainView(alreadyOnLogs ? "chat" : activeStoreTab);
 });
 for (const btn of storeTabButtons()) {
   btn.addEventListener("click", () => {
@@ -1995,9 +1998,16 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   pathBtn.onclick = (ev) => {
     ev.preventDefault();
     // Clicking an unselected workspace selects it; the session on screen stays put.
+    // An expanded one also folds once it is selected. A collapsed one just selects and expands.
     // Clicking the selected one folds/unfolds it.
     if (!sameWorkspace(path, activeWorkspace)) {
-      void selectWorkspace(path).catch(showStatusError);
+      const foldAfterSelect = open;
+      void selectWorkspace(path)
+        .then(() => {
+          // selectWorkspace can refuse (e.g. while a new session is being created); then nothing folds.
+          if (foldAfterSelect && sameWorkspace(path, activeWorkspace)) toggleWorkspaceList(path, true);
+        })
+        .catch(showStatusError);
       return;
     }
     toggleWorkspaceList(path, open);
