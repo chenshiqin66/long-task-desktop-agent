@@ -174,6 +174,7 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 - 不接收图片或视频。
 - 从会话页拖出时，附上选区所在那一轮的用户正文和助手正文，每侧最多 4000 字（选区本身更长时整段保留），不带工具结果。
 - 每个主会话一份解释记录，存在会话目录下的 `explain-*.jsonl`，重启后还在。
+- 工作台的浏览器页借用同一个解释栏元素，但用另一份记录：界面传一对固定的值（`browser:explain`、`browser-explain`）代替工作区和会话，主进程把它换成 `~/.long-task-agent/browser-explain/` 并在第一次用时建好那条会话。网页内容因此不会写进任何工作区的 `.agent/`。解释栏仍然只有 `web_search` 一个工具。借用时，解释栏元素和它自己的展开按钮一起搬进浏览器页，栏自己决定显示还是隐藏，界面上没有另外的开关。网页是另一个进程里的原生视图，界面读不到它的选区，所以文字只从两条路进来：网页右键菜单由主进程发来一条事件，或把选中的文字从网页拖到栏上。拖放只认纯文本，文件、应用内自己的拖放（它们有自己的处理）和落在输入框里的都不算。
 - 同一时刻全局只跑一个解释，可以和主会话同时进行。
 
 ## 模块地图
@@ -203,13 +204,17 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | --- | --- |
 | `electron/main.ts` | 窗口、中文菜单、工作区、全部 IPC、会话 runtime 池和解释 runtime 的生命周期、技能目录监视。MCP 的 IPC 在 `electron/mcpIpc.ts`，进程退出时关掉连接池。记忆页的 IPC 和提取器在 `electron/memoryIpc.ts`：一轮正常结束就入队，进程退出时和连接池一起关掉。 |
 | `electron/preload.ts` | 页面唯一能用的 API：`window.agent` |
-| `electron/browserTabs.ts`、`browserPolicy.ts` | 工作台里的浏览器：标签列表只在主进程，界面发命令（新开、切换、关闭、前进后退、地址栏文本），主进程回推状态。每个标签是一个 `WebContentsView`：不带 preload，开 `sandbox` 和 `contextIsolation`，拒绝除剪贴板写入外的全部权限；只加载 http、https，新窗口开成新标签。固定的 DeepSeek 标签用自己的会话分区，只留在 `deepseek.com`；其余标签共用另一个分区。空标签不创建视图。纯规则（地址规范化、站点判断、坐标换算）在 `browserPolicy.ts`，有单独的测试脚本 |
+| `electron/browserTabs.ts`、`browserPolicy.ts` | 工作台里的浏览器：标签列表只在主进程，界面发命令（新开、切换、关闭、前进后退、地址栏文本），主进程回推状态。每个标签是一个 `WebContentsView`：不带 preload，开 `sandbox` 和 `contextIsolation`，拒绝除剪贴板写入和全屏外的全部权限；只加载 http、https，新窗口开成新标签。DeepSeek 标签用自己的会话分区，只留在 `deepseek.com`，可以关闭，也可以从空标签的按钮或地址栏里输入 DeepSeek 的地址重新打开；DeepSeek 站点的地址只会在这个标签里加载，所以它的登录不会被别的标签看到，也不会有一个没登录的 DeepSeek 副本。其余标签共用另一个分区。关掉最后一个标签会补一个空标签。空标签不创建视图。关闭工作台只是把视图藏起来并静音，不销毁，再打开时原样回来。网页要求全屏（视频的全屏按钮）时，Electron 自己让窗口进入全屏，但视图仍是工作台里那块小区域，所以 `layout()` 在这期间让该标签的视图铺满窗口内容区，忽略界面报来的区域，退出后再还原；切标签、关工作台、关标签时先让页面退出全屏再继续，页面还没完成进入全屏时则挂一个两秒的监听，到了就退出，免得窗口留在全屏里。标签的网址变化时交给 `browserTabsStore.ts` 防抖写进 `~/.long-task-agent/browser-tabs.json`，退出时再写一次；重启后读回来的标签没有视图，切到它时才加载，所以启动不会一次开出所有页面。读回来的文件当作不可信输入：不是 http、https 的丢掉，数量封顶。纯规则（地址规范化、站点判断、坐标换算、存哪些标签、怎么读回）在 `browserPolicy.ts`，写文件在不依赖 Electron 的 `browserTabsStore.ts`，都有单独的测试脚本 |
 | `electron/openTarget.ts` | 打开链接和本地路径。网址交给浏览器；目录直接打开；文件只在文件夹里选中，不执行 |
 | `electron/taskbar*.ts` | Windows 任务栏提醒：有权限卡或提问卡在等、而你没在看时，图标每 530 毫秒切换一次。Win32 库到第一次换图标时才加载 |
 | `src/renderer/main.ts` | 工作区与会话列表、页面切换、事件订阅、发送与停止、页内搜索、草稿 |
 | `src/renderer/ui.ts` | 消息气泡、Markdown、工具条、权限卡和提问卡。不持有会话状态 |
 | `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`models.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、模型页和输入框旁的模型选择器、任务面板、问题轨 |
-| `src/renderer/workbench.ts` | 「我的工作台」的开关、菜单和常用文件夹页 |
+| `src/renderer/questionsOnly.ts` | 「只看用户问题」的过滤，主区和解释栏共用：开着时未展开的轮次只留问题气泡，点气泡展开或收起这一轮，查找跳过被藏起来的文字 |
+| src/renderer/composerCollapse.ts | 输入框的收起与展开：没在用时收成一行；焦点、草稿、会话未开始或等你回答时展开。主输入框和解释栏共用 |
+| `src/renderer/workbench.ts` | 「我的工作台」的开关、菜单和常用文件夹页；选中的菜单项记在 `localStorage` 的 `workbench.page`，启动时读回来，不认识的值当作第一项 |
+| `src/renderer/browserExplain.ts`、`electron/browserExplain.ts` | 浏览器页借用解释栏：进入时把解释栏和它的展开按钮搬进页面并改绑到浏览器自己的记录，离开时搬回原位，并接收网页拖来的文字。记录的建立和固定的标识在主进程一侧 |
+| `src/renderer/explainDrag.ts` | 解释栏的拖放：应用内拖放的类型名，以及网页拖来的纯文本的取舍和截断（纯函数，有测试） |
 | `src/renderer/browserView.ts` | 浏览器页的标签栏和地址栏。网页是原生视图，界面里只有一个占位框：量出它的位置交给主进程，并在滑入动画、窗口缩放时跟着改 |
 | `src/renderer/memory.ts`、`memoryView.ts` | 记忆页，以及对话末尾的「已记住」 |
 | `src/renderer/runEventGate.ts` | 丢掉不属于当前会话或轮次的事件 |

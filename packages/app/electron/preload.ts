@@ -130,11 +130,19 @@ contextBridge.exposeInMainWorld("agent", {
   browserHide: () => ipcRenderer.send("agent:browserHide"),
   browserSelect: (id: string) => ipcRenderer.send("agent:browserSelect", id),
   browserNewTab: () => ipcRenderer.send("agent:browserNew"),
+  browserOpenDeepseek: () => ipcRenderer.send("agent:browserDeepseek"),
   browserCloseTab: (id: string) => ipcRenderer.send("agent:browserClose", id),
   browserBack: () => ipcRenderer.send("agent:browserBack"),
   browserForward: () => ipcRenderer.send("agent:browserForward"),
   browserReload: () => ipcRenderer.send("agent:browserReload"),
   browserGo: (text: string) => ipcRenderer.invoke("agent:browserGo", text),
+  onBrowserExplain: (cb: (text: string) => void) => {
+    const listener = (_: unknown, text: unknown) => {
+      if (typeof text === "string") cb(text);
+    };
+    ipcRenderer.on("agent:browserExplain", listener);
+    return () => ipcRenderer.removeListener("agent:browserExplain", listener);
+  },
   onBrowserState: (cb: (state: unknown) => void) => {
     const listener = (_: unknown, state: unknown) => cb(state);
     ipcRenderer.on("agent:browserState", listener);

@@ -243,6 +243,8 @@ npm start
 ~/.long-task-agent/AGENTS.md          用户级指令，可选
 ~/.long-task-agent/memory/            所有项目的记忆
 ~/.long-task-agent/projects/          每个仓库一份的项目记忆
+~/.long-task-agent/browser-explain/   浏览器页里的解释记录，不进任何工作区
+~/.long-task-agent/browser-tabs.json  浏览器页上次的标签网址，重启后按它恢复
 {workspace}/AGENTS.md                 项目级指令，可选
 {workspace}/.agent/sessions/{id}/     一个会话的全部记录
 ```

@@ -239,7 +239,7 @@
         </div>
 
         <div class="float-stack">
-          <section id="task-panel" class="task-panel" hidden aria-label="本会话的任务"></section>
+          <section id="task-panel" class="task-panel" hidden aria-label="任务清单"></section>
           <div id="permission-dock" class="permission-dock" hidden></div>
 
           <footer class="composer-dock">
@@ -297,7 +297,28 @@
       </main>
       <aside id="explain-pane" hidden aria-label="答案解释">
         <header class="explain-bar">
-          <span class="explain-title"></span>
+          <div class="explain-head">
+            <span class="explain-title"></span>
+            <button type="button" id="explain-questions-toggle" class="questions-toggle" aria-pressed="false" aria-label="只看用户问题" title="只看用户问题" hidden>
+              <svg class="qt-all" viewBox="0 0 62 70" aria-hidden="true">
+                <rect x="2" y="2" width="58" height="8" rx="4" fill="#14b8a6" />
+                <rect x="2" y="14" width="36" height="8" rx="4" fill="#c5c9c7" />
+                <rect x="24" y="26" width="36" height="8" rx="4" fill="#14b8a6" />
+                <rect x="2" y="38" width="44" height="8" rx="4" fill="#c5c9c7" />
+                <rect x="22" y="50" width="38" height="8" rx="4" fill="#14b8a6" />
+                <rect x="2" y="62" width="58" height="8" rx="3" fill="#c5c9c7" />
+              </svg>
+              <svg class="qt-questions" viewBox="0 0 62 70" aria-hidden="true">
+                <rect x="2" y="1" width="58" height="7" rx="3.5" fill="#14b8a6" />
+                <rect x="46" y="11" width="14" height="7" rx="3.5" fill="#14b8a6" />
+                <rect x="8" y="21" width="52" height="7" rx="3.5" fill="#14b8a6" />
+                <rect x="18" y="31" width="42" height="7" rx="3.5" fill="#14b8a6" />
+                <rect x="26" y="41" width="34" height="7" rx="3.5" fill="#14b8a6" />
+                <rect x="48" y="51" width="12" height="7" rx="3.5" fill="#14b8a6" />
+                <rect x="2" y="61" width="58" height="7" rx="3.5" fill="#14b8a6" />
+              </svg>
+            </button>
+          </div>
           <button type="button" id="explain-collapse" class="explain-toggle" aria-label="收起"></button>
         </header>
         <div class="main-stage explain-stage">
@@ -389,18 +410,39 @@
           <p id="folder-note" class="skills-note" hidden></p>
           <div id="workbench-view" class="workbench-view"></div>
         </div>
-        <div class="workbench-page" data-workbench-page="browser" hidden>
-          <div id="browser-tabs" class="browser-tabs" role="tablist" aria-label="标签页"></div>
-          <form id="browser-bar" class="browser-bar" autocomplete="off">
-            <button type="button" id="browser-back" class="browser-nav" aria-label="后退" disabled>←</button>
-            <button type="button" id="browser-forward" class="browser-nav" aria-label="前进" disabled>→</button>
-            <button type="button" id="browser-reload" class="browser-nav" aria-label="刷新" disabled>↻</button>
-            <input id="browser-address" class="browser-address" type="text" inputmode="url" spellcheck="false" placeholder="输入网址，回车打开" aria-label="地址栏" />
-          </form>
-          <!-- The page is a native view that main.ts lays over this box. Only the hint below is DOM. -->
-          <div id="browser-host" class="workbench-web">
-            <p id="browser-empty" class="browser-empty" hidden>在上面输入网址，回车打开。</p>
+        <div class="workbench-page browser-page" data-workbench-page="browser" hidden>
+          <div class="browser-main">
+            <div class="browser-top">
+              <!-- Hides and shows the workbench menu on the left. The arrow points the way the menu goes, and is turned around when it is hidden. -->
+              <button type="button" id="browser-menu-toggle" class="browser-nav browser-menu-toggle" aria-label="隐藏菜单" title="隐藏菜单" aria-expanded="true">
+                <svg viewBox="0 0 128 128" aria-hidden="true">
+                  <path d="M104.5 51V8.5H8.5v111h96V78M122 65.5H16M50 43 16 65.5 50 88" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+                </svg>
+              </button>
+              <div class="browser-navs">
+                <button type="button" id="browser-back" class="browser-nav" aria-label="后退" disabled>←</button>
+                <button type="button" id="browser-forward" class="browser-nav" aria-label="前进" disabled>→</button>
+                <button type="button" id="browser-reload" class="browser-nav" aria-label="刷新" disabled>↻</button>
+              </div>
+              <div id="browser-tabs" class="browser-tabs" role="tablist" aria-label="标签页"></div>
+              <!-- The explain pane's own expand button is moved in here while this page is open. -->
+              <div id="browser-explain-expand-slot" class="browser-expand-slot"></div>
+            </div>
+            <!-- Shown only while the active tab is empty, i.e. right after +. -->
+            <form id="browser-bar" class="browser-bar" autocomplete="off" hidden>
+              <input id="browser-address" class="browser-address" type="text" inputmode="url" spellcheck="false" placeholder="输入网址，回车打开" aria-label="地址栏" />
+            </form>
+            <!-- The page is a native view that main.ts lays over this box. Only the hint below is DOM. -->
+            <div id="browser-host" class="workbench-web">
+              <div id="browser-empty" class="browser-empty" hidden>
+              <p>在上面输入网址，回车打开。</p>
+              <!-- Only while the DeepSeek tab is closed. -->
+              <button type="button" id="browser-open-deepseek" class="browser-open-deepseek" hidden>打开 DeepSeek</button>
+            </div>
+            </div>
           </div>
+          <!-- The agent page's explain pane is moved in here while this page is open: a column beside the browser, top to bottom. -->
+          <div id="browser-explain-slot" class="browser-explain-slot"></div>
         </div>
       </section>
       <button type="button" id="workbench-close" class="workbench-x" aria-label="关闭工作台">

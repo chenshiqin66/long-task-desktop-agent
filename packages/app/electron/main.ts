@@ -23,6 +23,7 @@ import {
   textModelForExplain,
   withCurrentModel,
   assertValidSessionId,
+  getDefaultConfigPath,
   DeferredPermissionGate,
   DeferredAskGate,
   defaultSkillsRoot,
@@ -46,17 +47,33 @@ import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 import { registerMcpHandlers } from "./mcpIpc.js";
 import { BrowserTabs, registerBrowserHandlers } from "./browserTabs.js";
+import { SavedTabsFile } from "./browserTabsStore.js";
+import {
+  BROWSER_EXPLAIN_SESSION,
+  BROWSER_EXPLAIN_WORKSPACE,
+  ensureBrowserExplainStore,
+} from "./browserExplain.js";
 import { createMemoryExtractor, registerMemoryHandlers, runtimeMemory } from "./memoryIpc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let win: BrowserWindow | null = null;
 /** The workbench browser: a pinned DeepSeek tab plus the tabs the user opens. No access to the app. */
+const savedTabsFile = new SavedTabsFile(join(dirname(getDefaultConfigPath()), "browser-tabs.json"));
 const browserTabs = new BrowserTabs(
   () => win,
-  (state) => {
-    if (win && !win.isDestroyed()) win.webContents.send("agent:browserState", state);
+  {
+    state(state) {
+      if (win && !win.isDestroyed()) win.webContents.send("agent:browserState", state);
+    },
+    explain(text) {
+      if (win && !win.isDestroyed()) win.webContents.send("agent:browserExplain", text);
+    },
+    save(saved) {
+      savedTabsFile.save(saved);
+    },
   },
+  savedTabsFile.load(),
 );
 let taskbarAlert: TaskbarAlert | null = null;
 let appMenu: Menu | null = null;
@@ -277,6 +294,19 @@ async function assertKnownWorkspace(raw: string): Promise<string> {
   return match;
 }
 
+/**
+ * The explain pane works for a session of a known workspace, or for the browser. The browser's record
+ * lives next to the config file, not in any workspace, because the pages it explains can be anything.
+ */
+async function explainWorkspace(raw: string, sessionId: string): Promise<string> {
+  assertValidSessionId(sessionId);
+  if (raw === BROWSER_EXPLAIN_WORKSPACE) {
+    if (sessionId !== BROWSER_EXPLAIN_SESSION) throw new Error("Invalid session id");
+    return ensureBrowserExplainStore(join(dirname(getDefaultConfigPath()), "browser-explain"));
+  }
+  return assertKnownWorkspace(raw);
+}
+
 async function readAgentConfig() {
   const stored = (await loadStoredConfig()) ?? {
     baseUrl: "https://api.openai.com/v1",
@@ -445,7 +475,10 @@ function createWindow() {
   win.webContents.on("preload-error", (_event, path, error) => {
     console.error("preload-error", path, error);
   });
-  win.once("closed", () => browserTabs.dispose());
+  win.once("closed", () => {
+    browserTabs.dispose();
+    savedTabsFile.flush();
+  });
   hideNativeMenuBar(win);
   taskbarAlert?.attach(win);
   win.once("ready-to-show", () => {
@@ -557,6 +590,9 @@ app.whenReady().then(async () => {
     else await dialog.showMessageBox(options);
   }
   void mcpPool.start();
+
+  // A tab list still waiting for its write must not be lost to a quit.
+  app.on("will-quit", () => savedTabsFile.flush());
 
   app.on("before-quit", (event) => {
     if (mcpClosing) return;
@@ -900,8 +936,7 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle("agent:explainLoad", async (_e, rawWorkspace: string, sessionId: string) => {
-    assertValidSessionId(sessionId);
-    const path = await assertKnownWorkspace(rawWorkspace);
+    const path = await explainWorkspace(rawWorkspace, sessionId);
     const store = new ExplainStore(path);
     const [open, messages] = await Promise.all([
       store.getOpen(sessionId),
@@ -912,9 +947,8 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     "agent:explainSetOpen",
     async (_e, rawWorkspace: string, sessionId: string, open: unknown) => {
-      assertValidSessionId(sessionId);
       if (typeof open !== "boolean") throw new Error("Invalid explain state");
-      const path = await assertKnownWorkspace(rawWorkspace);
+      const path = await explainWorkspace(rawWorkspace, sessionId);
       await new ExplainStore(path).setOpen(sessionId, open);
     },
   );
@@ -929,9 +963,8 @@ app.whenReady().then(async () => {
       sourceMessageIds?: unknown,
       videos?: unknown,
     ) => {
-      assertValidSessionId(sessionId);
       if (typeof text !== "string") throw new Error("Invalid message");
-      const path = await assertKnownWorkspace(rawWorkspace);
+      const path = await explainWorkspace(rawWorkspace, sessionId);
       const rt = await ensureExplainRuntime(path);
       let context: { user: string; assistant: string } | null = null;
       if (Array.isArray(sourceMessageIds)) {
@@ -950,18 +983,16 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     "agent:explainReadImage",
     async (_e, rawWorkspace: string, sessionId: string, relativePath: string) => {
-      assertValidSessionId(sessionId);
       if (typeof relativePath !== "string") throw new Error("Invalid image path");
-      const path = await assertKnownWorkspace(rawWorkspace);
+      const path = await explainWorkspace(rawWorkspace, sessionId);
       return new SessionStore(path).readImageDataUrl(sessionId, relativePath);
     },
   );
   ipcMain.handle(
     "agent:explainReadVideo",
     async (_e, rawWorkspace: string, sessionId: string, relativePath: string) => {
-      assertValidSessionId(sessionId);
       if (typeof relativePath !== "string") throw new Error("Invalid video path");
-      const path = await assertKnownWorkspace(rawWorkspace);
+      const path = await explainWorkspace(rawWorkspace, sessionId);
       return new SessionStore(path).readVideoDataUrl(sessionId, relativePath);
     },
   );

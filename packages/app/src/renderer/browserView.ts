@@ -27,6 +27,7 @@ export interface BrowserApi {
   browserHide(): void;
   browserSelect(id: string): void;
   browserNewTab(): void;
+  browserOpenDeepseek(): void;
   browserCloseTab(id: string): void;
   browserBack(): void;
   browserForward(): void;
@@ -46,6 +47,14 @@ export function tabLabel(tab: TabInfo): string {
     }
   }
   return "新标签页";
+}
+
+/**
+ * The address bar is hidden until it is needed: while the active tab has no page yet, which is right after +.
+ * Once an address is entered the tab has a page and the bar goes away again.
+ */
+export function addressBarShown(tab: TabInfo | undefined): boolean {
+  return Boolean(tab) && tab?.url === "";
 }
 
 /** The main process sends this state. Anything that is not the expected shape is dropped. */
@@ -106,9 +115,11 @@ export function mountBrowser(opts: {
   host: HTMLElement;
   /** Shown over the empty host while the active tab has no page yet. */
   empty: HTMLElement;
+  /** In the empty hint: opens the DeepSeek tab again. */
+  deepseek: HTMLButtonElement;
   api: () => BrowserApi | undefined;
 }): BrowserView {
-  const { tabs: tabsEl, form, input, back, forward, reload, host, empty, api } = opts;
+  const { tabs: tabsEl, form, input, back, forward, reload, host, empty, deepseek, api } = opts;
   let state: BrowserState | null = null;
   let page = false;
   let lastKey = "";
@@ -167,15 +178,13 @@ export function mountBrowser(opts: {
       label.title = tab.url || label.textContent;
       item.append(label);
 
-      if (!tab.pinned) {
-        const close = document.createElement("button");
-        close.type = "button";
-        close.className = "browser-tab-close";
-        close.dataset.tabClose = tab.id;
-        close.setAttribute("aria-label", `关闭 ${label.textContent}`);
-        close.textContent = "×";
-        item.append(close);
-      }
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "browser-tab-close";
+      close.dataset.tabClose = tab.id;
+      close.setAttribute("aria-label", `关闭 ${label.textContent}`);
+      close.textContent = "×";
+      item.append(close);
       tabsEl.append(item);
     }
     const add = document.createElement("button");
@@ -199,10 +208,16 @@ export function mountBrowser(opts: {
     back.disabled = !tab?.canGoBack;
     forward.disabled = !tab?.canGoForward;
     reload.disabled = !tab?.url;
-    empty.hidden = !tab || tab.url !== "";
+    const asking = addressBarShown(tab);
+    empty.hidden = !asking;
+    // The way back to DeepSeek is only offered while its tab is closed.
+    deepseek.hidden = Boolean(state?.tabs.some((item) => item.pinned));
+    form.hidden = !asking;
     const changedTab = (tab?.id ?? "") !== paintedActive;
     paintedActive = tab?.id ?? "";
     if (changedTab || document.activeElement !== input) syncAddress();
+    // The bar only exists after +, so the cursor goes straight into it.
+    if (changedTab && asking) input.focus();
   }
 
   function paint(): void {
@@ -229,15 +244,13 @@ export function mountBrowser(opts: {
       api()?.browserSelect(tab.dataset.tab);
       return;
     }
-    if (target?.closest("[data-tab-new]")) {
-      api()?.browserNewTab();
-      input.focus();
-    }
+    if (target?.closest("[data-tab-new]")) api()?.browserNewTab();
   });
 
   back.addEventListener("click", () => api()?.browserBack());
   forward.addEventListener("click", () => api()?.browserForward());
   reload.addEventListener("click", () => api()?.browserReload());
+  deepseek.addEventListener("click", () => api()?.browserOpenDeepseek());
 
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();

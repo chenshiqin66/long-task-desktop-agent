@@ -14,6 +14,8 @@
   skills/.skill-settings.json    停用的技能名单
   AGENTS.md                      用户级指令，可选
   memory/                        所有项目的记忆。<name>.md 一条，journal.jsonl 只追加，.lock 修改时临时创建
+  browser-tabs.json              工作台浏览器上次的标签：每个标签的网址和标题、当时停在哪一个、DeepSeek 标签开着还是关着、开着时停在哪一页。只存网址，不存网页内容；网址是明文，带着地址里的参数。先写临时文件再改名，读不了就当没有
+  browser-explain/               工作台浏览器里的解释记录，结构同工作区的 .agent/：.agent/sessions/browser-explain/ 下只有 meta.json 和 explain-*。网页上选中的文字会以明文写在这里，不进任何工作区
   projects/<key>/
     project.json                 这个键对应的仓库根目录和创建时间
     memory/                      本项目的记忆，结构同上面的 memory/

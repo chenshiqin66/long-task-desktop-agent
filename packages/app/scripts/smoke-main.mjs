@@ -24,6 +24,10 @@ const scripts = [
   ["test-explain-icons.mjs"],
   ["test-composer-resize.mjs"],
   ["test-browser-policy.mjs"],
+  ["test-browser-explain.mjs"],
+  ["test-browser-tabs-store.mjs"],
+  ["test-workbench-page.mjs"],
+  ["test-composer-collapse.mjs"],
   ["test-taskbar-attention.mjs"],
   ["test-taskbar-icon-win.mjs", "--experimental-test-module-mocks"],
 ];

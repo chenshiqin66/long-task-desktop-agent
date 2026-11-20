@@ -32,8 +32,10 @@ import { attachMcpLibrary } from "./mcp.js";
 import { attachModelsLibrary } from "./models.js";
 import { escapeAction } from "./escapeKey.js";
 import { installImageViewer, isImageViewerOpen } from "./imageViewer.js";
-import { mountFavoriteFolders, mountWorkbench, mountWorkbenchNav, type WorkbenchPage } from "./workbench.js";
+import { mountFavoriteFolders, mountMenuToggle, mountWorkbench, mountWorkbenchNav, type WorkbenchPage } from "./workbench.js";
 import { mountBrowser } from "./browserView.js";
+import { mountBrowserExplain, type BrowserExplain } from "./browserExplain.js";
+import { EXPLAIN_DRAG_MIME } from "./explainDrag.js";
 import { appendMemorySaved, mountMemoryPage } from "./memory.js";
 import {
   plainError,
@@ -47,6 +49,15 @@ import { paintSendButton } from "./sendButton.js";
 import { createThinkingHint, thinkingLabel } from "./thinkingHint.js";
 import { paintAddButtons } from "./addButton.js";
 import { attachComposerResize } from "./composerResize.js";
+import { attachComposerCollapse, type ComposerCollapse } from "./composerCollapse.js";
+import {
+  bindQuestionBubbleToggle,
+  expandTurnForQuestion,
+  isQuestionFilterHidden,
+  questionsOnly,
+  setFilterState,
+  setQuestionsOnly as setBoardQuestionsOnly,
+} from "./questionsOnly.js";
 import { mountQuestionNav } from "./questionNav.js";
 
 type SubagentToolRow = {
@@ -238,11 +249,13 @@ declare global {
       browserHide(): void;
       browserSelect(id: string): void;
       browserNewTab(): void;
+      browserOpenDeepseek(): void;
       browserCloseTab(id: string): void;
       browserBack(): void;
       browserForward(): void;
       browserReload(): void;
       browserGo(text: string): Promise<boolean>;
+      onBrowserExplain(cb: (text: string) => void): () => void;
       onBrowserState(cb: (state: unknown) => void): () => void;
       addFavoriteFolder(): Promise<string[] | null>;
       removeFavoriteFolder(path: string): Promise<string[]>;
@@ -332,6 +345,7 @@ const browser = mountBrowser({
   reload: document.getElementById("browser-reload") as HTMLButtonElement,
   host: document.getElementById("browser-host") as HTMLElement,
   empty: document.getElementById("browser-empty") as HTMLElement,
+  deepseek: document.getElementById("browser-open-deepseek") as HTMLButtonElement,
   api: () => window.agent,
 });
 const workbenchNav = mountWorkbenchNav({
@@ -345,8 +359,17 @@ const workbench = mountWorkbench(
   document.getElementById("workbench-sheet") as HTMLElement,
   document.getElementById("workbench-close") as HTMLButtonElement,
   () => reloadWorkbenchPage(workbenchNav.current()),
-  () => browser.hide(),
+  () => {
+    browser.hide();
+    browserExplain?.leave();
+  },
 );
+mountMenuToggle(
+  document.getElementById("browser-menu-toggle") as HTMLButtonElement,
+  document.getElementById("workbench-sheet") as HTMLElement,
+);
+/** Set once the explain pane exists, further down. The browser page borrows that pane. */
+let browserExplain: BrowserExplain | null = null;
 
 paintAddButtons();
 attachComposerResize(
@@ -359,10 +382,12 @@ attachComposerResize(
 function reloadWorkbenchPage(page?: WorkbenchPage): void {
   // A web page is a native view over the window: it shows on its own page and nowhere else.
   if (page === "browser") {
+    browserExplain?.enter();
     browser.show();
     return;
   }
   browser.hide();
+  browserExplain?.leave();
   void favoriteFolders.reload().catch((err: unknown) => {
     const note = document.getElementById("folder-note");
     if (!note) return;
@@ -413,13 +438,16 @@ const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
 type PendingImage = { previewUrl: string; mime: "image/png" | "image/jpeg"; base64: string };
 type PendingVideo = { previewUrl: string; mime: "video/mp4" | "video/webm" | "video/quicktime"; base64: string };
 type ComposerDraft = { text: string; images: PendingImage[]; videos: PendingVideo[] };
+/** Folds the main box to one row until it is used. Set once the box is wired up; see below. */
+let composerCollapse: ComposerCollapse | null = null;
 let pendingImages: PendingImage[] = [];
 let pendingVideos: PendingVideo[] = [];
 /** Drafts belong to one page: the blank「新建会话」page, or one session. Not the global box. */
 const composerDrafts = new Map<string, ComposerDraft>();
 /** One rendered transcript per opened session. Switching reattaches it instead of parsing again. */
 const SESSION_VIEW_LIMIT = 8;
-type StashedSessionView = { holder: HTMLElement; scrollTop: number; followTail: boolean };
+/** `questionsOnly`: the session's own "只看用户问题" state, so switching sessions does not carry it over. */
+type StashedSessionView = { holder: HTMLElement; scrollTop: number; followTail: boolean; questionsOnly: boolean };
 const sessionViews = new Map<string, StashedSessionView>();
 const sessionLoads = new Map<string, Promise<void>>();
 let statusIsRun = false;
@@ -691,6 +719,16 @@ function setLogsAvailable(on: boolean): void {
 /** The filter belongs to the session page. It shows only while that title is selected. */
 function syncQuestionsToggle(): void {
   questionsBtn.hidden = storeTabs.hidden || libraryOpen() || activeView !== "chat";
+  paintQuestionsButton();
+}
+
+/** The button shows the open session's own state. */
+function paintQuestionsButton(): void {
+  const state = questionsOnly(messagesEl);
+  questionsBtn.setAttribute("aria-pressed", state ? "true" : "false");
+  const label = state ? "显示全部消息" : "只看用户问题";
+  questionsBtn.title = label;
+  questionsBtn.setAttribute("aria-label", label);
 }
 
 function clearLogsSelection(): void {
@@ -1301,7 +1339,6 @@ pageCtxExplain.addEventListener("click", (ev) => {
   explainApi.ask(text, source === "main" ? ids : null);
 });
 
-const EXPLAIN_DRAG_MIME = "application/x-csq-explain";
 type ExplainDrag = { text: string; ids: string[] | null };
 let explainDrag: ExplainDrag | null = null;
 
@@ -1580,6 +1617,7 @@ function updateChrome(): void {
   syncLiveDock();
   syncTaskChrome();
   explainApi?.sync(currentSessionId, viewWorkspace ?? activeWorkspace);
+  composerCollapse?.refresh();
 }
 
 function syncTaskChrome(): void {
@@ -1681,6 +1719,7 @@ function ensureSessionView(key: string): StashedSessionView {
     holder: document.createElement("div"),
     scrollTop: 0,
     followTail: true,
+    questionsOnly: false,
   };
   sessionViews.set(key, created);
   return created;
@@ -1715,8 +1754,10 @@ function dropWorkspaceViews(workspace: string): void {
 /** Move the open transcript into its buffer. An empty pane must not wipe a buffer already saved. */
 function stashVisibleView(): void {
   const key = sessionViewKey(viewWorkspace ?? activeWorkspace, currentSessionId);
-  if (!key || !messagesEl.firstChild) return;
+  if (!key) return;
   const entry = ensureSessionView(key);
+  entry.questionsOnly = questionsOnly(messagesEl);
+  if (!messagesEl.firstChild) return;
   entry.scrollTop = messagesEl.scrollTop;
   entry.followTail = followTail;
   entry.holder.replaceChildren();
@@ -1731,6 +1772,7 @@ function mountStashedView(key: string): boolean {
   messagesEl.replaceChildren();
   while (entry.holder.firstChild) messagesEl.appendChild(entry.holder.firstChild);
   followTail = entry.followTail;
+  setFilterState(messagesEl, entry.questionsOnly);
   const previous = messagesEl.style.scrollBehavior;
   messagesEl.style.scrollBehavior = "auto";
   applyingTailScroll = true;
@@ -1996,6 +2038,7 @@ async function removeWorkspaceFromList(path: string): Promise<void> {
       clearPermissionDock();
       hideStoreDock();
       messagesEl.innerHTML = "";
+      setFilterState(messagesEl, false);
       setMainView("chat");
       restoreComposer();
     }
@@ -2383,6 +2426,8 @@ async function showSession(workspace: string, sessionId: string, title: string):
   }
   rememberComposer();
   stashVisibleView();
+  // The filter is per session: start from this session's own state (set in mountStashedView), not the last one's.
+  setFilterState(messagesEl, false);
   try {
     // Opening a session selects the workspace it lives in (its row lights up). Not guarded by creatingSession:
     // session creation already passes its workspace explicitly, so the selection can move safely.
@@ -2442,6 +2487,7 @@ async function showNewPage(): Promise<void> {
   }
   rememberComposer();
   stashVisibleView();
+  setFilterState(messagesEl, false);
   currentSessionId = null;
   viewWorkspace = activeWorkspace;
   currentSessionTitle = "";
@@ -2635,6 +2681,7 @@ async function applyWorkspace(path: string | null): Promise<void> {
   clearPermissionDock();
   hideStoreDock();
   messagesEl.innerHTML = "";
+  setFilterState(messagesEl, false);
   await refreshSessions();
   setStatus("", false);
   syncEmptyState();
@@ -2736,6 +2783,7 @@ async function videoDataUrls(
 function renderPendingImages(): void {
   composerImages.innerHTML = "";
   composerImages.hidden = pendingImages.length === 0 && pendingVideos.length === 0;
+  composerCollapse?.refresh();
   pendingImages.forEach((image, index) => {
     const thumb = document.createElement("div");
     thumb.className = "composer-thumb";
@@ -2990,7 +3038,7 @@ function appendUserQuestion(text: string, images: string[], messageId?: string, 
     ...(messageId ? { messageId } : {}),
     at: new Date().toISOString(),
   });
-  if (messagesEl.classList.contains("is-questions-only")) body.closest(".turn")?.classList.add("is-expanded");
+  expandTurnForQuestion(messagesEl, body);
   return body;
 }
 
@@ -3319,73 +3367,16 @@ new MutationObserver(() => scheduleLocalLinkCheck()).observe(messagesEl, {
   subtree: true,
 });
 
-function isQuestionFilterHidden(node: Node): boolean {
-  if (!messagesEl.classList.contains("is-questions-only")) return false;
-  const el = node instanceof Element ? node : node.parentElement;
-  const turn = el?.closest(".turn");
-  if (!(turn instanceof HTMLElement) || turn.classList.contains("is-expanded") || !messagesEl.contains(turn)) return false;
-  const branch = el?.closest(".turn > *");
-  if (!(branch instanceof HTMLElement)) return false;
-  if (branch.classList.contains("user")) return false;
-  if (branch.classList.contains("msg-time") && branch.previousElementSibling?.classList.contains("user")) return false;
-  return true;
-}
-
-function holdQuestionBubble(bubble: HTMLElement, mutate: () => void): void {
-  const before = bubble.getBoundingClientRect().top;
-  const behavior = messagesEl.style.scrollBehavior;
-  messagesEl.style.scrollBehavior = "auto";
-  mutate();
-  refreshStickyTurns(messagesEl);
-  const delta = bubble.getBoundingClientRect().top - before;
-  if (Math.abs(delta) > 0.5) messagesEl.scrollTop += delta;
-  messagesEl.style.scrollBehavior = behavior;
-}
-
-function visibleQuestionAnchor(): HTMLElement | null {
-  const box = messagesEl.getBoundingClientRect();
-  for (const node of Array.from(messagesEl.querySelectorAll(":scope > .turn > .msg.user"))) {
-    if (!(node instanceof HTMLElement)) continue;
-    const rect = node.getBoundingClientRect();
-    if (rect.bottom > box.top + 4 && rect.top < box.bottom - 4) return node;
-  }
-  return null;
-}
-
+/** Turns the filter on the main conversation on or off, and keeps its button in step. */
 function setQuestionsOnly(on: boolean): void {
-  const anchor = visibleQuestionAnchor();
-  const apply = () => {
-    messagesEl.classList.toggle("is-questions-only", on);
-    questionsBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    const label = on ? "显示全部消息" : "只看用户问题";
-    questionsBtn.title = label;
-    questionsBtn.setAttribute("aria-label", label);
-    if (on) pageRun()?.streamingEl?.closest(".turn")?.classList.add("is-expanded");
-  };
-  if (anchor) holdQuestionBubble(anchor, apply);
-  else {
-    apply();
-    refreshStickyTurns(messagesEl);
-  }
+  setBoardQuestionsOnly(messagesEl, on, (pageRun()?.streamingEl?.closest(".turn") ?? null) as HTMLElement | null, () => paintQuestionsButton());
 }
 
 questionsBtn.addEventListener("click", () => {
   setQuestionsOnly(!messagesEl.classList.contains("is-questions-only"));
 });
 
-messagesEl.addEventListener("click", (ev) => {
-  if (!messagesEl.classList.contains("is-questions-only")) return;
-  const target = ev.target;
-  if (!(target instanceof Element)) return;
-  if (target.closest("a, button, summary, input, textarea")) return;
-  const bubble = target.closest(".msg.user");
-  if (!(bubble instanceof HTMLElement) || !messagesEl.contains(bubble)) return;
-  const selected = window.getSelection();
-  if (selected && !selected.isCollapsed && bubble.contains(selected.anchorNode)) return;
-  const turn = bubble.parentElement;
-  if (!(turn instanceof HTMLElement) || !turn.classList.contains("turn")) return;
-  holdQuestionBubble(bubble, () => turn.classList.toggle("is-expanded"));
-});
+bindQuestionBubbleToggle(messagesEl);
 
 function openMarkdownLink(ev: Event): void {
   const t = ev.target;
@@ -4144,6 +4135,13 @@ treesEl.addEventListener("scroll", () => closeSessionMenus(), { passive: true })
 window.addEventListener("resize", () => closeSessionMenus());
 
 explainApi = mountExplainPane();
+browserExplain = mountBrowserExplain({
+  explain: explainApi,
+  slot: document.getElementById("browser-explain-slot") as HTMLElement,
+  expand: document.getElementById("explain-toggle") as HTMLButtonElement,
+  expandSlot: document.getElementById("browser-explain-expand-slot") as HTMLElement,
+  api: () => window.agent,
+});
 
 const explainComposer = document.getElementById("explain-composer");
 const sidebarEl = document.getElementById("sidebar");
@@ -4160,6 +4158,15 @@ function setActiveComposer(which: "main" | "explain"): void {
 }
 
 setActiveComposer("main");
+// Attached last: the draft, the thinking flag and the message list it reads are all declared above.
+composerCollapse = attachComposerCollapse({
+  composer: composerEl,
+  input: inputEl,
+  conversation: conversationEl,
+  hasDraft: () => inputEl.value.trim().length > 0 || pendingImages.length > 0 || pendingVideos.length > 0,
+  held: () =>
+    composerThinking || Boolean(pageRun()?.pendingAsk) || inputEl.disabled || composerEl.classList.contains("is-locked"),
+});
 document.addEventListener(
   "click",
   (ev) => {

@@ -1,6 +1,8 @@
 import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelect } from "./composerModelFit.js";
 import { paintExplainIcons } from "./explainIcons.js";
 import { attachComposerResize } from "./composerResize.js";
+import { attachComposerCollapse, type ComposerCollapse } from "./composerCollapse.js";
+import { bindQuestionBubbleToggle, expandTurnForQuestion, questionsOnly, setQuestionsOnly } from "./questionsOnly.js";
 import { paintSendButton } from "./sendButton.js";
 import { createThinkingHint, thinkingLabel } from "./thinkingHint.js";
 import {
@@ -55,6 +57,13 @@ export type ExplainPane = {
   findNext: HTMLButtonElement;
   findClose: HTMLButtonElement;
   sync(sessionId: string | null, workspace: string | null): void;
+  /**
+   * Point the pane at another record for a while (the browser's), whatever `sync` is told. `null` gives it
+   * back to the session on screen.
+   */
+  use(slot: { sessionId: string; workspace: string } | null): void;
+  setOpen(open: boolean): void;
+  isOpen(): boolean;
   ask(text: string, sourceMessageIds: string[] | null): void;
   contains(node: Node | null): boolean;
   focusInside(): boolean;
@@ -124,6 +133,8 @@ export function mountExplainPane(): ExplainPane {
   const modelEmpty = document.getElementById("explain-model-empty") as HTMLButtonElement;
   const floatStack = document.getElementById("explain-float") as HTMLElement;
   const placeholder = document.getElementById("explain-messages") as HTMLElement;
+  const questionsToggle = document.getElementById("explain-questions-toggle") as HTMLButtonElement;
+  bindQuestionBubbleToggle(placeholder);
 
   const slots = new Map<string, Slot>();
   let loadGen = 0;
@@ -143,6 +154,8 @@ export function mountExplainPane(): ExplainPane {
    */
   let thinking = false;
   let statusIsRun = false;
+  /** Folds the box to one row until it is used. Attached at the end of this function. */
+  let composerFold: ComposerCollapse | null = null;
   const idlePlaceholder = input.placeholder;
   const thinkingHint = createThinkingHint(input);
 
@@ -256,6 +269,7 @@ export function mountExplainPane(): ExplainPane {
   function paintImages(): void {
     imageRow.innerHTML = "";
     imageRow.hidden = pending.length === 0 && pendingVideos.length === 0;
+    composerFold?.refresh();
     pending.forEach((image, index) => {
       const thumb = document.createElement("div");
       thumb.className = "composer-thumb";
@@ -321,6 +335,7 @@ export function mountExplainPane(): ExplainPane {
     const empty = !input.value.trim() && pending.length === 0 && pendingVideos.length === 0;
     sendBtn.disabled = elsewhere || (blocked && !here) || (!here && empty);
     paintSendButton(sendBtn, here ? "stop" : "send");
+    composerFold?.refresh();
     pad();
   }
 
@@ -343,11 +358,34 @@ export function mountExplainPane(): ExplainPane {
     paintComposer();
   }
 
+  function paintQuestionsToggle(): void {
+    const state = questionsOnly(shown);
+    questionsToggle.setAttribute("aria-pressed", state ? "true" : "false");
+    const label = state ? "显示全部消息" : "只看用户问题";
+    questionsToggle.title = label;
+    questionsToggle.setAttribute("aria-label", label);
+  }
+
+  /** Shown only while the pane has a conversation, like the main page's button, which needs a session. */
+  function syncQuestionsToggle(): void {
+    questionsToggle.hidden = !shown || Boolean(shown.querySelector(".empty-state"));
+    paintQuestionsToggle();
+  }
+
+  questionsToggle.addEventListener("click", () => {
+    if (!shown) return;
+    const slot = current ? slots.get(current.sessionId) : undefined;
+    // Only a run that is still going on this session has a turn to keep open.
+    const streaming = slot && runKey === slot.sessionId ? slot.stream?.closest(".turn") ?? null : null;
+    setQuestionsOnly(shown, !questionsOnly(shown), streaming as HTMLElement | null, () => paintQuestionsToggle());
+  });
+
   function showBoard(board: HTMLElement): void {
     if (shown === board) return;
     board.classList.add("messages");
     shown?.replaceWith(board);
     shown = board;
+    syncQuestionsToggle();
     pad();
     stick(board);
   }
@@ -358,6 +396,7 @@ export function mountExplainPane(): ExplainPane {
     const board = document.createElement("div");
     board.className = "messages";
     board.dataset.follow = "1";
+    bindQuestionBubbleToggle(board);
     showExplainEmpty(board);
     board.addEventListener(
       "scroll",
@@ -584,11 +623,12 @@ export function mountExplainPane(): ExplainPane {
     slot.board.querySelector(".empty-state")?.remove();
     const previews = images.map((image) => image.previewUrl);
     const videoPreviews = videos.map((video) => video.previewUrl);
-    appendMessage(slot.board, "user", text, {
+    const sent = appendMessage(slot.board, "user", text, {
       ...(previews.length ? { images: previews } : {}),
       ...(videoPreviews.length ? { videos: videoPreviews } : {}),
       at: new Date().toISOString(),
     });
+    expandTurnForQuestion(slot.board, sent);
     slot.stream = null;
     slot.streamText = "";
     slot.afterTool = false;
@@ -713,6 +753,31 @@ export function mountExplainPane(): ExplainPane {
     if (current) drafts.set(current.sessionId, { text: input.value, images: pending, videos: pendingVideos });
   }
 
+  /** The session on screen, as `sync` last heard it, and the record the browser has borrowed the pane for. */
+  let onScreen: { sessionId: string; workspace: string } | null = null;
+  let borrowed: { sessionId: string; workspace: string } | null = null;
+
+  function switchTo(next: { sessionId: string; workspace: string } | null): void {
+    if (current?.sessionId === next?.sessionId && current?.workspace === next?.workspace) {
+      applyVisibility();
+      return;
+    }
+    rememberDraft(current?.sessionId ?? null);
+    current = next;
+    if (!current) {
+      applyVisibility();
+      return;
+    }
+    const slot = slotFor(current.workspace, current.sessionId);
+    restoreDraft(current.sessionId);
+    void refreshExplainModels();
+    void slot.loaded.then(() => {
+      if (current?.sessionId !== slot.sessionId) return;
+      applyVisibility();
+    });
+    applyVisibility();
+  }
+
   function setPanelOpen(open: boolean): void {
     if (!current) return;
     const slot = slotFor(current.workspace, current.sessionId);
@@ -796,6 +861,15 @@ export function mountExplainPane(): ExplainPane {
     if (!pane.hidden) layout();
   });
   new ResizeObserver(pad).observe(floatStack);
+  composerFold = attachComposerCollapse({
+    composer,
+    input,
+    conversation,
+    hasDraft: () => input.value.trim().length > 0 || pending.length > 0 || pendingVideos.length > 0,
+    held: () => thinking || input.disabled || composer.classList.contains("is-locked"),
+  });
+  new MutationObserver(syncQuestionsToggle).observe(conversation, { childList: true, subtree: true });
+  syncQuestionsToggle();
 
   return {
     pane,
@@ -807,25 +881,20 @@ export function mountExplainPane(): ExplainPane {
     findNext,
     findClose,
     sync(sessionId, workspace) {
-      const next = sessionId && workspace ? { sessionId, workspace } : null;
-      if (current?.sessionId === next?.sessionId && current?.workspace === next?.workspace) {
-        applyVisibility();
-        return;
-      }
-      rememberDraft(current?.sessionId ?? null);
-      current = next;
-      if (!current) {
-        applyVisibility();
-        return;
-      }
-      const slot = slotFor(current.workspace, current.sessionId);
-      restoreDraft(current.sessionId);
-      void refreshExplainModels();
-      void slot.loaded.then(() => {
-        if (current?.sessionId !== slot.sessionId) return;
-        applyVisibility();
-      });
-      applyVisibility();
+      onScreen = sessionId && workspace ? { sessionId, workspace } : null;
+      // While the browser has the pane, the session on screen is only remembered.
+      if (borrowed) return;
+      switchTo(onScreen);
+    },
+    use(slot) {
+      borrowed = slot;
+      switchTo(borrowed ?? onScreen);
+    },
+    setOpen(open) {
+      setPanelOpen(open);
+    },
+    isOpen() {
+      return !pane.hidden;
     },
     ask(text, sourceMessageIds) {
       const trimmed = text.trim();

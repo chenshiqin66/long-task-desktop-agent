@@ -8,7 +8,7 @@ import {
   paneBounds,
   webUrl,
 } from "../dist/electron/browserPolicy.js";
-import { parseBrowserState, tabLabel } from "../dist/src/renderer/browserView.js";
+import { addressBarShown, parseBrowserState, tabLabel } from "../dist/src/renderer/browserView.js";
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -113,6 +113,12 @@ assert(tabLabel(tab({ pinned: true, title: "DeepSeek", url: PINNED.url })) === "
 assert(tabLabel(tab({ title: "A page", url: "https://example.com/" })) === "A page", "title wins");
 assert(tabLabel(tab({ url: "https://example.com/a" })) === "example.com", "host when there is no title yet");
 assert(tabLabel(tab({})) === "新标签页", "empty tab");
+
+// The address bar shows only for an empty tab (right after +), and hides once the tab has a page.
+assert(addressBarShown(tab({})) === true, "empty tab shows the bar");
+assert(addressBarShown(tab({ url: "https://example.com/" })) === false, "tab with a page hides the bar");
+assert(addressBarShown(tab({ pinned: true, url: PINNED.url })) === false, "pinned tab hides the bar");
+assert(addressBarShown(undefined) === false, "no tab, no bar");
 
 // The state from the main process is checked before it is drawn.
 const good = { active: "deepseek", tabs: [tab({ id: "deepseek", pinned: true, title: "DeepSeek", url: PINNED.url })] };

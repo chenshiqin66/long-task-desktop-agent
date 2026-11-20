@@ -111,7 +111,6 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 #main.is-scrollbar-off pre::-webkit-scrollbar-thumb,
 #main.is-scrollbar-off .permission-dock::-webkit-scrollbar-thumb,
 #main.is-scrollbar-off .permission-body::-webkit-scrollbar-thumb,
-#main.is-scrollbar-off .task-panel::-webkit-scrollbar-thumb,
 #main.is-scrollbar-off .skills-page::-webkit-scrollbar-thumb,
 #main.is-scrollbar-off textarea::-webkit-scrollbar-thumb,
 #explain-pane.is-scrollbar-off .messages::-webkit-scrollbar-thumb,
@@ -128,7 +127,6 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 #main.is-scrollbar-off pre::-webkit-scrollbar-thumb:hover,
 #main.is-scrollbar-off .permission-dock::-webkit-scrollbar-thumb:hover,
 #main.is-scrollbar-off .permission-body::-webkit-scrollbar-thumb:hover,
-#main.is-scrollbar-off .task-panel::-webkit-scrollbar-thumb:hover,
 #main.is-scrollbar-off .skills-page::-webkit-scrollbar-thumb:hover,
 #main.is-scrollbar-off textarea::-webkit-scrollbar-thumb:hover,
 #explain-pane.is-scrollbar-off .messages::-webkit-scrollbar-thumb:hover,
@@ -585,18 +583,77 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 /* Only marks where a web page goes. The page itself is a native view above this box. */
 .workbench-web {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: grid;
   place-items: center;
 }
 
-.browser-tabs {
+/* The tab bar is the top row of this page. The menu already says where you are, so no title bar. */
+.workbench-stage[data-page="browser"] .workbench-bar {
+  display: none;
+}
+
+.browser-top {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 12px 6px;
-  overflow-x: auto;
+  /* Right side clears the close button, which sits in the sheet's top-right corner. */
+  padding: 6px 54px 6px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   flex-shrink: 0;
+}
+
+.browser-navs {
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* Two columns side by side: the browser, and the explain pane from the very top down. The pane brings its own width and border. */
+.browser-page {
+  flex-direction: row;
+}
+
+.browser-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.browser-explain-slot {
+  display: flex;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* The close button sits over the pane's header while the pane is open, over the tab row while it is not. */
+.browser-explain-slot #explain-pane .explain-bar {
+  padding-right: 54px;
+}
+
+.browser-page:has(#explain-pane:not([hidden])) .browser-top {
+  padding-right: 12px;
+}
+
+/* The pane's expand button, shown by the pane itself while it is collapsed. */
+.browser-expand-slot {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.browser-expand-slot .explain-toggle[hidden] {
+  display: none;
+}
+
+.browser-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
 }
 
 .browser-tab {
@@ -687,15 +744,15 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 12px 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   flex-shrink: 0;
 }
 
 .browser-nav {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
   font-size: 0.95rem;
 }
@@ -727,10 +784,68 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .browser-empty {
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
   color: var(--ink-muted);
   font-family: var(--font-ui);
   font-size: var(--text);
+}
+
+.browser-empty[hidden],
+.browser-open-deepseek[hidden] {
+  display: none;
+}
+
+.browser-empty p {
+  margin: 0;
+}
+
+.browser-open-deepseek {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-elev);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text);
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.browser-open-deepseek:hover {
+  background: var(--teal-soft);
+}
+
+/* The first button in the row: hides and shows the workbench menu. */
+.browser-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  padding: 0;
+  color: var(--teal);
+}
+
+.browser-menu-toggle svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+/* Menu hidden: the same arrow, turned around, to bring it back. */
+.browser-menu-toggle[aria-expanded="false"] svg {
+  transform: rotate(180deg);
+}
+
+/* Only the browser page can hide the menu. Any other page needs it to get back, so it shows there whatever was chosen. */
+.workbench-sheet.is-menu-hidden:has(.workbench-stage[data-page="browser"]) .workbench-menu {
+  display: none;
+}
+
+/* The workbench button is painted over the menu's foot, so it goes with the menu. */
+body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-page="browser"]) #btn-workbench.is-pinned {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1415,6 +1530,13 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   display: block;
 }
 
+.explain-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
 .explain-toggle {
   display: inline-flex;
   align-items: center;
@@ -2069,15 +2191,15 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   width: calc(100% - 22px);
 }
 
-#messages.is-questions-only > .turn:not(.is-expanded) > :not(.msg.user) {
+.messages.is-questions-only > .turn:not(.is-expanded) > :not(.msg.user) {
   display: none;
 }
 
-#messages.is-questions-only > .turn:not(.is-expanded) > .msg.user + .msg-time {
+.messages.is-questions-only > .turn:not(.is-expanded) > .msg.user + .msg-time {
   display: block;
 }
 
-#messages.is-questions-only > .turn > .msg.user {
+.messages.is-questions-only > .turn > .msg.user {
   cursor: pointer;
 }
 
@@ -3215,7 +3337,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   display: block;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-resize {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-resize {
   display: none;
 }
 
@@ -3288,12 +3410,14 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   font-variant-numeric: tabular-nums;
 }
 
+/* The panel is a fixed frame: the title bar stays put and only .task-panel-body scrolls. */
 .task-panel {
   width: 80%;
   max-height: min(320px, 42vh);
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   pointer-events: auto;
-  padding: 10px 12px 12px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: #fff;
@@ -3301,11 +3425,25 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 }
 
 .task-panel-head {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  padding: 10px 12px 8px;
+}
+
+/* The list scrolls with the wheel or trackpad, but the bar stays hidden. */
+.task-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 0 12px 12px;
+}
+
+.task-panel-body::-webkit-scrollbar {
+  display: none;
 }
 
 .task-panel-title {
@@ -3680,19 +3818,19 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   filter: none;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#btn-send, #explain-send):not(.is-answer) {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) :is(#btn-send, #explain-send):not(.is-answer) {
   width: 26px;
   height: 26px;
   min-width: 26px;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#btn-send, #explain-send):not(.is-answer) svg {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) :is(#btn-send, #explain-send):not(.is-answer) svg {
   width: 26px;
   height: 26px;
 }
 
 /* One row: placeholder and the buttons. The other pane stays like this until it is clicked. */
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3701,8 +3839,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   box-shadow: var(--shadow-soft);
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-images,
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .btn-image,
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-images,
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .btn-image,
 #explain-composer .composer-images,
 #explain-composer .btn-image {
   display: none;
@@ -3717,12 +3855,12 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   color: var(--teal);
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-input {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-input {
   flex: 1 1 auto;
   grid-column: auto;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#input, #explain-input) {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) :is(#input, #explain-input) {
   display: block;
   box-sizing: border-box;
   height: 26px;
@@ -3735,23 +3873,23 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow: hidden;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) :is(#input, #explain-input)::placeholder {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) :is(#input, #explain-input)::placeholder {
   line-height: 26px;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-actions {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-actions {
   flex: none;
   grid-column: auto;
   gap: 2px;
   justify-content: flex-end;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-model,
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking) .composer-model-empty {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-model,
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-model-empty {
   display: none;
 }
 
-:is(#composer, #explain-composer):is(.is-compact, .is-thinking).is-locked.has-draft .composer-lock-note {
+:is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed).is-locked.has-draft .composer-lock-note {
   position: absolute;
   margin: 0;
   max-width: 100%;

@@ -143,10 +143,56 @@ export function mountWorkbench(
   };
 }
 
+const MENU_HIDDEN_KEY = "workbench.menuHidden";
+
+/**
+ * The button in the browser's top row that hides the workbench menu and brings it back. The choice is kept
+ * between runs. CSS only honours it on the browser page, so another page always has its menu.
+ */
+export function mountMenuToggle(button: HTMLButtonElement, sheet: HTMLElement): void {
+  let hidden = false;
+  try {
+    hidden = window.localStorage.getItem(MENU_HIDDEN_KEY) === "1";
+  } catch {
+    hidden = false;
+  }
+
+  function paint(): void {
+    sheet.classList.toggle("is-menu-hidden", hidden);
+    const label = hidden ? "显示菜单" : "隐藏菜单";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.setAttribute("aria-expanded", hidden ? "false" : "true");
+  }
+
+  button.addEventListener("click", () => {
+    hidden = !hidden;
+    try {
+      window.localStorage.setItem(MENU_HIDDEN_KEY, hidden ? "1" : "0");
+    } catch {
+      // The choice then only lasts until the app closes.
+    }
+    paint();
+  });
+  paint();
+}
+
 export type WorkbenchPage = "folders" | "browser";
 
 function isWorkbenchPage(value: string | undefined): value is WorkbenchPage {
   return value === "folders" || value === "browser";
+}
+
+const PAGE_KEY = "workbench.page";
+
+/** The menu item chosen last time. Anything unreadable or unknown (an old build, a removed page) is the first one. */
+export function savedWorkbenchPage(read: () => string | null): WorkbenchPage {
+  try {
+    const value = read();
+    return isWorkbenchPage(value ?? undefined) ? (value as WorkbenchPage) : "folders";
+  } catch {
+    return "folders";
+  }
 }
 
 export interface WorkbenchNav {
@@ -168,6 +214,13 @@ export function mountWorkbenchNav(opts: {
 
   function select(next: WorkbenchPage): void {
     page = next;
+    try {
+      window.localStorage.setItem(PAGE_KEY, next);
+    } catch {
+      // The choice then only lasts until the app closes.
+    }
+    // Lets CSS change the frame per page, e.g. the browser drops the title bar to keep the height.
+    opts.stage.dataset.page = next;
     buttons.forEach((button) => {
       if (button.dataset.page === next) {
         button.setAttribute("aria-current", "page");
@@ -192,6 +245,8 @@ export function mountWorkbenchNav(opts: {
       if (isWorkbenchPage(next)) show(next);
     });
   });
+  // Start on the item used last time. Only the menu is set here: the page loads when the sheet opens.
+  select(savedWorkbenchPage(() => window.localStorage.getItem(PAGE_KEY)));
   return { current: () => page, select, show };
 }
 
