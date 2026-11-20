@@ -65,6 +65,8 @@ export function mountWorkbench(
   sheet: HTMLElement,
   closeBtn: HTMLButtonElement,
   onOpen: () => void,
+  /** Runs as soon as closing starts, before the sheet slides away. */
+  onClose: () => void = () => {},
 ): Workbench {
   let open = false;
   let closing = false;
@@ -120,6 +122,7 @@ export function mountWorkbench(
     if (!open || closing) return;
     open = false;
     closing = true;
+    onClose();
     paintOpen(false);
     if (prefersReducedMotion()) {
       finishClose();
@@ -140,7 +143,11 @@ export function mountWorkbench(
   };
 }
 
-export type WorkbenchPage = "folders";
+export type WorkbenchPage = "folders" | "browser";
+
+function isWorkbenchPage(value: string | undefined): value is WorkbenchPage {
+  return value === "folders" || value === "browser";
+}
 
 export interface WorkbenchNav {
   current(): WorkbenchPage;
@@ -180,7 +187,10 @@ export function mountWorkbenchNav(opts: {
   }
 
   buttons.forEach((button) => {
-    button.addEventListener("click", () => show("folders"));
+    button.addEventListener("click", () => {
+      const next = button.dataset.page;
+      if (isWorkbenchPage(next)) show(next);
+    });
   });
   return { current: () => page, select, show };
 }

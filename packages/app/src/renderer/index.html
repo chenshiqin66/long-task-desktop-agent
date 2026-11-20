@@ -376,6 +376,7 @@
       <aside class="workbench-menu">
         <nav id="workbench-nav" class="workbench-nav" aria-label="工作台菜单">
           <button type="button" id="workbench-folders" data-page="folders" aria-current="page">常用文件夹</button>
+          <button type="button" id="workbench-browser" data-page="browser">浏览器</button>
         </nav>
         <div id="workbench-foot-space" class="workbench-foot-space" aria-hidden="true"></div>
       </aside>
@@ -387,6 +388,19 @@
         <div class="workbench-page" data-workbench-page="folders">
           <p id="folder-note" class="skills-note" hidden></p>
           <div id="workbench-view" class="workbench-view"></div>
+        </div>
+        <div class="workbench-page" data-workbench-page="browser" hidden>
+          <div id="browser-tabs" class="browser-tabs" role="tablist" aria-label="标签页"></div>
+          <form id="browser-bar" class="browser-bar" autocomplete="off">
+            <button type="button" id="browser-back" class="browser-nav" aria-label="后退" disabled>←</button>
+            <button type="button" id="browser-forward" class="browser-nav" aria-label="前进" disabled>→</button>
+            <button type="button" id="browser-reload" class="browser-nav" aria-label="刷新" disabled>↻</button>
+            <input id="browser-address" class="browser-address" type="text" inputmode="url" spellcheck="false" placeholder="输入网址，回车打开" aria-label="地址栏" />
+          </form>
+          <!-- The page is a native view that main.ts lays over this box. Only the hint below is DOM. -->
+          <div id="browser-host" class="workbench-web">
+            <p id="browser-empty" class="browser-empty" hidden>在上面输入网址，回车打开。</p>
+          </div>
         </div>
       </section>
       <button type="button" id="workbench-close" class="workbench-x" aria-label="关闭工作台">

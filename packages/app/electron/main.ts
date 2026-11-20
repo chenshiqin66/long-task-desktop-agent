@@ -45,11 +45,19 @@ import type { AgentConfig, ImageAttachment, ImageMime, PermissionDecision, Store
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 import { registerMcpHandlers } from "./mcpIpc.js";
+import { BrowserTabs, registerBrowserHandlers } from "./browserTabs.js";
 import { createMemoryExtractor, registerMemoryHandlers, runtimeMemory } from "./memoryIpc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let win: BrowserWindow | null = null;
+/** The workbench browser: a pinned DeepSeek tab plus the tabs the user opens. No access to the app. */
+const browserTabs = new BrowserTabs(
+  () => win,
+  (state) => {
+    if (win && !win.isDestroyed()) win.webContents.send("agent:browserState", state);
+  },
+);
 let taskbarAlert: TaskbarAlert | null = null;
 let appMenu: Menu | null = null;
 let explainRt: ExplainRuntime | null = null;
@@ -437,6 +445,7 @@ function createWindow() {
   win.webContents.on("preload-error", (_event, path, error) => {
     console.error("preload-error", path, error);
   });
+  win.once("closed", () => browserTabs.dispose());
   hideNativeMenuBar(win);
   taskbarAlert?.attach(win);
   win.once("ready-to-show", () => {
@@ -518,6 +527,7 @@ app.whenReady().then(async () => {
   taskbarAlert = new TaskbarAlert();
   installChineseAppMenu();
   registerMcpHandlers(ipcMain, mcpPool);
+  registerBrowserHandlers(ipcMain, browserTabs, () => win);
   registerMemoryHandlers(ipcMain, {
     mcp: mcpPool,
     config: readAgentConfig,

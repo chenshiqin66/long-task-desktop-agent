@@ -62,7 +62,7 @@ flowchart LR
 
 这些约束是其余设计的前提，改动时先检查它们：
 
-- **渲染进程没有 Node。** 窗口开着 `contextIsolation`、关着 `nodeIntegration`，页面内导航和新窗口一律拒绝。页面只经 preload 暴露的 `window.agent` 说话。preload 必须是 CommonJS：tsc 先输出 `preload.js`，构建脚本再拷成 `preload.cjs`。
+- **渲染进程没有 Node。** 窗口开着 `contextIsolation`、关着 `nodeIntegration`，页面内导航和新窗口一律拒绝。页面只经 preload 暴露的 `window.agent` 说话。工作台浏览器里的网页是另外的独立视图：单独的会话分区，没有 preload，所以它们碰不到 `window.agent`，也碰不到工作区。网址由用户输入，但只有 http、https 会加载，输入框的文本在主进程里规范化，界面传来的标签 id 只在主进程的标签表里查找。preload 必须是 CommonJS：tsc 先输出 `preload.js`，构建脚本再拷成 `preload.cjs`。
 - **core 不依赖 Electron。** 许可和提问都是接口（`PermissionGate`、`AskGate`）。Electron 里接的是等界面回答的 `DeferredPermissionGate`、`DeferredAskGate`，测试里可以接 `AutoAllowGate`。
 - **一个 runtime 对象同时只跑一轮。** 正在跑时再向同一条会话发送，得到 `busy`。续跑轮例外：第一条发送先暂存，排在回执后面，第二条才是 `busy`。不同会话各用各的对象，同时最多 5 个。
 - **磁盘上的对话只追加，已有的行不改。** 短桩和整条丢弃只作用在这一次请求的副本上。悬空的工具调用有两道补齐：一轮开始、续跑和停止时，往 `messages.jsonl` 追加合成的 tool 消息；组请求时，再在副本上补一次。
@@ -203,12 +203,14 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | --- | --- |
 | `electron/main.ts` | 窗口、中文菜单、工作区、全部 IPC、会话 runtime 池和解释 runtime 的生命周期、技能目录监视。MCP 的 IPC 在 `electron/mcpIpc.ts`，进程退出时关掉连接池。记忆页的 IPC 和提取器在 `electron/memoryIpc.ts`：一轮正常结束就入队，进程退出时和连接池一起关掉。 |
 | `electron/preload.ts` | 页面唯一能用的 API：`window.agent` |
+| `electron/browserTabs.ts`、`browserPolicy.ts` | 工作台里的浏览器：标签列表只在主进程，界面发命令（新开、切换、关闭、前进后退、地址栏文本），主进程回推状态。每个标签是一个 `WebContentsView`：不带 preload，开 `sandbox` 和 `contextIsolation`，拒绝除剪贴板写入外的全部权限；只加载 http、https，新窗口开成新标签。固定的 DeepSeek 标签用自己的会话分区，只留在 `deepseek.com`；其余标签共用另一个分区。空标签不创建视图。纯规则（地址规范化、站点判断、坐标换算）在 `browserPolicy.ts`，有单独的测试脚本 |
 | `electron/openTarget.ts` | 打开链接和本地路径。网址交给浏览器；目录直接打开；文件只在文件夹里选中，不执行 |
 | `electron/taskbar*.ts` | Windows 任务栏提醒：有权限卡或提问卡在等、而你没在看时，图标每 530 毫秒切换一次。Win32 库到第一次换图标时才加载 |
 | `src/renderer/main.ts` | 工作区与会话列表、页面切换、事件订阅、发送与停止、页内搜索、草稿 |
 | `src/renderer/ui.ts` | 消息气泡、Markdown、工具条、权限卡和提问卡。不持有会话状态 |
 | `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`models.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、模型页和输入框旁的模型选择器、任务面板、问题轨 |
-| `src/renderer/workbench.ts` | 「我的工作台」的开关和常用文件夹页 |
+| `src/renderer/workbench.ts` | 「我的工作台」的开关、菜单和常用文件夹页 |
+| `src/renderer/browserView.ts` | 浏览器页的标签栏和地址栏。网页是原生视图，界面里只有一个占位框：量出它的位置交给主进程，并在滑入动画、窗口缩放时跟着改 |
 | `src/renderer/memory.ts`、`memoryView.ts` | 记忆页，以及对话末尾的「已记住」 |
 | `src/renderer/runEventGate.ts` | 丢掉不属于当前会话或轮次的事件 |
 | `src/renderer/escapeKey.ts` | Esc 先关什么、什么时候才停止这一轮 |

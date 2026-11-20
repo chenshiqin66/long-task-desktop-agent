@@ -33,6 +33,7 @@ import { attachModelsLibrary } from "./models.js";
 import { escapeAction } from "./escapeKey.js";
 import { installImageViewer, isImageViewerOpen } from "./imageViewer.js";
 import { mountFavoriteFolders, mountWorkbench, mountWorkbenchNav, type WorkbenchPage } from "./workbench.js";
+import { mountBrowser } from "./browserView.js";
 import { appendMemorySaved, mountMemoryPage } from "./memory.js";
 import {
   plainError,
@@ -232,6 +233,17 @@ declare global {
       saveConfig(cfg: any): Promise<void>;
       localTargetsExist(targets: string[]): Promise<Record<string, boolean>>;
       openExternal(target: string): Promise<{ ok: boolean; error?: string }>;
+      browserShow(box: { x: number; y: number; width: number; height: number }): void;
+      browserMove(box: { x: number; y: number; width: number; height: number }): void;
+      browserHide(): void;
+      browserSelect(id: string): void;
+      browserNewTab(): void;
+      browserCloseTab(id: string): void;
+      browserBack(): void;
+      browserForward(): void;
+      browserReload(): void;
+      browserGo(text: string): Promise<boolean>;
+      onBrowserState(cb: (state: unknown) => void): () => void;
       addFavoriteFolder(): Promise<string[] | null>;
       removeFavoriteFolder(path: string): Promise<string[]>;
       reorderFavoriteFolders(paths: string[]): Promise<string[]>;
@@ -311,6 +323,17 @@ const memoryPage = mountMemoryPage(
     openSession: (workspace, sessionId) => openMemorySource(workspace, sessionId),
   },
 );
+const browser = mountBrowser({
+  tabs: document.getElementById("browser-tabs") as HTMLElement,
+  form: document.getElementById("browser-bar") as HTMLFormElement,
+  input: document.getElementById("browser-address") as HTMLInputElement,
+  back: document.getElementById("browser-back") as HTMLButtonElement,
+  forward: document.getElementById("browser-forward") as HTMLButtonElement,
+  reload: document.getElementById("browser-reload") as HTMLButtonElement,
+  host: document.getElementById("browser-host") as HTMLElement,
+  empty: document.getElementById("browser-empty") as HTMLElement,
+  api: () => window.agent,
+});
 const workbenchNav = mountWorkbenchNav({
   nav: document.getElementById("workbench-nav") as HTMLElement,
   stage: document.getElementById("workbench-stage") as HTMLElement,
@@ -322,6 +345,7 @@ const workbench = mountWorkbench(
   document.getElementById("workbench-sheet") as HTMLElement,
   document.getElementById("workbench-close") as HTMLButtonElement,
   () => reloadWorkbenchPage(workbenchNav.current()),
+  () => browser.hide(),
 );
 
 paintAddButtons();
@@ -332,7 +356,13 @@ attachComposerResize(
 );
 
 
-function reloadWorkbenchPage(_page?: WorkbenchPage): void {
+function reloadWorkbenchPage(page?: WorkbenchPage): void {
+  // A web page is a native view over the window: it shows on its own page and nowhere else.
+  if (page === "browser") {
+    browser.show();
+    return;
+  }
+  browser.hide();
   void favoriteFolders.reload().catch((err: unknown) => {
     const note = document.getElementById("folder-note");
     if (!note) return;

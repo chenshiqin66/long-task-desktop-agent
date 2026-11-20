@@ -23,6 +23,7 @@ const scripts = [
   ["test-composer-model-fit.mjs"],
   ["test-explain-icons.mjs"],
   ["test-composer-resize.mjs"],
+  ["test-browser-policy.mjs"],
   ["test-taskbar-attention.mjs"],
   ["test-taskbar-icon-win.mjs", "--experimental-test-module-mocks"],
 ];

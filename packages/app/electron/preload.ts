@@ -123,6 +123,23 @@ contextBridge.exposeInMainWorld("agent", {
   saveConfig: (cfg: unknown) => ipcRenderer.invoke("agent:saveConfig", cfg),
   localTargetsExist: (targets: string[]) => ipcRenderer.invoke("agent:localTargetsExist", targets),
   openExternal: (target: string) => ipcRenderer.invoke("agent:openExternal", target),
+  browserShow: (box: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.send("agent:browserShow", box),
+  browserMove: (box: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.send("agent:browserBounds", box),
+  browserHide: () => ipcRenderer.send("agent:browserHide"),
+  browserSelect: (id: string) => ipcRenderer.send("agent:browserSelect", id),
+  browserNewTab: () => ipcRenderer.send("agent:browserNew"),
+  browserCloseTab: (id: string) => ipcRenderer.send("agent:browserClose", id),
+  browserBack: () => ipcRenderer.send("agent:browserBack"),
+  browserForward: () => ipcRenderer.send("agent:browserForward"),
+  browserReload: () => ipcRenderer.send("agent:browserReload"),
+  browserGo: (text: string) => ipcRenderer.invoke("agent:browserGo", text),
+  onBrowserState: (cb: (state: unknown) => void) => {
+    const listener = (_: unknown, state: unknown) => cb(state);
+    ipcRenderer.on("agent:browserState", listener);
+    return () => ipcRenderer.removeListener("agent:browserState", listener);
+  },
   addFavoriteFolder: () => ipcRenderer.invoke("agent:addFavoriteFolder"),
   removeFavoriteFolder: (path: string) => ipcRenderer.invoke("agent:removeFavoriteFolder", path),
   reorderFavoriteFolders: (paths: string[]) => ipcRenderer.invoke("agent:reorderFavoriteFolders", paths),
