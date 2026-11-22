@@ -6,3 +6,10 @@ dist/
 .DS_Store
 .env
 *.tsbuildinfo
+
+# Local scratch / accidental nestings — keep out of commits
+.superpowers/
+.tmp-test/
+**/.tmp-*.mjs
+packages/core/pnpm-lock.yaml
+packages/core/pnpm-workspace.yaml

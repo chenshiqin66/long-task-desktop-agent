@@ -82,8 +82,9 @@ flowchart LR
 1. 渲染进程调用 `submit(sessionId, text, images, videos, workspace)`，主进程交给这条会话自己的 runtime；还没有对象、且未满 5 个时才新建。用户消息里的 `/技能名` 会把那个技能的正文附进这一轮；技能不存在或已停用时，这次提交直接被拒，什么都不写。
 2. 先补齐磁盘上悬空的工具调用，再追加 `turn_start`。若完成通知队列里有没写进对话的回执，先收成一条 `task-notification` 用户消息，再写你的这条消息。回执因此排在你这句话前面。
 3. 用户消息落盘之后，按当前模型的 `kind` 分流，没有意图识别，失败也不会改走另一种类型：
-   - 生视频或生音：助手回复「这个类型第一版还不能用，请改选生文或生图」，不请求接口，这一轮结束。
+   - 生音：助手回复「这个类型第一版还不能用，请改选生文、生图或生视频」，不请求接口，这一轮结束。
    - 生图：不走下面的工具循环，也不带工具。提示词为空时提示「生图请先输入提示词」；这一轮若附了视频，提示「生图不发送视频，请先去掉视频，或改用生文模型」。这两类校验失败不写 `context.jsonl`。否则向 `${baseUrl}/images/generations` 发送 `model`、`prompt` 和可选参考图，不改写你填的 Base URL（只去掉末尾一个斜杠再接上路径），接受返回的 `b64_json` 或图片地址。生成的图写入 `images/`，在助手气泡里展示，并在 `context.jsonl` 记一行（`kind: "image"`，没有工具定义）。取消则中止这次请求。成功结束时仍会入队后台提取记忆。
+   - 生视频：不走工具循环。提示词为空、附了参考视频、或默认模式仍是尚未接通的「参考素材」时，提示后结束，不写或只按失败路径处理。否则按模型页里当前型号的默认素材模式、分辨率、时长、画幅，向派欧云 MiniMax H3 异步接口提交任务并轮询（Base URL 去掉末尾斜杠和可选的 `/v1` 后，走 `/v3/minimax/v2/...`）。文生可附 0～1 张图（一张时作首帧）；首帧/尾帧各需 1 张；首尾帧需按顺序附 2 张。有参考图时画幅按接口要求用 `adaptive`。成功后把视频写入 `videos/`，在助手气泡里播放，并在 `context.jsonl` 记一行（`kind: "video"`，没有工具定义）。取消则中止创建或查询。成功结束时仍会入队后台提取记忆。
    - 生文（或缺省、未知类型）：进入下面的工具循环。这一轮用户消息上的图片和视频会进出发请求。若用户让它生成或绘制图片、封面、插画，系统提示要求它简短告知改选生图模型后再发，不要用 SVG 或其他本地转换来绕过；在工作区里增改图片或 SVG 文件的编程任务仍允许。
 4. 生文这一路循环，直到没有工具调用、被取消、出错，或到达 `maxSteps`（默认 50）：
    - 读出全部消息，按下一节的规则装成上下文，流式请求模型。文本增量以 `text` 事件推到界面。
@@ -189,13 +190,15 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | `runtime/explainRuntime.ts` | 解释侧栏的循环 |
 | `runtime/permission.ts`、`runtime/askGate.ts` | 许可门和提问门的接口与实现 |
 | `context/assemble.ts`、`compress.ts`、`repairToolCalls.ts`、`images.ts`、`taskReminder.ts` | 组上下文，规则见上文 |
-| `provider/openaiCompatible.ts` | 把上下文打成 chat-completions 流，解析文本、工具调用和用量 |
+| `provider/openaiCompatible.ts` | 把上下文打成 chat-completions 流，解析文本、工具调用和用量；生图与生视频也从这里接到 provider |
+| `provider/videoGeneration.ts` | 派欧云 MiniMax H3：拼创建任务体、轮询查询、下载结果 |
+| `config/videoOptions.ts` | 四个 H3 型号的约束、默认参数与校验 |
 | `store/*.ts` | 会话、事件、上下文、任务、完成通知、子代理、解释的落盘，见 [数据模型](data-model.md) |
 | `tools/*.ts` | 内置工具、分级、路径沙箱，见 [工具与权限](tools-and-permissions.md) |
 | `skills/*.ts` | 技能的安装、目录、正文附加，见 [技能](skills.md) |
 | `memory/*.ts` | 指令文件、记忆的存储和渲染、每轮快照、后台提取。见 [记忆](memory.md) |
 | `mcp/*.ts` | MCP 连接池、stdio 与 Streamable HTTP、工具名和打码，见 [MCP](mcp.md) |
-| `config/loadConfig.ts` | 读写 `~/.long-task-agent/config.json` |
+| `config/loadConfig.ts`、`config/agentHome.ts`、`config/homeMeta.ts` | 读写 agent home 下的 `config.json`、按检出隔离 home、`home.json` 显示名 |
 | `session/autoTitle.ts` | 自动标题 |
 
 ### `@agent/app`（`packages/app`）
@@ -209,7 +212,7 @@ runtime 把 `RuntimeEvent` 交给主进程。不少事件本身不带 `session_i
 | `electron/taskbar*.ts` | Windows 任务栏提醒：有权限卡或提问卡在等、而你没在看时，图标每 530 毫秒切换一次。Win32 库到第一次换图标时才加载 |
 | `src/renderer/main.ts` | 工作区与会话列表、页面切换、事件订阅、发送与停止、页内搜索、草稿 |
 | `src/renderer/ui.ts` | 消息气泡、Markdown、工具条、权限卡和提问卡。不持有会话状态 |
-| `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`models.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、模型页和输入框旁的模型选择器、任务面板、问题轨 |
+| `src/renderer/explainPane.ts`、`skills.ts`、`mcp.ts`、`models.ts`、`videoModelForm.ts`、`taskPanelView.ts`、`questionNav.ts` | 解释侧栏、技能页、连接页、模型页（含生视频四型号表单）和输入框旁的模型选择器、任务面板、问题轨 |
 | `src/renderer/questionsOnly.ts` | 「只看用户问题」的过滤，主区和解释栏共用：开着时未展开的轮次只留问题气泡，点气泡展开或收起这一轮，查找跳过被藏起来的文字 |
 | src/renderer/composerCollapse.ts | 输入框的收起与展开：没在用时收成一行；焦点、草稿、会话未开始或等你回答时展开。主输入框和解释栏共用 |
 | `src/renderer/workbench.ts` | 「我的工作台」的开关、菜单和常用文件夹页；选中的菜单项记在 `localStorage` 的 `workbench.page`，启动时读回来，不认识的值当作第一项 |
