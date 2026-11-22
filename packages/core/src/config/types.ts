@@ -1,4 +1,5 @@
 import type { ModelKind } from "./modelKind.js";
+import type { VideoModelOptions } from "./videoOptions.js";
 
 export interface StoredModel {
   id: string;
@@ -8,6 +9,10 @@ export interface StoredModel {
   model: string;
   apiKey: string;
   kind: ModelKind;
+  /** Present when kind is video. Active tab's options (mirrors videoByModel[model]). */
+  video?: VideoModelOptions;
+  /** Per MiniMax H3 preset options. Each tab keeps its own parameter set. */
+  videoByModel?: Record<string, VideoModelOptions>;
 }
 
 export interface StoredConfig {

@@ -48,7 +48,7 @@ describe("MemoryStore", () => {
     expect(journal).toHaveLength(1);
     expect(journal[0]).toMatchObject({ op: "create", name: "run-root-start", actor: "extractor", before: null, after: text, source: SOURCE });
     expect(journal[0].id).toMatch(/^memj_/);
-    const project = JSON.parse(await readFile(join(dir, "..", "project.json"), "utf8"));
+    const project = JSON.parse(await readFile(join(dir, "project.json"), "utf8"));
     expect(project).toMatchObject({ root: workspace, is_git: true });
   });
 
@@ -183,6 +183,6 @@ describe("MemoryStore", () => {
     expect(await s.upsert(NOTE, BY_EXTRACTOR)).toEqual({ ok: false, error: "没有选中工作区，不能写本项目的记忆" });
     expect((await s.upsert({ ...NOTE, scope: "user" }, BY_EXTRACTOR)).ok).toBe(true);
     expect((await s.list()).entries.map((entry) => entry.scope)).toEqual(["user"]);
-    expect(await s.ensureDir("user")).toBe(join(home, "memory"));
+    expect(await s.ensureDir("user")).toBe(join(home, "memory", "user"));
   });
 });

@@ -1,5 +1,13 @@
 import type { ToolCall } from "../types.js";
-import type { ImageGenRequest, ImageGenResult, LlmChatRequest, LlmProvider, LlmStreamChunk } from "./types.js";
+import type {
+  ImageGenRequest,
+  ImageGenResult,
+  LlmChatRequest,
+  LlmProvider,
+  LlmStreamChunk,
+  VideoGenRequest,
+  VideoGenResult,
+} from "./types.js";
 import {
   buildImageGenerationBody,
   imageUrlFromGenerationResponse,
@@ -7,11 +15,46 @@ import {
   parseImageGenerationResponse,
   parseImageMime,
 } from "./imageGeneration.js";
+import {
+  buildVideoGenerationBody,
+  inferVideoMimeFromUrl,
+  parseVideoMime,
+  parseVideoTaskId,
+  parseVideoTaskQuery,
+  videoApiRoot,
+  VIDEO_POLL_INTERVAL_MS,
+  VIDEO_POLL_TIMEOUT_MS,
+} from "./videoGeneration.js";
 
 function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const name = (err as { name?: string }).name;
   return name === "AbortError" || name === "AbortSignal";
+}
+
+function abortError(signal?: AbortSignal): Error {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export class OpenAICompatibleProvider implements LlmProvider {
@@ -76,6 +119,80 @@ export class OpenAICompatibleProvider implements LlmProvider {
       throw new Error("Empty image body");
     }
     const mime = parseImageMime(res.headers.get("content-type")) ?? inferImageMimeFromUrl(imageUrl) ?? "image/png";
+    return { mime, base64: Buffer.from(bytes).toString("base64") };
+  }
+
+  /**
+   * PPIO MiniMax H3 (and compatible hosts): create async task → poll → download url.
+   * Paths are `/v3/minimax/v2/...` on the API host (not under OpenAI `/v1`).
+   */
+  async generateVideo(req: VideoGenRequest): Promise<VideoGenResult> {
+    const root = videoApiRoot(this.baseUrl);
+    const createUrl = `${root}/v3/minimax/v2/video_generation`;
+    const createRes = await this.fetchImpl(createUrl, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(buildVideoGenerationBody(req)),
+      signal: req.signal,
+    });
+    if (!createRes.ok) {
+      const text = await createRes.text();
+      throw new Error(`HTTP ${createRes.status}: ${text}`);
+    }
+    let created: unknown;
+    try {
+      created = JSON.parse(await createRes.text());
+    } catch (err) {
+      if (req.signal?.aborted || isAbortError(err)) throw err;
+      throw new Error("创建视频任务失败：响应不是 JSON");
+    }
+    const taskId = parseVideoTaskId(created);
+    const queryUrl = `${root}/v3/minimax/v2/query/video_generation/${encodeURIComponent(taskId)}`;
+    const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS;
+    let videoUrl: string | undefined;
+    while (Date.now() < deadline) {
+      if (req.signal?.aborted) throw abortError(req.signal);
+      const queryRes = await this.fetchImpl(queryUrl, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: req.signal,
+      });
+      if (!queryRes.ok) {
+        const text = await queryRes.text();
+        throw new Error(`HTTP ${queryRes.status}: ${text}`);
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(await queryRes.text());
+      } catch (err) {
+        if (req.signal?.aborted || isAbortError(err)) throw err;
+        throw new Error("查询视频任务失败：响应不是 JSON");
+      }
+      const snapshot = parseVideoTaskQuery(body);
+      if (snapshot.status === "succeeded") {
+        videoUrl = snapshot.url;
+        break;
+      }
+      if (snapshot.status === "failed" || snapshot.status === "cancelled") {
+        throw new Error(snapshot.error ?? "视频生成失败");
+      }
+      await sleep(VIDEO_POLL_INTERVAL_MS, req.signal);
+    }
+    if (!videoUrl) throw new Error("视频生成超时，请稍后在派欧云控制台查看任务状态");
+    return await this.downloadGeneratedVideo(videoUrl, req.signal);
+  }
+
+  private async downloadGeneratedVideo(videoUrl: string, signal?: AbortSignal): Promise<VideoGenResult> {
+    const res = await this.fetchImpl(videoUrl, { signal });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength === 0) {
+      throw new Error("Empty video body");
+    }
+    const mime = parseVideoMime(res.headers.get("content-type")) ?? inferVideoMimeFromUrl(videoUrl);
     return { mime, base64: Buffer.from(bytes).toString("base64") };
   }
 

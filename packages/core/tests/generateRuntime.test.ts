@@ -3,8 +3,14 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRuntime } from "../src/runtime/agentRuntime.js";
-import type { ImageGenRequest, LlmChatRequest, LlmProvider } from "../src/provider/types.js";
+import type {
+  ImageGenRequest,
+  LlmChatRequest,
+  LlmProvider,
+  VideoGenRequest,
+} from "../src/provider/types.js";
 import type { ModelKind } from "../src/config/modelKind.js";
+import { defaultVideoModelOptions, type VideoModelOptions } from "../src/config/videoOptions.js";
 import type { RuntimeEvent } from "../src/types.js";
 import { DEFAULT_AGENT_CONFIG } from "../src/types.js";
 import { rmWorkspace } from "./rmWorkspace.js";
@@ -12,19 +18,34 @@ import { rmWorkspace } from "./rmWorkspace.js";
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const VIDEO = Buffer.from("fake-mp4").toString("base64");
-const UNSUPPORTED_KIND_TEXT = "这个类型第一版还不能用，请改选生文或生图";
+const UNSUPPORTED_KIND_TEXT = "这个类型第一版还不能用，请改选生文、生图或生视频";
 
-type ImageProvider = LlmProvider & { generateImage: (req: ImageGenRequest) => Promise<{ mime: "image/png"; base64: string }> };
+type ImageProvider = LlmProvider & {
+  generateImage: (req: ImageGenRequest) => Promise<{ mime: "image/png"; base64: string }>;
+};
+type VideoProvider = LlmProvider & {
+  generateVideo: (req: VideoGenRequest) => Promise<{ mime: "video/mp4"; base64: string }>;
+};
 
-function makeRuntime(workspace: string, kind: ModelKind, provider: LlmProvider): AgentRuntime {
+function makeRuntime(
+  workspace: string,
+  kind: ModelKind,
+  provider: LlmProvider,
+  video?: VideoModelOptions,
+): AgentRuntime {
   return new AgentRuntime({
     workspacePath: workspace,
     config: {
       baseUrl: "http://localhost",
-      model: kind === "image" ? "draw" : "test",
+      model: kind === "image" ? "draw" : kind === "video" ? "MiniMax-H3-Lite" : "test",
       apiKey: "sk-test",
       ...DEFAULT_AGENT_CONFIG,
       kind,
+      ...(kind === "video"
+        ? {
+            video: video ?? defaultVideoModelOptions("MiniMax-H3-Lite"),
+          }
+        : {}),
     },
     provider,
   });
@@ -62,6 +83,25 @@ function textProvider(): { provider: LlmProvider; chatCalls: LlmChatRequest[] } 
     },
   };
   return { provider, chatCalls };
+}
+
+function videoProvider(opts?: {
+  generate?: (req: VideoGenRequest) => Promise<{ mime: "video/mp4"; base64: string }>;
+}): { provider: VideoProvider; generateCalls: VideoGenRequest[]; chatCalls: LlmChatRequest[] } {
+  const generateCalls: VideoGenRequest[] = [];
+  const chatCalls: LlmChatRequest[] = [];
+  const provider: VideoProvider = {
+    chatStream(req) {
+      chatCalls.push(req);
+      throw new Error("chatStream should not be called");
+    },
+    async generateVideo(req) {
+      generateCalls.push(req);
+      if (opts?.generate) return opts.generate(req);
+      return { mime: "video/mp4", base64: VIDEO };
+    },
+  };
+  return { provider, generateCalls, chatCalls };
 }
 
 function errorMessage(events: RuntimeEvent[], thrown: unknown): string {
@@ -177,9 +217,9 @@ describe("runtime routing by model kind", () => {
     expect((await rt.loadSessionArtifacts(meta.session_id)).context).toEqual([]);
   });
 
-  it.each(["video", "audio"] as const)("does not call the provider for %s models", async (kind) => {
+  it("does not call the provider for audio models", async () => {
     const { provider, generateCalls, chatCalls } = imageProvider();
-    const rt = makeRuntime(workspace, kind, provider);
+    const rt = makeRuntime(workspace, "audio", provider);
     const events: RuntimeEvent[] = [];
     rt.onEvent((event) => events.push(event));
     const meta = await rt.createSession();
@@ -190,6 +230,143 @@ describe("runtime routing by model kind", () => {
     const assistant = (await rt.loadMessages(meta.session_id)).find((message) => message.role === "assistant");
     expect(assistant?.content).toBe(UNSUPPORTED_KIND_TEXT);
     expect(events.some((event) => event.type === "done" && event.reason === "completed")).toBe(true);
+  });
+
+  it("generates a video from the prompt and does not call chatStream", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider);
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "一只猫在跑");
+
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(1);
+    expect(generateCalls[0]).toMatchObject({ model: "MiniMax-H3-Lite", prompt: "一只猫在跑" });
+    expect(generateCalls[0]?.images).toBeUndefined();
+
+    const stored = await rt.loadMessages(meta.session_id);
+    const assistant = stored.find((message) => message.role === "assistant");
+    expect(assistant?.videos?.[0]?.path).toMatch(/^videos\/vid_[a-f0-9]+\.mp4$/);
+    expect(events.some((event) => event.type === "generated_videos")).toBe(true);
+    expect(events.some((event) => event.type === "status" && event.phase === "generating_video")).toBe(true);
+    expect(events.some((event) => event.type === "done" && event.reason === "completed")).toBe(true);
+    const { context } = await rt.loadSessionArtifacts(meta.session_id);
+    expect(context).toEqual([
+      expect.objectContaining({
+        type: "request",
+        kind: "video",
+        model: "MiniMax-H3-Lite",
+        messages: [{ role: "user", text: "一只猫在跑" }],
+      }),
+    ]);
+  });
+
+  it("sends this turn's user image as the video first frame", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider);
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "镜头推进", [{ mime: "image/png", base64: PNG }]);
+
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(1);
+    expect(generateCalls[0]?.images).toEqual([{ dataUrl: `data:image/png;base64,${PNG}` }]);
+    expect(generateCalls[0]?.mode).toBe("text");
+  });
+
+  it("sends last_frame mode with one image", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider, {
+      ...defaultVideoModelOptions("MiniMax-H3-Lite"),
+      mode: "last_frame",
+      ratio: "adaptive",
+    });
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "定格结尾", [{ mime: "image/png", base64: PNG }]);
+
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(1);
+    expect(generateCalls[0]?.mode).toBe("last_frame");
+    expect(generateCalls[0]?.images).toHaveLength(1);
+  });
+
+  it("sends first_last mode with two images in order", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider, {
+      ...defaultVideoModelOptions("MiniMax-H3-Lite"),
+      mode: "first_last",
+      ratio: "adaptive",
+    });
+    const meta = await rt.createSession();
+    const PNG2 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    await rt.submit(meta.session_id, "从站到走", [
+      { mime: "image/png", base64: PNG },
+      { mime: "image/png", base64: PNG2 },
+    ]);
+
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(1);
+    expect(generateCalls[0]?.mode).toBe("first_last");
+    expect(generateCalls[0]?.images).toEqual([
+      { dataUrl: `data:image/png;base64,${PNG}` },
+      { dataUrl: `data:image/png;base64,${PNG2}` },
+    ]);
+  });
+
+  it("rejects first_last when only one image is attached", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider, {
+      ...defaultVideoModelOptions("MiniMax-H3-Lite"),
+      mode: "first_last",
+      ratio: "adaptive",
+    });
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession();
+    let thrown: unknown;
+    try {
+      await rt.submit(meta.session_id, "从站到走", [{ mime: "image/png", base64: PNG }]);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(0);
+    expect(errorMessage(events, thrown)).toMatch(/两张图/);
+  });
+
+  it("rejects an empty video prompt without calling the provider", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider);
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession();
+    let thrown: unknown;
+    try {
+      await rt.submit(meta.session_id, "");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(0);
+    expect(errorMessage(events, thrown)).toBe("生视频请先输入提示词");
+  });
+
+  it("rejects video generation when this turn includes a reference video", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider);
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession();
+    let thrown: unknown;
+    try {
+      await rt.submit(meta.session_id, "一只猫", undefined, [{ mime: "video/mp4", base64: VIDEO }]);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(0);
+    expect(errorMessage(events, thrown)).toMatch(/参考视频/);
   });
 
   it("inlines a video_url on the latest user message for a text model", async () => {

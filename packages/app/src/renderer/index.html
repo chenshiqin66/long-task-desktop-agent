@@ -11,11 +11,9 @@
     <div id="app">
       <aside id="sidebar">
         <nav class="app-menu" aria-label="应用菜单">
-          <button type="button" data-app-menu="0">文件</button>
-          <button type="button" data-app-menu="1">编辑</button>
-          <button type="button" data-app-menu="2">视图</button>
-          <button type="button" data-app-menu="3">窗口</button>
-          <button type="button" data-app-menu="4">帮助</button>
+          <button type="button" data-app-menu="0">视图</button>
+          <button type="button" data-app-menu="1">帮助</button>
+          <button type="button" id="btn-settings">设置</button>
         </nav>
 
         <nav class="sidebar-actions" aria-label="会话操作">
@@ -223,9 +221,40 @@
               <label class="field">Base URL
                 <input id="model-baseUrl" type="url" autocomplete="off" />
               </label>
-              <label class="field">Model
+              <p id="model-video-baseurl-hint" class="models-intro" hidden>
+                生视频走派欧云 MiniMax H3 异步协议。Base URL 填 https://api.ppio.com（勿带 /v1）。
+              </p>
+              <label class="field" id="model-model-field">Model
                 <input id="model-model" type="text" autocomplete="off" spellcheck="false" />
               </label>
+              <div id="model-video-options" class="model-video-options" hidden>
+                <div id="model-video-tabs" class="video-option-tabs" role="tablist" aria-label="生视频型号"></div>
+                <div class="video-option-panel" role="tabpanel">
+                  <p id="model-video-blurb" class="video-model-blurb"></p>
+                  <fieldset class="video-check-group">
+                    <legend>素材模式 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-video-modes" class="video-check-row"></div>
+                  </fieldset>
+                  <fieldset class="video-check-group">
+                    <legend>分辨率 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-video-resolutions" class="video-check-row"></div>
+                  </fieldset>
+                  <fieldset class="video-check-group">
+                    <legend>可生成时长范围</legend>
+                    <div class="video-duration-slider">
+                      <div class="video-duration-track-wrap">
+                        <input id="model-video-duration" type="range" min="0" max="15" step="1" />
+                        <span id="model-video-duration-min" class="video-duration-bubble video-duration-min">4</span>
+                        <span id="model-video-duration-value" class="video-duration-bubble">15</span>
+                      </div>
+                    </div>
+                  </fieldset>
+                  <fieldset class="video-check-group">
+                    <legend>画幅 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-video-ratios" class="video-check-row"></div>
+                  </fieldset>
+                </div>
+              </div>
               <label class="field">API Key
                 <input id="model-apiKey" type="password" autocomplete="off" />
               </label>

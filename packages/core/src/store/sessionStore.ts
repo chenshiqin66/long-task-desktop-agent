@@ -33,6 +33,8 @@ const VIDEO_MIME_EXT: Record<VideoMime, "mp4" | "webm" | "mov"> = {
 const VIDEO_REL_RE = /^videos\/vid_[a-f0-9]+\.(mp4|webm|mov)$/;
 
 export const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
+/** Generated H3 clips can exceed the user-upload cap. */
+export const MAX_GENERATED_VIDEO_BYTES = 80 * 1024 * 1024;
 export const MAX_VIDEOS_PER_MESSAGE = 1;
 
 export function extForVideoMime(mime: string): "mp4" | "webm" | "mov" | null {
@@ -150,13 +152,19 @@ export class SessionStore {
     return (await this.readImageForSend(sessionId, relativePath)).dataUrl;
   }
 
-  async saveVideo(sessionId: string, mime: VideoMime, base64: string): Promise<VideoAttachment> {
+  async saveVideo(
+    sessionId: string,
+    mime: VideoMime,
+    base64: string,
+    opts?: { maxBytes?: number },
+  ): Promise<VideoAttachment> {
     const ext = extForVideoMime(mime);
     if (!ext) throw new Error(`Unsupported video type: ${mime}`);
     const cleaned = base64.replace(/\s/g, "");
     const bytes = Buffer.from(cleaned, "base64");
-    if (!bytes.length || bytes.length > MAX_VIDEO_BYTES) {
-      throw new Error(`Video is empty or larger than ${MAX_VIDEO_BYTES} bytes`);
+    const limit = opts?.maxBytes ?? MAX_VIDEO_BYTES;
+    if (!bytes.length || bytes.length > limit) {
+      throw new Error(`Video is empty or larger than ${limit} bytes`);
     }
     const id = newId("vid");
     const fileName = `${id}.${ext}`;

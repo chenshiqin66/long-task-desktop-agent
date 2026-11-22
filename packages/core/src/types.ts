@@ -1,4 +1,5 @@
 import type { ModelKind } from "./config/modelKind.js";
+import type { VideoModelOptions } from "./config/videoOptions.js";
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -112,7 +113,14 @@ export type RuntimeEvent =
   | {
       type: "status";
       turn_id: string;
-      phase: "assembling" | "llm" | "tool" | "awaiting_permission" | "awaiting_user" | "generating_image";
+      phase:
+        | "assembling"
+        | "llm"
+        | "tool"
+        | "awaiting_permission"
+        | "awaiting_user"
+        | "generating_image"
+        | "generating_video";
     }
   | {
       type: "session_title";
@@ -126,7 +134,8 @@ export type RuntimeEvent =
   | { type: "task_notification"; turn_id: string; content: string }
   /** A message typed during a continuation was appended. The bubble is already on screen. */
   | { type: "held_user"; turn_id: string; session_id: string }
-  | { type: "generated_images"; turn_id: string; message_id: string; images: ImageAttachment[] };
+  | { type: "generated_images"; turn_id: string; message_id: string; images: ImageAttachment[] }
+  | { type: "generated_videos"; turn_id: string; message_id: string; videos: VideoAttachment[] };
 
 export interface TraceEvent {
   id: string;
@@ -161,6 +170,8 @@ export interface AgentConfig {
   /** web_search target. Comes from the current search model, never from the chat model. Set only when non-empty. */
   searchBaseUrl?: string;
   searchApiKey?: string;
+  /** From the current video model entry. Only set when kind is video. */
+  video?: VideoModelOptions;
 }
 
 export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, "baseUrl" | "model" | "apiKey"> = {

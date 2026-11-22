@@ -119,6 +119,9 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:permissionRespond", requestId, decision),
   answerAsk: (requestId: string, text: string) =>
     ipcRenderer.invoke("agent:answerAsk", requestId, text),
+  getHomeInfo: () => ipcRenderer.invoke("agent:getHomeInfo"),
+  setHomeLabel: (label: string) => ipcRenderer.invoke("agent:setHomeLabel", label),
+  openHomeDir: () => ipcRenderer.invoke("agent:openHomeDir"),
   getConfig: () => ipcRenderer.invoke("agent:getConfig"),
   saveConfig: (cfg: unknown) => ipcRenderer.invoke("agent:saveConfig", cfg),
   localTargetsExist: (targets: string[]) => ipcRenderer.invoke("agent:localTargetsExist", targets),

@@ -847,15 +847,8 @@ export function renderEmptyState(container: HTMLElement, kind: "no-workspace" | 
   container.innerHTML = "";
   const box = el("div", { class: "empty-state" });
   if (kind === "no-workspace") {
-    box.innerHTML = `
-      <p class="empty-kicker">开始之前</p>
-      <h2 class="empty-title">先选择一个本地工作区</h2>
-      <ol class="empty-steps">
-        <li><strong>工作区右侧的 +</strong> — 增加一个目录，已有工作区仍留在列表里</li>
-        <li><strong>直接发送</strong> — 左侧会自动出现这个会话</li>
-        <li><strong>发送指令</strong> — 写文件走 write_file；命令 / 搜索 / 联网按需调用</li>
-      </ol>
-      <p class="empty-hint">写删类命令会弹出确认；危险命令会被拦截。</p>`;
+    box.classList.add("is-no-workspace");
+    box.innerHTML = `<p class="empty-lead">开始之前，请选择一个工作区。</p>`;
   } else {
     box.innerHTML = `
       <h2 class="empty-title">提出好问题，才是真智慧</h2>

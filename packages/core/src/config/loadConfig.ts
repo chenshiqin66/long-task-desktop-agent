@@ -3,6 +3,12 @@ import { dirname, join } from "node:path";
 import { replaceFile, errorCode } from "../store/fileLock.js";
 import type { StoredConfig, StoredModel } from "./types.js";
 import { isSearchModel, modelKindOf } from "./modelKind.js";
+import {
+  defaultVideoModelOptions,
+  normalizeVideoByModel,
+  normalizeVideoModelOptions,
+  readVideoModelOptions,
+} from "./videoOptions.js";
 import { newId } from "../ids.js";
 import type { AgentConfig } from "../types.js";
 import { DEFAULT_AGENT_CONFIG } from "../types.js";
@@ -82,14 +88,23 @@ function asString(value: unknown): string {
 }
 
 function cleanModel(entry: StoredModel): StoredModel {
-  return {
+  const kind = modelKindOf(entry);
+  const model = entry.model.trim();
+  const cleaned: StoredModel = {
     id: entry.id.trim(),
     name: entry.name.trim(),
     baseUrl: entry.baseUrl.trim(),
-    model: entry.model.trim(),
+    model,
     apiKey: entry.apiKey.trim(),
-    kind: modelKindOf(entry),
+    kind,
   };
+  if (kind === "video") {
+    const packed = normalizeVideoByModel(model || "MiniMax-H3-Lite", entry.videoByModel, entry.video);
+    cleaned.model = packed.model;
+    cleaned.video = packed.video;
+    cleaned.videoByModel = packed.videoByModel;
+  }
+  return cleaned;
 }
 
 function readModelEntry(raw: unknown): StoredModel | null {
@@ -97,13 +112,24 @@ function readModelEntry(raw: unknown): StoredModel | null {
   const row = raw as Record<string, unknown>;
   const id = asString(row.id).trim();
   if (!id) return null;
+  const modelName = asString(row.model);
+  const kind = modelKindOf(row);
   const model = cleanModel({
     id,
     name: asString(row.name),
     baseUrl: asString(row.baseUrl),
-    model: asString(row.model),
+    model: modelName,
     apiKey: asString(row.apiKey),
-    kind: modelKindOf(row),
+    kind,
+    ...(kind === "video"
+      ? {
+          video: readVideoModelOptions(modelName, row.video),
+          videoByModel:
+            row.videoByModel && typeof row.videoByModel === "object"
+              ? (row.videoByModel as StoredModel["videoByModel"])
+              : undefined,
+        }
+      : {}),
   });
   if (!model.name) model.name = model.model || "未命名模型";
   return model;
@@ -304,12 +330,14 @@ export function duplicateModel(stored: StoredConfig, modelId: string): StoredCon
 
 export function toAgentConfig(stored: StoredConfig): AgentConfig {
   const current = currentModelOf(stored);
+  const kind = modelKindOf(current);
+  const model = (current?.model ?? asString(stored.model)).trim();
   return {
     // Trim: prompt()/hand-edited JSON often leave leading spaces that break fetch URLs.
     baseUrl: (current?.baseUrl ?? asString(stored.baseUrl)).trim(),
-    model: (current?.model ?? asString(stored.model)).trim(),
+    model,
     apiKey: (current?.apiKey ?? asString(stored.apiKey)).trim(),
-    kind: modelKindOf(current),
+    kind,
     bashTimeoutMs: stored.bashTimeoutMs ?? DEFAULT_AGENT_CONFIG.bashTimeoutMs,
     maxSteps: stored.maxSteps ?? DEFAULT_AGENT_CONFIG.maxSteps,
     contextCharLimit: stored.contextCharLimit ?? DEFAULT_AGENT_CONFIG.contextCharLimit,
@@ -317,6 +345,9 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
       stored.maxToolOutputChars ?? DEFAULT_AGENT_CONFIG.maxToolOutputChars,
     maxReadChars: stored.maxReadChars ?? DEFAULT_AGENT_CONFIG.maxReadChars,
     maxSearchResults: stored.maxSearchResults ?? DEFAULT_AGENT_CONFIG.maxSearchResults,
+    ...(kind === "video"
+      ? { video: current?.video ?? defaultVideoModelOptions(model || "MiniMax-H3-Lite") }
+      : {}),
     ...searchTargetOf(stored),
   };
 }

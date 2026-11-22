@@ -198,7 +198,7 @@ npm start
 
 ## 配置
 
-配置文件在 **agent home** 下的 `config.json`。默认是 `~/.long-task-agent/roots/<本机仓库路径哈希>/config.json`（可用环境变量 `LONG_TASK_AGENT_HOME` 整目录改掉）；每个克隆的路径不同，因此不会共用、也不会互相覆盖。第一次从旧版升级时，最先启动的那一份检出会把原来的扁平 `~/.long-task-agent/` 复制进自己的 roots。每次保存前会留下 `config.json.bak`。「模型」页维护模型列表和当前选用的那一条，并同步顶层的 `baseUrl`、`model`、`apiKey`。每条模型有类型（生文、生图、生视频、生音、网搜），缺省为生文。解释侧栏另有一个生文模型选择，写在 `currentExplainModelId`；`web_search` 另有一个网搜模型选择，写在 `currentSearchModelId`。顶层的 `baseUrl`、`model`、`apiKey` 只同步对话模型，网搜模型不会写进去。
+配置文件在 **agent home** 下的 `config.json`。默认是 `~/.long-task-agent/<本机仓库路径哈希>/config.json`（可用环境变量 `LONG_TASK_AGENT_HOME` 整目录改掉）；每个克隆的路径不同，因此不会共用、也不会互相覆盖。第一次从旧版升级时，最先启动的那一份检出会把原来的扁平 `~/.long-task-agent/` 复制进自己的 `<hash>/`。每次保存前会留下 `config.json.bak`。「模型」页维护模型列表和当前选用的那一条，并同步顶层的 `baseUrl`、`model`、`apiKey`。每条模型有类型（生文、生图、生视频、生音、网搜），缺省为生文。解释侧栏另有一个生文模型选择，写在 `currentExplainModelId`；`web_search` 另有一个网搜模型选择，写在 `currentSearchModelId`。顶层的 `baseUrl`、`model`、`apiKey` 只同步对话模型，网搜模型不会写进去。
 
 模型页可以复制一条。复制、修改、移除在鼠标移到该条时才出现，「使用」始终在最右侧。工作区相关的字段由侧栏维护，常用文件夹由工作台维护，自动记忆由「记忆」页维护。限额和旧的 `searchBaseUrl`、`searchApiKey` 没有界面，需要直接编辑这个文件。应用保存配置时会保留它们，下次发送时生效。
 
@@ -237,14 +237,14 @@ npm start
 ## 数据存在哪里
 
 ```text
-~/.long-task-agent/config.json        模型配置和工作区列表
-~/.long-task-agent/mcp-servers.json   MCP 服务清单和密钥
-~/.long-task-agent/skills/            已安装的技能
-~/.long-task-agent/AGENTS.md          用户级指令，可选
-~/.long-task-agent/memory/            所有项目的记忆
-~/.long-task-agent/projects/          每个仓库一份的项目记忆
-~/.long-task-agent/browser-explain/   浏览器页里的解释记录，不进任何工作区
-~/.long-task-agent/browser-tabs.json  浏览器页上次的标签网址，重启后按它恢复
+~/.long-task-agent/<hash>/            这一份检出的 agent home（也可用 LONG_TASK_AGENT_HOME）
+  home.json                           数据目录显示名（正式版可留空；侧栏「设置」可改）
+  config.json                         模型配置和工作区列表
+  mcp-servers.json / skills / AGENTS.md
+  memory/user/                        用户级记忆
+  memory/projects/<key>/              各仓库的项目级记忆（摊平）
+  browser-explain/ · browser-tabs.json
+~/.long-task-agent/.legacy-claim      哪一份检出认领过旧的扁平目录
 {workspace}/AGENTS.md                 项目级指令，可选
 {workspace}/.agent/sessions/{id}/     一个会话的全部记录
 ```

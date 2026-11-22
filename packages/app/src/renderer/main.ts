@@ -30,6 +30,7 @@ import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
 import { attachMcpLibrary } from "./mcp.js";
 import { attachModelsLibrary } from "./models.js";
+import { showHomeLabelPrompt, showSettingsModal } from "./homeLabel.js";
 import { escapeAction } from "./escapeKey.js";
 import { installImageViewer, isImageViewerOpen } from "./imageViewer.js";
 import { mountFavoriteFolders, mountMenuToggle, mountWorkbench, mountWorkbenchNav, type WorkbenchPage } from "./workbench.js";
@@ -240,6 +241,25 @@ declare global {
       onExplainEvent(cb: (e: any) => void): () => void;
       respondPermission(requestId: string, decision: "allow" | "deny"): Promise<boolean>;
       answerAsk(requestId: string, text: string): Promise<boolean>;
+      getHomeInfo(): Promise<{
+        path: string;
+        key: string;
+        label: string;
+        decided: boolean;
+        repoRoot: string | null;
+        siblings: Array<{ key: string; path: string; label: string }>;
+        needsLabel: boolean;
+      }>;
+      setHomeLabel(label: string): Promise<{
+        path: string;
+        key: string;
+        label: string;
+        decided: boolean;
+        repoRoot: string | null;
+        siblings: Array<{ key: string; path: string; label: string }>;
+        needsLabel: boolean;
+      }>;
+      openHomeDir(): Promise<void>;
       getConfig(): Promise<any>;
       saveConfig(cfg: any): Promise<void>;
       localTargetsExist(targets: string[]): Promise<Record<string, boolean>>;
@@ -484,6 +504,7 @@ type RunPaint = {
   toolStepNodes: Map<string, HTMLElement>;
   nestedTails: Map<string, HTMLElement>;
   generatedImages?: Array<{ id?: string; mime?: string; path: string }>;
+  generatedVideos?: Array<{ id?: string; mime?: string; path: string }>;
   generatedMessageId?: string;
   generatedFill?: Promise<void>;
 };
@@ -1208,6 +1229,9 @@ for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>("[data
     void window.agent.popupAppMenu(index, Math.round(rect.left), Math.round(rect.bottom));
   });
 }
+document.getElementById("btn-settings")?.addEventListener("click", () => {
+  void showSettingsModal().catch(showStatusError);
+});
 
 function hidePageCtxMenu(): void {
   pageCtxMenu.hidden = true;
@@ -1435,6 +1459,7 @@ const PHASE_LABEL: Record<string, string> = {
   awaiting_permission: "等待确认权限…",
   awaiting_user: "等你回答…",
   generating_image: "正在生成图片…",
+  generating_video: "正在生成视频…",
 };
 
 function errText(err: unknown): string {
@@ -3093,6 +3118,7 @@ async function reask(
     resetStreamTarget(appendMessage(messagesEl, "assistant", ""), next);
     clearOpenTools(next);
     next.generatedImages = undefined;
+    next.generatedVideos = undefined;
     next.generatedMessageId = undefined;
     next.generatedFill = undefined;
     next.liveStatus = "运行中…";
@@ -3185,6 +3211,7 @@ async function sendMessage(): Promise<void> {
       resetStreamTarget(appendMessage(messagesEl, "assistant", ""), run);
       clearOpenTools(run);
       run.generatedImages = undefined;
+      run.generatedVideos = undefined;
       run.generatedMessageId = undefined;
       run.generatedFill = undefined;
       run.liveStatus = "运行中…";
@@ -3755,7 +3782,26 @@ function showGeneratingImagePlaceholder(run: RunPaint, host: HTMLElement): void 
     run.streamingEl.textContent = "正在生成图片";
     delete run.streamingEl.dataset.rawMd;
   }
-  run.streamingEl?.closest(".msg")?.classList.add("is-generating-image");
+  const msg = run.streamingEl?.closest(".msg");
+  msg?.classList.add("is-generating-image");
+  msg?.classList.remove("is-generating-video");
+  if (run.streamingEl) ensureMessageTime(run.streamingEl);
+}
+
+function showGeneratingVideoPlaceholder(run: RunPaint, host: HTMLElement): void {
+  const place = (mutate: () => void) => {
+    if (host === messagesEl) keepTail(mutate);
+    else mutate();
+  };
+  if (!run.streamingEl) {
+    place(() => resetStreamTarget(appendMessage(host, "assistant", "正在生成视频"), run));
+  } else {
+    run.streamingEl.textContent = "正在生成视频";
+    delete run.streamingEl.dataset.rawMd;
+  }
+  const msg = run.streamingEl?.closest(".msg");
+  msg?.classList.add("is-generating-video");
+  msg?.classList.remove("is-generating-image");
   if (run.streamingEl) ensureMessageTime(run.streamingEl);
 }
 
@@ -3765,10 +3811,11 @@ function discardImagePlaceholder(run: RunPaint): void {
   const msg = body.closest(".msg");
   if (!(msg instanceof HTMLElement)) return;
   if (msg.querySelector(".msg-images img, .msg-videos video")) {
-    msg.classList.remove("is-generating-image");
+    msg.classList.remove("is-generating-image", "is-generating-video");
     return;
   }
-  const pending = msg.classList.contains("is-generating-image");
+  const pending =
+    msg.classList.contains("is-generating-image") || msg.classList.contains("is-generating-video");
   if (pending || !run.streamBuffer.trim()) {
     const text = (body.textContent ?? "").trim();
     if (pending || !text) {
@@ -3803,23 +3850,68 @@ function fillGeneratedImages(run: RunPaint, host: HTMLElement): Promise<void> {
         messageId,
         at: new Date().toISOString(),
       });
-      body.closest(".msg")?.classList.remove("is-generating-image");
+      body.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video");
+    });
+  })();
+  return run.generatedFill;
+}
+
+function fillGeneratedVideos(run: RunPaint, host: HTMLElement): Promise<void> {
+  if (run.generatedFill) return run.generatedFill;
+  const videos = run.generatedVideos;
+  const messageId = run.generatedMessageId;
+  if (!videos?.length) return Promise.resolve();
+  const existing = run.streamingEl;
+  run.generatedFill = (async () => {
+    const urls = await videoDataUrls(run.workspace, run.sessionId, videos);
+    const place = (mutate: () => void) => {
+      if (host === messagesEl) keepTail(mutate);
+      else mutate();
+    };
+    place(() => {
+      let body = existing && existing.isConnected ? existing : run.streamingEl;
+      if (!body) {
+        const pending = host.querySelector(".msg.assistant.is-generating-video .msg-body");
+        body = pending instanceof HTMLElement ? pending : appendMessage(host, "assistant", "");
+      }
+      applyMessageMedia(body, {
+        videos: urls,
+        content: "",
+        rich: false,
+        messageId,
+        at: new Date().toISOString(),
+      });
+      body.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video");
     });
   })();
   return run.generatedFill;
 }
 
 async function fillGeneratedOnDone(run: RunPaint, host: HTMLElement): Promise<void> {
+  if (run.generatedVideos?.length) {
+    await fillGeneratedVideos(run, host);
+    return;
+  }
   if (run.generatedImages?.length) {
     await fillGeneratedImages(run, host);
     return;
   }
-  const pending = Boolean(run.streamingEl?.closest(".msg")?.classList.contains("is-generating-image"));
-  if (!pending) return;
+  const msg = run.streamingEl?.closest(".msg");
+  const pendingImage = Boolean(msg?.classList.contains("is-generating-image"));
+  const pendingVideo = Boolean(msg?.classList.contains("is-generating-video"));
+  if (!pendingImage && !pendingVideo) return;
   try {
     const msgs = sameWorkspace(run.workspace, activeWorkspace)
       ? await window.agent.loadMessages(run.sessionId)
       : await window.agent.loadWorkspaceMessages(run.workspace, run.sessionId);
+    if (pendingVideo) {
+      const last = [...msgs].reverse().find((message) => message.role === "assistant" && message.videos?.length);
+      if (!last?.videos?.length) return;
+      run.generatedVideos = last.videos;
+      run.generatedMessageId = last.id;
+      await fillGeneratedVideos(run, host);
+      return;
+    }
     const last = [...msgs].reverse().find((message) => message.role === "assistant" && message.images?.length);
     if (!last?.images?.length) return;
     run.generatedImages = last.images;
@@ -3960,7 +4052,7 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
   if (reason === "cancelled" && run.streamingEl && !run.streamBuffer.trim()) {
     run.streamingEl.textContent = CANCELLED_TURN_NOTICE;
     run.streamingEl.closest(".msg")?.classList.add("is-cancelled");
-    run.streamingEl.closest(".msg")?.classList.remove("is-generating-image");
+    run.streamingEl.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video");
     ensureMessageTime(run.streamingEl);
     const questions = host.querySelectorAll(":scope > .turn > .msg.user .msg-body, :scope > .msg.user .msg-body");
     const asked = questions?.[questions.length - 1];
@@ -4062,6 +4154,10 @@ window.agent.onEvent((e) => {
         const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
         showGeneratingImagePlaceholder(run, host);
       }
+      if (e.phase === "generating_video") {
+        const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
+        showGeneratingVideoPlaceholder(run, host);
+      }
       showRunStatus(PHASE_LABEL[e.phase] ?? e.phase, run);
       return;
     }
@@ -4070,6 +4166,13 @@ window.agent.onEvent((e) => {
       if (typeof e.message_id === "string") run.generatedMessageId = e.message_id;
       const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
       void fillGeneratedImages(run, host);
+      return;
+    }
+    if (e.type === "generated_videos" && Array.isArray(e.videos)) {
+      run.generatedVideos = e.videos;
+      if (typeof e.message_id === "string") run.generatedMessageId = e.message_id;
+      const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
+      void fillGeneratedVideos(run, host);
       return;
     }
     if (e.type === "ask_user" || e.type === "permission_request") {
@@ -4127,6 +4230,11 @@ async function boot(): Promise<void> {
       await refreshSessions();
       syncEmptyState();
       updateChrome();
+    }
+    if (window.agent.getHomeInfo) {
+      const home = await window.agent.getHomeInfo();
+      document.title = home.label ? `Long-Task Agent · ${home.label}` : "Long-Task Agent";
+      if (home.needsLabel) await showHomeLabelPrompt(home);
     }
   } catch (err) {
     showStatusError(err);

@@ -25,6 +25,10 @@ import {
   withCurrentModel,
   assertValidSessionId,
   getDefaultConfigPath,
+  getAgentHome,
+  getHomeInfo,
+  homeWindowTitle,
+  writeHomeMeta,
   DeferredPermissionGate,
   DeferredAskGate,
   defaultSkillsRoot,
@@ -124,25 +128,9 @@ const runPool = new SessionRuntimePool<AgentRuntime>(async (workspace, sessionId
   win?.webContents.send("agent:event", { type: "session_idle", session_id: sessionId, workspace });
 });
 
-/** Replace Electron's English default menu with zh-CN labels. */
+/** Replace Electron's English default menu with zh-CN labels. Sidebar only exposes 视图 / 帮助. */
 function installChineseAppMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
-    {
-      label: "文件",
-      submenu: [{ role: "quit", label: "退出" }],
-    },
-    {
-      label: "编辑",
-      submenu: [
-        { role: "undo", label: "撤销" },
-        { role: "redo", label: "重做" },
-        { type: "separator" },
-        { role: "cut", label: "剪切" },
-        { role: "copy", label: "复制" },
-        { role: "paste", label: "粘贴" },
-        { role: "selectAll", label: "全选" },
-      ],
-    },
     {
       label: "视图",
       submenu: [
@@ -158,23 +146,18 @@ function installChineseAppMenu(): void {
       ],
     },
     {
-      label: "窗口",
-      submenu: [
-        { role: "minimize", label: "最小化" },
-        { role: "close", label: "关闭" },
-      ],
-    },
-    {
       label: "帮助",
       submenu: [
         {
           label: "关于 Long-Task Agent",
           click: async () => {
+            const home = getHomeInfo();
+            const labelLine = home.label ? `数据目录：${home.label}` : "数据目录：（正式版，未起名）";
             await dialog.showMessageBox({
               type: "info",
               title: "关于",
-              message: "Long-Task Desktop Agent",
-              detail: `Electron ${process.versions.electron} · Chromium ${process.versions.chrome}\nauthor.ChenShiqin`,
+              message: homeWindowTitle(home.label, "Long-Task Desktop Agent"),
+              detail: `${labelLine}\n${home.path}\n\nElectron ${process.versions.electron} · Chromium ${process.versions.chrome}\nauthor.ChenShiqin`,
             });
           },
         },
@@ -473,11 +456,17 @@ async function ensureExplainRuntime(workspace: string): Promise<ExplainRuntime> 
   return explainRt;
 }
 
+function applyWindowTitle(target: BrowserWindow = win!): void {
+  if (!target || target.isDestroyed()) return;
+  target.setTitle(homeWindowTitle(getHomeInfo().label));
+}
+
 function createWindow() {
   const preloadPath = join(__dirname, "preload.cjs");
   win = new BrowserWindow({
     width: 1100,
     height: 720,
+    title: homeWindowTitle(getHomeInfo().label),
     icon: taskbarAlert?.restIcon,
     webPreferences: {
       preload: preloadPath,
@@ -1077,6 +1066,21 @@ app.whenReady().then(async () => {
     );
     if (!open) collapsed.push(path);
     await saveStoredConfig({ ...stored, workspaceCollapsed: collapsed });
+  });
+  ipcMain.handle("agent:getHomeInfo", async () => getHomeInfo());
+  ipcMain.handle("agent:setHomeLabel", async (_e, raw: unknown) => {
+    if (typeof raw !== "string") throw new Error("名称无效");
+    // Empty label is allowed: the primary checkout stays untitled so the window
+    // title is just "Long-Task Agent" with no "· long-task-agent" echo.
+    await writeHomeMeta(getAgentHome(), { label: raw });
+    applyWindowTitle();
+    return getHomeInfo();
+  });
+  ipcMain.handle("agent:openHomeDir", async () => {
+    const home = getAgentHome();
+    await mkdir(home, { recursive: true });
+    const err = await shell.openPath(home);
+    if (err) throw new Error(err);
   });
   ipcMain.handle("agent:getConfig", async () => {
     const stored = await loadStoredConfig();

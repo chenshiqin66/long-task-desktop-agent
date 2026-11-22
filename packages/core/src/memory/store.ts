@@ -18,6 +18,7 @@ import {
   type UnreadableMemory,
 } from "./entry.js";
 import { resolveProject, writeProjectFile, type ProjectInfo } from "./projectKey.js";
+import { migrateMemoryLayout, projectMemoryDir, userMemoryDir } from "./paths.js";
 
 export type MemoryActor = "extractor" | "user";
 export type JournalOp = "create" | "update" | "delete" | "restore";
@@ -116,8 +117,8 @@ async function readJournal(dir: string): Promise<JournalLine[]> {
 }
 
 /**
- * Memory for one workspace: `{home}/memory/` for every project and
- * `{home}/projects/{key}/memory/` for this repository. Each change made
+ * Memory for one workspace: `{home}/memory/user/` for every project and
+ * `{home}/memory/projects/{key}/` (flat) for this repository. Each change made
  * through the store takes the directory lock, replaces the file, and appends
  * a journal line holding the whole text before and after, so it can be
  * undone. Edits made directly in the folder bypass all of this.
@@ -127,11 +128,18 @@ export class MemoryStore {
   readonly workspacePath: string | null;
   private readonly lockWaitMs: number | undefined;
   private project: Promise<ProjectInfo | null> | null = null;
+  private layoutReady = false;
 
   constructor(opts: { workspacePath: string | null; home?: string; lockWaitMs?: number }) {
     this.home = opts.home ?? defaultAgentHome();
     this.workspacePath = opts.workspacePath;
     this.lockWaitMs = opts.lockWaitMs;
+  }
+
+  private ensureLayout(): void {
+    if (this.layoutReady) return;
+    migrateMemoryLayout(this.home);
+    this.layoutReady = true;
   }
 
   projectInfo(): Promise<ProjectInfo | null> {
@@ -140,9 +148,10 @@ export class MemoryStore {
   }
 
   async dir(scope: MemoryScope): Promise<string | null> {
-    if (scope === "user") return join(this.home, "memory");
+    this.ensureLayout();
+    if (scope === "user") return userMemoryDir(this.home);
     const project = await this.projectInfo();
-    return project ? join(this.home, "projects", project.key, "memory") : null;
+    return project ? projectMemoryDir(this.home, project.key) : null;
   }
 
   async list(): Promise<MemoryListing> {
@@ -304,10 +313,11 @@ export class MemoryStore {
   }
 
   private async prepare(scope: MemoryScope): Promise<string | null> {
+    this.ensureLayout();
     if (scope === "project") {
       const project = await this.projectInfo();
       if (!project) return null;
-      const projectDir = join(this.home, "projects", project.key);
+      const projectDir = projectMemoryDir(this.home, project.key);
       await mkdir(projectDir, { recursive: true });
       await writeProjectFile(projectDir, project);
     }

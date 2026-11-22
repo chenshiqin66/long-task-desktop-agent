@@ -1,4 +1,25 @@
 import { attachComposerModelSizing, fitComposerModelEmpty, fitComposerModelSelect } from "./composerModelFit.js";
+import {
+  VIDEO_GEN_MODE_OPTIONS,
+  VIDEO_MODEL_PRESETS,
+  VIDEO_RATIO_OPTIONS,
+  defaultVideoByModel,
+  defaultVideoModelOptions,
+  normalizeVideoByModel,
+  normalizeVideoModelOptions,
+  paintCheckGroup,
+  readCheckGroup,
+  readCheckGroupDefault,
+  videoModelBlurb,
+  videoOptionsSummary,
+  videoPresetOf,
+  videoTabLabel,
+  type VideoByModel,
+  type VideoGenMode,
+  type VideoModelOptions,
+  type VideoRatio,
+  type VideoResolution,
+} from "./videoModelForm.js";
 
 type ModelKind = "text" | "image" | "video" | "audio" | "search";
 
@@ -11,6 +32,8 @@ type StoredModel = {
   model: string;
   apiKey: string;
   kind?: ModelKind;
+  video?: VideoModelOptions;
+  videoByModel?: VideoByModel;
 };
 
 type StoredConfig = {
@@ -124,20 +147,194 @@ export function attachModelsLibrary(
   const nameInput = page.querySelector("#model-name") as HTMLInputElement;
   const kindSelect = page.querySelector("#model-kind") as HTMLSelectElement;
   const baseUrlInput = page.querySelector("#model-baseUrl") as HTMLInputElement;
+  const modelField = page.querySelector("#model-model-field") as HTMLElement;
   const modelInput = page.querySelector("#model-model") as HTMLInputElement;
   const apiKeyInput = page.querySelector("#model-apiKey") as HTMLInputElement;
   const cancelBtn = page.querySelector("#models-cancel") as HTMLButtonElement;
   const kindHint = page.querySelector("#model-kind-hint") as HTMLElement | null;
+  const videoBaseUrlHint = page.querySelector("#model-video-baseurl-hint") as HTMLElement | null;
+  const videoOptions = page.querySelector("#model-video-options") as HTMLElement;
+  const videoTabsHost = page.querySelector("#model-video-tabs") as HTMLElement;
+  const videoModesHost = page.querySelector("#model-video-modes") as HTMLElement;
+  const videoResolutionsHost = page.querySelector("#model-video-resolutions") as HTMLElement;
+  const videoDurationInput = page.querySelector("#model-video-duration") as HTMLInputElement;
+  const videoDurationMinLabel = page.querySelector("#model-video-duration-min") as HTMLElement;
+  const videoDurationValue = page.querySelector("#model-video-duration-value") as HTMLElement;
+  const videoBlurb = page.querySelector("#model-video-blurb") as HTMLElement;
+  const videoRatiosHost = page.querySelector("#model-video-ratios") as HTMLElement;
 
   let editing: string | null = null;
   let painting = false;
+  let activeVideoModel = "MiniMax-H3-Lite";
+  let videoDraftByModel: VideoByModel = defaultVideoByModel();
 
-  /** The search kind has no model name to fill, and its Base URL has a default worth showing. */
+  function durationBounds(model: string): { min: number; max: number } {
+    const preset = videoPresetOf(model) ?? VIDEO_MODEL_PRESETS[0]!;
+    return { min: preset.durationMin, max: preset.durationMax };
+  }
+
+  function clampTo(raw: number, min: number, max: number): number {
+    if (!Number.isFinite(raw)) return min;
+    return Math.min(max, Math.max(min, Math.round(raw)));
+  }
+
+  function durationsFromRange(min: number, max: number): number[] {
+    const out: number[] = [];
+    for (let n = min; n <= max; n++) out.push(n);
+    return out;
+  }
+
+  function placeDurationLabels(rangeMin: number, rangeMax: number): void {
+    const scaleMin = Number(videoDurationInput.min) || 0;
+    const scaleMax = Number(videoDurationInput.max) || 15;
+    const span = Math.max(1, scaleMax - scaleMin);
+    const pctOf = (n: number) => ((n - scaleMin) / span) * 100;
+    const startPct = pctOf(rangeMin);
+    const maxPct = pctOf(rangeMax);
+    const endPct = pctOf(Number(videoDurationInput.dataset.maxAllowed) || scaleMax);
+
+    videoDurationMinLabel.textContent = String(rangeMin);
+    videoDurationMinLabel.style.left = `${startPct}%`;
+    videoDurationMinLabel.classList.toggle("is-start", startPct <= 4);
+
+    videoDurationValue.textContent = String(rangeMax);
+    videoDurationValue.style.left = `${maxPct}%`;
+    videoDurationValue.classList.toggle("is-end", maxPct >= 96);
+
+    videoDurationInput.style.setProperty("--video-duration-pct", `${maxPct}%`);
+    videoDurationInput.style.setProperty("--video-duration-start", `${startPct}%`);
+    videoDurationInput.style.setProperty("--video-duration-end", `${endPct}%`);
+  }
+
+  function paintDurationControls(model: string, video: VideoModelOptions): void {
+    const { min, max } = durationBounds(model);
+    const enabled = video.durations?.length ? video.durations : durationsFromRange(min, max);
+    const rangeMax = clampTo(Math.max(...enabled), min, max);
+    videoDurationInput.min = "0";
+    videoDurationInput.max = "15";
+    videoDurationInput.step = "1";
+    videoDurationInput.value = String(rangeMax);
+    videoDurationInput.dataset.minAllowed = String(min);
+    videoDurationInput.dataset.maxAllowed = String(max);
+    placeDurationLabels(min, rangeMax);
+  }
+
+  function readVideoForm(model = activeVideoModel): VideoModelOptions {
+    const { min, max } = durationBounds(model);
+    const rangeMax = clampTo(Number(videoDurationInput.value), min, max);
+    return normalizeVideoModelOptions(model, {
+      modes: readCheckGroup(videoModesHost) as VideoGenMode[],
+      resolutions: readCheckGroup(videoResolutionsHost) as VideoResolution[],
+      durations: durationsFromRange(min, rangeMax),
+      ratios: readCheckGroup(videoRatiosHost) as VideoRatio[],
+      mode: readCheckGroupDefault(videoModesHost) as VideoGenMode | undefined,
+      resolution: readCheckGroupDefault(videoResolutionsHost) as VideoResolution | undefined,
+      duration: min,
+      ratio: readCheckGroupDefault(videoRatiosHost) as VideoRatio | undefined,
+    });
+  }
+
+  function stashActiveVideoTab(): void {
+    try {
+      videoDraftByModel = {
+        ...videoDraftByModel,
+        [activeVideoModel]: readVideoForm(activeVideoModel),
+      } as VideoByModel;
+    } catch {
+      /* keep previous draft for this tab */
+    }
+  }
+
+  function paintVideoParams(model: string, video?: VideoModelOptions | null): void {
+    const opts = normalizeVideoModelOptions(model, video ?? defaultVideoModelOptions(model));
+    const preset = VIDEO_MODEL_PRESETS.find((row) => row.id === model) ?? VIDEO_MODEL_PRESETS[0]!;
+    videoBlurb.textContent = videoModelBlurb(model) || preset.blurb;
+    paintCheckGroup(
+      videoModesHost,
+      "video-mode",
+      VIDEO_GEN_MODE_OPTIONS,
+      new Set(opts.modes),
+      opts.mode,
+    );
+    paintCheckGroup(
+      videoResolutionsHost,
+      "video-resolution",
+      preset.resolutions.map((value) => ({ value, label: value })),
+      new Set(opts.resolutions),
+      opts.resolution,
+    );
+    paintDurationControls(model, opts);
+    paintCheckGroup(
+      videoRatiosHost,
+      "video-ratio",
+      VIDEO_RATIO_OPTIONS,
+      new Set(opts.ratios),
+      opts.ratio,
+    );
+  }
+
+  function paintVideoTabs(active: string): void {
+    videoTabsHost.replaceChildren();
+    for (const preset of VIDEO_MODEL_PRESETS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = preset.id === active ? "video-option-tab is-active" : "video-option-tab";
+      btn.role = "tab";
+      btn.dataset.videoModel = preset.id;
+      btn.setAttribute("aria-selected", preset.id === active ? "true" : "false");
+      btn.title = preset.id;
+      btn.textContent = videoTabLabel(preset.id);
+      btn.addEventListener("click", () => {
+        if (preset.id === activeVideoModel) return;
+        stashActiveVideoTab();
+        activeVideoModel = preset.id;
+        paintVideoTabs(activeVideoModel);
+        paintVideoParams(activeVideoModel, videoDraftByModel[activeVideoModel as keyof VideoByModel]);
+      });
+      videoTabsHost.append(btn);
+    }
+  }
+
+  function loadVideoDraft(entry?: StoredModel | null): void {
+    const packed = normalizeVideoByModel(entry?.model || "MiniMax-H3-Lite", entry?.videoByModel, entry?.video);
+    activeVideoModel = packed.model;
+    videoDraftByModel = packed.videoByModel;
+    paintVideoTabs(activeVideoModel);
+    paintVideoParams(activeVideoModel, videoDraftByModel[activeVideoModel as keyof VideoByModel]);
+  }
+
+  videoDurationInput.addEventListener("input", () => {
+    const { min, max } = durationBounds(activeVideoModel);
+    const rangeMax = clampTo(Number(videoDurationInput.value), min, max);
+    if (String(rangeMax) !== videoDurationInput.value) videoDurationInput.value = String(rangeMax);
+    placeDurationLabels(min, rangeMax);
+  });
+
+  /** Search / video kinds need stronger field hints than the empty defaults. */
   function syncKindFields(): void {
-    const search = parseModelKind(kindSelect.value) === "search";
+    const kind = parseModelKind(kindSelect.value);
+    const search = kind === "search";
+    const video = kind === "video";
     modelInput.placeholder = search ? "可留空：搜索接口不使用模型名" : "";
-    baseUrlInput.placeholder = search ? "https://api.deepseek.com" : "";
-    if (kindHint) kindHint.hidden = !search;
+    baseUrlInput.placeholder = search
+      ? "https://api.deepseek.com"
+      : video
+        ? "https://api.ppio.com"
+        : "";
+    modelField.hidden = video;
+    videoOptions.hidden = !video;
+    if (video) {
+      if (!baseUrlInput.value.trim()) baseUrlInput.value = "https://api.ppio.com";
+      loadVideoDraft();
+    }
+    if (kindHint) {
+      kindHint.hidden = !search;
+      if (search) {
+        kindHint.textContent =
+          "网搜模型只给 web_search 用，不会出现在输入框的模型选择里。它和对话模型各有一个「当前」，可以同时使用。接口按 DeepSeek 的搜索接口格式请求，Model 可以留空。";
+      }
+    }
+    if (videoBaseUrlHint) videoBaseUrlHint.hidden = !video;
   }
 
   const showNote = (err: unknown) => {
@@ -160,6 +357,9 @@ export function attachModelsLibrary(
     baseUrlInput.value = entry?.baseUrl ?? "";
     modelInput.value = entry?.model ?? "";
     apiKeyInput.value = entry?.apiKey ?? "";
+    if (modelKindOf(entry) === "video") {
+      loadVideoDraft(entry);
+    }
     form.hidden = false;
     nameInput.focus();
   }
@@ -244,7 +444,9 @@ export function attachModelsLibrary(
     }
     const summary = document.createElement("p");
     summary.className = "mcp-summary";
-    summary.textContent = entry.baseUrl || "未填写 Base URL";
+    const videoLine =
+      modelKindOf(entry) === "video" ? videoOptionsSummary(entry.video ?? defaultVideoModelOptions(entry.model)) : "";
+    summary.textContent = [entry.baseUrl || "未填写 Base URL", videoLine].filter(Boolean).join(" · ");
     const actions = document.createElement("div");
     actions.className = "mcp-actions";
     const hover = document.createElement("div");
@@ -362,9 +564,18 @@ export function attachModelsLibrary(
     void run(async () => {
       const name = nameInput.value.trim();
       const baseUrl = baseUrlInput.value.trim();
-      const model = modelInput.value.trim();
-      const apiKey = apiKeyInput.value.trim();
       const kind = parseModelKind(kindSelect.value);
+      let model = modelInput.value.trim();
+      let video: VideoModelOptions | undefined;
+      let videoByModel: VideoByModel | undefined;
+      if (kind === "video") {
+        stashActiveVideoTab();
+        const packed = normalizeVideoByModel(activeVideoModel, videoDraftByModel, videoDraftByModel[activeVideoModel as keyof VideoByModel]);
+        model = packed.model;
+        video = packed.video;
+        videoByModel = packed.videoByModel;
+      }
+      const apiKey = apiKeyInput.value.trim();
       if (!name) throw new Error("请填写显示名");
       if (!baseUrl) throw new Error("请填写 Base URL");
       // The search API takes no model name, but it cannot work without a key.
@@ -373,7 +584,15 @@ export function attachModelsLibrary(
       const cur = (await loadConfig()) ?? emptyConfig();
       const models = [...(cur.models ?? [])];
       const id = editing ?? newModelId();
-      const entry: StoredModel = { id, name, baseUrl, model, apiKey, kind };
+      const entry: StoredModel = {
+        id,
+        name,
+        baseUrl,
+        model,
+        apiKey,
+        kind,
+        ...(video ? { video, videoByModel } : {}),
+      };
       const index = models.findIndex((item) => item.id === id);
       if (index >= 0) models[index] = entry;
       else models.push(entry);

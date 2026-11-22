@@ -223,9 +223,15 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
   function scopeSection(page: MemoryPageData, scope: MemoryScope): HTMLElement {
     const { box, head } = section(scopeTitle(scope));
     if (scope === "project" && page.projectRoot) head.append(el("span", { class: "memory-muted" }, page.projectRoot));
-    head.append(textButton("打开文件夹", () => void act(() => window.agent.memoryOpenDir(page.workspace, scope))));
+    const dir = scope === "user" ? page.dirs.user : page.dirs.project;
+    if (dir) head.append(el("span", { class: "memory-file-path", title: dir }, dir));
+    const open = textButton("打开文件夹", () => void act(() => window.agent.memoryOpenDir(page.workspace, scope)));
+    if (dir) open.title = `只含本作用域的记忆文件：${dir}`;
+    head.append(open);
     const groups = groupByType(page.entries, scope);
-    if (!groups.length) box.append(el("p", { class: "memory-empty" }, "还没有记忆。在文件夹里新建一个 .md 文件，就是手写一条。"));
+    if (!groups.length) {
+      box.append(el("p", { class: "memory-empty" }, "还没有记忆。点「打开文件夹」，在打开的目录里新建一个 .md 文件即可。"));
+    }
     groups.forEach((group) => {
       box.append(el("h4", { class: "memory-type" }, group.label));
       group.entries.forEach((entry) => box.append(card(page, entry)));

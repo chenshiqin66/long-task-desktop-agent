@@ -12,7 +12,13 @@ import type {
   TraceEvent,
   VideoAttachment,
 } from "../types.js";
-import { MAX_GENERATED_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, MAX_VIDEOS_PER_MESSAGE, SessionStore } from "../store/sessionStore.js";
+import {
+  MAX_GENERATED_IMAGE_BYTES,
+  MAX_GENERATED_VIDEO_BYTES,
+  MAX_IMAGES_PER_MESSAGE,
+  MAX_VIDEOS_PER_MESSAGE,
+  SessionStore,
+} from "../store/sessionStore.js";
 import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
 import { TaskStore } from "../store/taskStore.js";
@@ -834,6 +840,9 @@ export class AgentRuntime {
     if (this.config.kind === "image" && !trimmed) {
       throw new AgentError("生图请先输入提示词", "bad_request");
     }
+    if (this.config.kind === "video" && !trimmed) {
+      throw new AgentError("生视频请先输入提示词", "bad_request");
+    }
     if (!trimmed && incoming.length === 0 && incomingVideos.length === 0) {
       throw new AgentError("Empty message", "empty");
     }
@@ -873,6 +882,9 @@ export class AgentRuntime {
     const incomingVideos = videos ?? [];
     if (this.config.kind === "image" && !trimmed) {
       throw new AgentError("生图请先输入提示词", "bad_request");
+    }
+    if (this.config.kind === "video" && !trimmed) {
+      throw new AgentError("生视频请先输入提示词", "bad_request");
     }
     if (!trimmed && incoming.length === 0 && incomingVideos.length === 0) {
       throw new AgentError("Empty message", "empty");
@@ -2339,8 +2351,8 @@ export class AgentRuntime {
     const videos = last?.role === "user" ? (last.videos ?? []) : [];
     const images = last?.role === "user" ? (last.images ?? []) : [];
 
-    if (kind === "video" || kind === "audio") {
-      const text = "这个类型第一版还不能用，请改选生文或生图";
+    if (kind === "audio") {
+      const text = "这个类型第一版还不能用，请改选生文、生图或生视频";
       this.emit({ type: "text", turn_id, delta: text });
       const assistantMsgId = newId("msg");
       const assistantTraceId = newId("trace");
@@ -2371,6 +2383,10 @@ export class AgentRuntime {
       }
       this.turnOutcome = "completed";
       return true;
+    }
+
+    if (kind === "video") {
+      return await this.generateVideoTurn(sessionId, turn_id, prompt, images, videos);
     }
 
     if (!prompt) {
@@ -2491,6 +2507,195 @@ export class AgentRuntime {
       turn_id,
       message_id: assistantMsgId,
       images: [saved],
+    });
+    this.turnOutcome = "completed";
+    return true;
+  }
+
+  private async generateVideoTurn(
+    sessionId: string,
+    turn_id: string,
+    prompt: string,
+    images: ImageAttachment[],
+    videos: VideoAttachment[],
+  ): Promise<boolean> {
+    if (!prompt) {
+      this.emit({ type: "error", turn_id, message: "生视频请先输入提示词", code: "bad_request" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (videos.length) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: "生视频暂不支持附带参考视频，请先去掉视频；可用图片作首帧/尾帧",
+        code: "bad_request",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+
+    const mode = this.config.video?.mode ?? "text";
+    if (mode === "reference") {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: "参考素材生视频尚未接通，请在模型设置里改为文生或首帧/尾帧/首尾帧",
+        code: "bad_request",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (mode === "first_frame" && images.length !== 1) {
+      this.emit({ type: "error", turn_id, message: "首帧模式请恰好附一张图片", code: "bad_request" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (mode === "last_frame" && images.length !== 1) {
+      this.emit({ type: "error", turn_id, message: "尾帧模式请恰好附一张图片", code: "bad_request" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (mode === "first_last" && images.length !== 2) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: "首尾帧模式请按顺序附两张图：第一张首帧，第二张尾帧",
+        code: "bad_request",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (mode === "text" && images.length > 1) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: "文生视频最多附一张图（将作为首帧）；两张图请改用「首尾帧」模式",
+        code: "bad_request",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+
+    this.emit({ type: "status", turn_id, phase: "generating_video" });
+    if (!this.provider.generateVideo) {
+      this.emit({ type: "error", turn_id, message: "Video generation is not available", code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+
+    const refImages: { dataUrl: string }[] = [];
+    const sentImages: { path: string; bytes: number }[] = [];
+    for (const image of images) {
+      try {
+        const loaded = await this.store.readImageForSend(sessionId, image.path);
+        refImages.push({ dataUrl: loaded.dataUrl });
+        sentImages.push({ path: image.path, bytes: loaded.bytes });
+      } catch {
+        this.emit({ type: "error", turn_id, message: "Image file is missing", code: "bad_image" });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+    }
+
+    const videoRequestId = newId("trace");
+    if (
+      !(await this.persistContext(turn_id, {
+        sessionId,
+        id: videoRequestId,
+        turnId: turn_id,
+        model: this.config.model,
+        kind: "video",
+        messages: [
+          {
+            role: "user",
+            text: prompt,
+            ...(sentImages.length ? { images: sentImages } : {}),
+          },
+        ],
+      }))
+    ) {
+      return true;
+    }
+
+    let result;
+    try {
+      result = await this.provider.generateVideo({
+        model: this.config.model,
+        prompt,
+        mode,
+        ...(refImages.length ? { images: refImages } : {}),
+        ...(this.config.video?.resolution ? { resolution: this.config.video.resolution } : {}),
+        ...(this.config.video?.duration != null ? { duration: this.config.video.duration } : {}),
+        ...(this.config.video
+          ? {
+              ratio: refImages.length
+                ? "adaptive"
+                : this.config.video.ratio === "adaptive"
+                  ? "16:9"
+                  : this.config.video.ratio,
+            }
+          : {}),
+        signal: this.abort?.signal,
+      });
+    } catch (err) {
+      if (this.abort?.signal.aborted || this.isAbortError(err)) {
+        await this.finishGenerateCancel(sessionId, turn_id);
+        return true;
+      }
+      this.emit({ type: "error", turn_id, message: String(err), code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (this.abort?.signal.aborted) {
+      await this.finishGenerateCancel(sessionId, turn_id);
+      return true;
+    }
+
+    let saved;
+    try {
+      saved = await this.store.saveVideo(sessionId, result.mime, result.base64, {
+        maxBytes: MAX_GENERATED_VIDEO_BYTES,
+      });
+    } catch (err) {
+      this.emit({ type: "error", turn_id, message: String(err), code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+
+    const assistantMsgId = newId("msg");
+    const assistantTraceId = newId("trace");
+    if (
+      !(await this.persistMessage(turn_id, {
+        id: assistantMsgId,
+        session_id: sessionId,
+        turn_id,
+        role: "assistant",
+        content: "",
+        videos: [saved],
+        trace_id: assistantTraceId,
+        created_at: nowIso(),
+      }))
+    ) {
+      return true;
+    }
+    if (
+      !(await this.persistTrace(turn_id, {
+        id: assistantTraceId,
+        session_id: sessionId,
+        turn_id,
+        type: "llm_response",
+        message_id: assistantMsgId,
+        detail: { video_count: 1 },
+      }))
+    ) {
+      return true;
+    }
+    this.emit({
+      type: "generated_videos",
+      turn_id,
+      message_id: assistantMsgId,
+      videos: [saved],
     });
     this.turnOutcome = "completed";
     return true;

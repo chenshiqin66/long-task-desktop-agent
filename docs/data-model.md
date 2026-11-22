@@ -5,30 +5,32 @@
 agent home 默认按本机上这份代码的绝对路径分开，避免原版与克隆共用一份配置：
 
 1. 环境变量 `LONG_TASK_AGENT_HOME`（若设置）
-2. 否则 `~/.long-task-agent/roots/<仓库路径的哈希>/`
+2. 否则 `~/.long-task-agent/<仓库路径的哈希>/`
 3. 找不到桌面端仓库根时，退回 `~/.long-task-agent/`
 
-升级后第一个启动的检出若发现旧的扁平 `config.json` 还在、且自己的 roots 目录还空，会把旧目录复制进自己的 roots，并留下 `roots/.legacy-claim`；之后的克隆看到 claim 就从空 home 开始。
+升级后第一个启动的检出若发现旧的扁平 `config.json` 还在、且自己的 home 还空，会把旧目录复制进自己的 `<hash>/`，并留下 `~/.long-task-agent/.legacy-claim`；之后的克隆看到 claim 就从空 home 开始。旧的 `roots/<hash>/` 会在启动时抬到 `<hash>/`，顶层残留的扁平副本会清掉。
 
 每个会话有三份日志，各回答一个问题：模型下次能看见什么（`messages.jsonl`）、发生过什么（`trace.jsonl`）、某次请求到底发了什么（`context.jsonl`）。三者用 id 互相指认。
 
 ## 落盘位置
 
 ```text
-~/.long-task-agent/roots/<hash>/     这一份检出的 agent home（或 LONG_TASK_AGENT_HOME）
-  config.json                    模型配置、工作区列表、可选限额。先写临时文件再改名。每次保存前先复制成 config.json.bak。POSIX 上目录 0700、文件 0600
-  config.json.bak                上一次成功保存前的副本
-  mcp-servers.json               MCP server 清单和密钥，见 mcp.md
-  skills/<name>/                 已安装的技能，见 skills.md
-  skills/.skill-settings.json    停用的技能名单
-  AGENTS.md                      用户级指令，可选
-  memory/                        所有项目的记忆。<name>.md 一条，journal.jsonl 只追加，.lock 修改时临时创建
-  browser-tabs.json              工作台浏览器上次的标签：每个标签的网址和标题、当时停在哪一个、DeepSeek 标签开着还是关着、开着时停在哪一页。只存网址，不存网页内容；网址是明文，带着地址里的参数。先写临时文件再改名，读不了就当没有
-  browser-explain/               工作台浏览器里的解释记录，结构同工作区的 .agent/：.agent/sessions/browser-explain/ 下只有 meta.json 和 explain-*。网页上选中的文字会以明文写在这里，不进任何工作区
-  projects/<key>/
-    project.json                 这个键对应的仓库根目录和创建时间
-    memory/                      本项目的记忆，结构同上面的 memory/
-~/.long-task-agent/roots/.legacy-claim   哪一份检出认领了旧的扁平目录
+~/.long-task-agent/
+  .legacy-claim                  哪一份检出认领了旧的扁平目录
+  <hash>/                        这一份检出的 agent home（或 LONG_TASK_AGENT_HOME）
+    home.json                    显示名（label）；正式版可留空。侧栏「设置」可改
+    config.json                  模型配置、工作区列表、可选限额。先写临时文件再改名。每次保存前先复制成 config.json.bak。POSIX 上目录 0700、文件 0600
+    config.json.bak              上一次成功保存前的副本
+    mcp-servers.json             MCP server 清单和密钥，见 mcp.md
+    skills/<name>/               已安装的技能，见 skills.md
+    skills/.skill-settings.json  停用的技能名单
+    AGENTS.md                    用户级指令，可选
+    memory/                      记忆根目录
+      user/                      用户级记忆（.md、journal、.lock）
+      projects/<key>/            项目级记忆（摊平：.md、journal、lock、project.json 都在这一层）
+        project.json             这个键对应的仓库根目录和创建时间
+    browser-tabs.json            工作台浏览器上次的标签网址等
+    browser-explain/             浏览器解释记录，不进任何工作区
 
 {workspace}/.agent/sessions/{sessionId}/
   meta.json                      会话身份：id、工作区路径、标题、标题来源、时间

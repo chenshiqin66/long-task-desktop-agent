@@ -56,15 +56,18 @@
 ## 存储
 
 ```text
-~/.long-task-agent/
+~/.long-task-agent/<hash>/   （或 LONG_TASK_AGENT_HOME）
   AGENTS.md                          用户级指令，可选
-  memory/                            所有项目的记忆
-    <name>.md                        一条记忆
-    journal.jsonl                    只追加的变更记录
-    .lock                            修改时临时创建的锁文件
-  projects/<projectKey>/
-    project.json                     这个键对应的仓库根目录
-    memory/                          本项目的记忆，结构同上
+  memory/
+    user/                            用户级记忆（打开「所有项目」文件夹进这里）
+      <name>.md
+      journal.jsonl
+      .lock
+    projects/<projectKey>/           项目级记忆（摊平；打开「本项目」文件夹进这里）
+      project.json                   这个键对应的仓库根目录
+      <name>.md
+      journal.jsonl
+      .lock
 
 {workspace}/AGENTS.md                项目级指令，可选
 {workspace}/.agent/sessions/{sessionId}/

@@ -6,7 +6,7 @@ import { normalizeWorkspacePath } from "../runtime/sessionRuntimePool.js";
 import { errorCode } from "../store/fileLock.js";
 
 export interface ProjectInfo {
-  /** Directory name under `~/.long-task-agent/projects/`. */
+  /** Directory name under `{agent home}/memory/projects/`. */
   key: string;
   /** Repository root, or the workspace itself outside git. */
   root: string;

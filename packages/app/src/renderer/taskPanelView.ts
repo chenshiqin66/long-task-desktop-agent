@@ -91,7 +91,7 @@ export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
 
   host.replaceChildren();
   const head = el("div", "task-panel-head");
-  head.append(el("h2", "task-panel-title", "本会话"));
+  head.append(el("h2", "task-panel-title", "任务清单"));
   const close = document.createElement("button");
   close.type = "button";
   close.className = "task-panel-close";
@@ -100,8 +100,12 @@ export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
   head.append(close);
   host.append(head);
 
+  // The title bar stays outside this body, which is the only part that scrolls.
+  const body = el("div", "task-panel-body");
+  host.append(body);
+
   if (view.unreadable.length) {
-    host.append(el("p", "task-unreadable", `${view.unreadable.length} 个任务文件读不出来`));
+    body.append(el("p", "task-unreadable", `${view.unreadable.length} 个任务文件读不出来`));
   }
 
   const active: Exclude<TaskPanelGroup, "completed">[] = ["in_progress", "blocked", "pending"];
@@ -111,7 +115,7 @@ export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
     const section = el("section", "task-group");
     section.append(el("h3", "task-group-title", GROUP_LABEL[group]));
     section.append(groupList(rows, openDescriptions));
-    host.append(section);
+    body.append(section);
   }
 
   const done = view.rows.filter((row) => row.group === "completed");
@@ -122,6 +126,6 @@ export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
     const summary = document.createElement("summary");
     summary.textContent = `已完成（${done.length}）`;
     details.append(summary, groupList(done, openDescriptions));
-    host.append(details);
+    body.append(details);
   }
 }
