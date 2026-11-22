@@ -1,9 +1,9 @@
 import { appendFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { newId, nowIso } from "../ids.js";
 import { isSkillName } from "../skills/frontmatter.js";
 import { errorCode, replaceFile, withDirLock } from "../store/fileLock.js";
+import { defaultAgentHome } from "../config/agentHome.js";
 import {
   MEMORY_FILE_MAX_BYTES,
   checkMemoryFields,
@@ -18,10 +18,6 @@ import {
   type UnreadableMemory,
 } from "./entry.js";
 import { resolveProject, writeProjectFile, type ProjectInfo } from "./projectKey.js";
-
-export function defaultAgentHome(): string {
-  return join(homedir(), ".long-task-agent");
-}
 
 export type MemoryActor = "extractor" | "user";
 export type JournalOp = "create" | "update" | "delete" | "restore";

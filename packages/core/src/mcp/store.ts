@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { getAgentHome } from "../config/agentHome.js";
 import { isMcpServerName } from "./names.js";
 import { SECRET_PARAM } from "./redact.js";
 
@@ -52,7 +52,7 @@ const URL_LEN = 2000;
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function defaultMcpConfigPath(): string {
-  return join(homedir(), ".long-task-agent", "mcp-servers.json");
+  return join(getAgentHome(), "mcp-servers.json");
 }
 
 export function secretsOf(config: McpServerConfig): string[] {

@@ -20,6 +20,7 @@ import {
   takeConfigQuarantine,
   toAgentConfig,
   normalizeStoredConfig,
+  chatModelProblem,
   textModelForExplain,
   withCurrentModel,
   assertValidSessionId,
@@ -189,11 +190,16 @@ function hideNativeMenuBar(target: BrowserWindow): void {
   target.removeMenu();
 }
 
-const CONFIG_DEFAULTS = {
-  baseUrl: "https://api.openai.com/v1",
-  model: "gpt-4o-mini",
+/**
+ * Seed for a brand-new config file. Never invent an OpenAI URL or model name: a missing file must
+ * stay empty so the UI says「还没有配置模型」instead of posting to api.openai.com with a blank key.
+ */
+const EMPTY_STORED_CONFIG: StoredConfig = {
+  baseUrl: "",
+  model: "",
   apiKey: "",
-} as const;
+  models: [],
+};
 
 function cleanPath(p: string): string {
   return p.replace(/[\\/]+$/, "");
@@ -308,12 +314,19 @@ async function explainWorkspace(raw: string, sessionId: string): Promise<string>
 }
 
 async function readAgentConfig() {
+  // No silent OpenAI defaults: a missing config must stay empty so submit can say "还没有配置模型".
   const stored = (await loadStoredConfig()) ?? {
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
+    baseUrl: "",
+    model: "",
     apiKey: "",
   };
   return toAgentConfig(stored);
+}
+
+/** Rejects before a turn opens when the chat model is missing or incomplete. */
+async function assertChatModelReady(): Promise<void> {
+  const problem = chatModelProblem(await loadStoredConfig());
+  if (problem) throw new AgentError(problem, "bad_config");
 }
 
 async function readExplainAgentConfig() {
@@ -566,7 +579,7 @@ app.whenReady().then(async () => {
     config: readAgentConfig,
     workspace: async (raw) => (typeof raw === "string" && raw.trim() ? assertKnownWorkspace(raw) : null),
     setAutoMemory: async (on) => {
-      const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+      const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
       await saveStoredConfig({ ...stored, autoMemory: on });
     },
   });
@@ -657,7 +670,7 @@ app.whenReady().then(async () => {
     if (res.canceled || !res.filePaths[0]) return null;
     const picked = cleanPath(res.filePaths[0]);
     await access(picked);
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     const paths = workspaceList(stored);
     const existing = paths.find((p) => samePath(p, picked));
     if (!existing) paths.push(picked);
@@ -674,7 +687,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:activateWorkspace", async (_e, raw: string) => {
     const path = await assertKnownWorkspace(raw);
     workspacePath = path;
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     await saveStoredConfig({
       ...stored,
       workspacePaths: workspaceList(stored),
@@ -763,7 +776,7 @@ app.whenReady().then(async () => {
     if (typeof nextName !== "string") throw new Error("显示名称无效");
     const name = nextName.trim();
     if (!isDisplayName(name)) throw new Error("显示名称无效");
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     const paths = workspaceList(stored);
     const labels = labelsFor(stored, paths);
     for (const key of Object.keys(labels)) {
@@ -783,7 +796,7 @@ app.whenReady().then(async () => {
     const path = await assertKnownWorkspace(raw);
     const sessions = await new SessionStore(path).listSessions();
     if (sessions.length > 0) throw new Error("目录下还有会话，不能从列表移除");
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     const paths = workspaceList(stored).filter((item) => !samePath(item, path));
     const labels = labelsFor(stored, paths);
     await runPool.discardWorkspace(path);
@@ -874,6 +887,7 @@ app.whenReady().then(async () => {
       const workspace =
         typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
       if (!workspace) throw new Error("No workspace selected");
+      await assertChatModelReady();
       await runPool.submit(
         workspace,
         sessionId,
@@ -892,6 +906,7 @@ app.whenReady().then(async () => {
         typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
       if (!workspace) throw new Error("No workspace selected");
       if (typeof text !== "string") throw new Error("Invalid message");
+      await assertChatModelReady();
       await runPool.replay(
         workspace,
         sessionId,
@@ -1055,7 +1070,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:setWorkspaceExpanded", async (_e, raw: unknown, open: unknown) => {
     if (typeof raw !== "string" || typeof open !== "boolean") throw new Error("折叠状态无效");
     const path = await assertKnownWorkspace(raw);
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     const paths = workspaceList(stored);
     const collapsed = (stored.workspaceCollapsed ?? []).filter(
       (item) => typeof item === "string" && paths.some((known) => samePath(known, item)) && !samePath(item, path),
@@ -1094,7 +1109,7 @@ app.whenReady().then(async () => {
     return openTarget(target, workspacePath);
   });
   ipcMain.handle("agent:addFavoriteFolder", async () => {
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     const current = favoriteFoldersOf(stored);
     if (current.length >= MAX_FAVORITE_FOLDERS) throw new Error("常用文件夹最多 40 个");
     const picked = await pickSkillFolder("添加常用文件夹");
@@ -1106,14 +1121,14 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("agent:removeFavoriteFolder", async (_e, raw: unknown) => {
     if (typeof raw !== "string" || !raw.trim()) throw new Error("路径无效");
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     const next = favoriteFoldersOf(stored).filter((item) => !samePath(item, raw));
     await saveStoredConfig({ ...stored, favoriteFolders: next });
     return next;
   });
   ipcMain.handle("agent:reorderFavoriteFolders", async (_e, raw: unknown) => {
     if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string")) throw new Error("顺序无效");
-    const stored = (await loadStoredConfig()) ?? { ...CONFIG_DEFAULTS };
+    const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
     const current = favoriteFoldersOf(stored);
     const next: string[] = [];
     for (const item of raw) {

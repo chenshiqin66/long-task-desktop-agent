@@ -22,6 +22,13 @@ function messageOf(body: string): string {
 
 export function errorSummary(raw: string): string {
   const text = raw.trim();
+  // Network failures used to show as "TypeError: fetch failed (POST …)" — hard to read at a glance.
+  const fetchFail = /^(?:TypeError:\s*)?fetch failed\s*\(\s*POST\s+(\S+)\s*\)\s*$/i.exec(text);
+  if (fetchFail) {
+    const url = fetchFail[1]!;
+    const short = url.length > MAX_MESSAGE ? `${url.slice(0, MAX_MESSAGE)}…` : url;
+    return `错误 · 连不上模型接口 · ${short}`;
+  }
   const http = /^HTTP\s+(\d{3})\s*:?\s*([\s\S]*)$/i.exec(text);
   const status = http ? `HTTP ${http[1]}` : "";
   let message = messageOf(http ? http[2] : text)

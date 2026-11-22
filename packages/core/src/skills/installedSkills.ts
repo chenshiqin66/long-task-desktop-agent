@@ -12,8 +12,8 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
-import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
+import { getAgentHome } from "../config/agentHome.js";
 import { isPathInside } from "../pathSandbox.js";
 import { truncateOutput } from "../tools/bash.js";
 import { isSkillName, parseSkillMarkdown } from "./frontmatter.js";
@@ -79,7 +79,7 @@ async function disabledNames(root: string, dirNames: readonly string[]): Promise
 }
 
 export function defaultSkillsRoot(): string {
-  return join(homedir(), ".long-task-agent", "skills");
+  return join(getAgentHome(), "skills");
 }
 
 export function skillDirectory(name: string, root = defaultSkillsRoot()): string {

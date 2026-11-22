@@ -1,15 +1,15 @@
-import { mkdir, readFile, chmod, rename } from "node:fs/promises";
+import { copyFile, mkdir, readFile, chmod, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
-import { replaceFile } from "../store/fileLock.js";
+import { replaceFile, errorCode } from "../store/fileLock.js";
 import type { StoredConfig, StoredModel } from "./types.js";
 import { isSearchModel, modelKindOf } from "./modelKind.js";
 import { newId } from "../ids.js";
 import type { AgentConfig } from "../types.js";
 import { DEFAULT_AGENT_CONFIG } from "../types.js";
+import { getAgentHome } from "./agentHome.js";
 
 export function getDefaultConfigPath(): string {
-  return join(homedir(), ".long-task-agent", "config.json");
+  return join(getAgentHome(), "config.json");
 }
 
 function stripBom(text: string): string {
@@ -59,6 +59,12 @@ export async function saveStoredConfig(
   await chmod(dir, 0o700).catch(() => {
     /* best-effort on platforms that ignore mode */
   });
+  // One rolling backup so a bad write or a silent recreate can be undone.
+  try {
+    await copyFile(path, `${path}.bak`);
+  } catch (err) {
+    if (errorCode(err) !== "ENOENT") throw err;
+  }
   await replaceFile(path, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   await chmod(path, 0o600).catch(() => undefined);
 }
@@ -313,6 +319,20 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
     maxSearchResults: stored.maxSearchResults ?? DEFAULT_AGENT_CONFIG.maxSearchResults,
     ...searchTargetOf(stored),
   };
+}
+
+/**
+ * Why the chat cannot start with this config. Null means a chat model is present and filled in.
+ * Fresh installs have no config file; without this check the app used to POST to a default OpenAI
+ * URL with an empty key and surface an opaque "fetch failed".
+ */
+export function chatModelProblem(stored: StoredConfig | null): string | null {
+  const current = currentModelOf(stored);
+  if (!current) return "还没有配置模型，请先在「模型」页添加";
+  if (!current.apiKey.trim()) return "当前模型还没有填写 API Key，请打开「模型」页补全";
+  if (!current.baseUrl.trim()) return "当前模型还没有填写 Base URL，请打开「模型」页补全";
+  if (!current.model.trim()) return "当前模型还没有填写 Model，请打开「模型」页补全";
+  return null;
 }
 
 /**

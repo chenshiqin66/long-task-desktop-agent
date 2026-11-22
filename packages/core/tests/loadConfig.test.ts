@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile, writeFile, stat, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { dirname, join, sep } from "node:path";
+import { tmpdir } from "node:os";
 import {
   getDefaultConfigPath,
   loadStoredConfig,
@@ -11,6 +11,7 @@ import {
   LEGACY_MODEL_ID,
   modelsOf,
   currentModelOf,
+  chatModelProblem,
   normalizeStoredConfig,
   withCurrentModel,
   upsertModel,
@@ -69,10 +70,11 @@ describe("loadConfig", () => {
     const base = { baseUrl: "https://api.example.com/v1", model: "gpt-x" };
     await saveStoredConfig({ ...base, apiKey: "sk-first" }, path);
     await saveStoredConfig({ ...base, apiKey: "sk-second" }, path);
-    expect(await readdir(dir)).toEqual(["config.json"]);
+    expect((await readdir(dir)).sort()).toEqual(["config.json", "config.json.bak"]);
     const raw = await readFile(path, "utf8");
     expect(raw).toContain("sk-second");
     expect(raw).not.toContain("sk-first");
+    expect(await readFile(`${path}.bak`, "utf8")).toContain("sk-first");
   });
 
   it("renames corrupt JSON aside so a later save does not erase it", async () => {
@@ -112,10 +114,17 @@ describe("loadConfig", () => {
     expect(loaded?.model).toBe("deepseek-flash");
   });
 
-  it("default path is under homedir/.long-task-agent, not workspace .agent", () => {
-    const p = getDefaultConfigPath();
-    expect(p).toBe(join(homedir(), ".long-task-agent", "config.json"));
-    expect(p.includes("/.agent/")).toBe(false);
+  it("default path is under the agent home for this checkout, not workspace .agent", () => {
+    const prev = process.env.LONG_TASK_AGENT_HOME;
+    process.env.LONG_TASK_AGENT_HOME = join(dir, "forced-home");
+    try {
+      const p = getDefaultConfigPath();
+      expect(p).toBe(join(dir, "forced-home", "config.json"));
+      expect(p.includes(`${sep}.agent${sep}`)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.LONG_TASK_AGENT_HOME;
+      else process.env.LONG_TASK_AGENT_HOME = prev;
+    }
   });
 
   it("saveStoredConfig sets config file mode 0o600 and directory 0o700 on POSIX", async () => {
@@ -408,6 +417,47 @@ describe("loadConfig", () => {
         "missing",
       ),
     ).toThrow("找不到这个模型");
+  });
+
+  it("names the missing or incomplete chat model before a turn starts", () => {
+    expect(chatModelProblem(null)).toBe("还没有配置模型，请先在「模型」页添加");
+    expect(chatModelProblem({ baseUrl: "", model: "", apiKey: "", models: [] })).toBe(
+      "还没有配置模型，请先在「模型」页添加",
+    );
+    expect(
+      chatModelProblem({
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        apiKey: "",
+        models: [
+          {
+            id: "a",
+            name: "空密钥",
+            baseUrl: "https://api.openai.com/v1",
+            model: "gpt-4o-mini",
+            apiKey: "",
+          },
+        ],
+        currentModelId: "a",
+      }),
+    ).toBe("当前模型还没有填写 API Key，请打开「模型」页补全");
+    expect(
+      chatModelProblem({
+        baseUrl: "https://example.com/v1",
+        model: "chat",
+        apiKey: "sk",
+        models: [
+          {
+            id: "a",
+            name: "对话",
+            baseUrl: "https://example.com/v1",
+            model: "chat",
+            apiKey: "sk",
+          },
+        ],
+        currentModelId: "a",
+      }),
+    ).toBeNull();
   });
 
 });

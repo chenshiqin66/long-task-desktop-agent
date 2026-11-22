@@ -13,6 +13,10 @@ assert.equal(errorSummary('HTTP 401: {"error":"invalid key"}'), "错误 · HTTP 
 // Not JSON: keep the text. Not HTTP: no status part.
 assert.equal(errorSummary("HTTP 502: Bad Gateway"), "错误 · HTTP 502 · Bad Gateway");
 assert.equal(errorSummary("fetch failed"), "错误 · fetch failed");
+assert.equal(
+  errorSummary("TypeError: fetch failed (POST https://api.openai.com/v1/chat/completions)"),
+  "错误 · 连不上模型接口 · https://api.openai.com/v1/chat/completions",
+);
 assert.equal(errorSummary("HTTP 400: {broken"), "错误 · HTTP 400 · {broken");
 
 // Empty and long input stay one short line.

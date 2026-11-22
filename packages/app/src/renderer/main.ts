@@ -2987,6 +2987,18 @@ function isSkillSendFailure(err: unknown): boolean {
   return message.includes("未知技能 /") || message.includes("无法读取技能 /") || message.includes("已停用");
 }
 
+/** Send never reached the model: put the draft back and keep one clear error row. */
+function isPreflightSendFailure(err: unknown): boolean {
+  if (isSkillSendFailure(err)) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("还没有配置模型") ||
+    message.includes("还没有填写 API Key") ||
+    message.includes("还没有填写 Base URL") ||
+    message.includes("还没有填写 Model")
+  );
+}
+
 function appendCancelledNotice(container: HTMLElement): void {
   const body = appendMessage(container, "assistant", CANCELLED_TURN_NOTICE, { rich: false });
   body.closest(".msg")?.classList.add("is-cancelled");
@@ -3202,7 +3214,7 @@ async function sendMessage(): Promise<void> {
       run.gate = idleGate();
       if (!alreadyHeld) dropRun(workspace, sessionId);
     }
-    if (isSkillSendFailure(err)) {
+    if (isPreflightSendFailure(err)) {
       inputEl.value = text;
       pendingImages = images;
       pendingVideos = videos;

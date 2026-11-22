@@ -1,14 +1,23 @@
 # 数据模型
 
-数据落在两处。用户目录 `~/.long-task-agent/` 放配置、技能、MCP server 和记忆，跟着人走。工作区下的 `.agent/` 放会话，跟着项目走；项目级指令 `AGENTS.md` 在工作区根目录，不在 `.agent/` 里。换工作区不会串会话，密钥也不会进项目目录。用户级记忆会随着每次请求的 system 写进这个工作区的 `context.jsonl`。
+数据落在两处。用户目录里的 **agent home** 放配置、技能、MCP server 和记忆；工作区下的 `.agent/` 放会话，跟着项目走；项目级指令 `AGENTS.md` 在工作区根目录，不在 `.agent/` 里。换工作区不会串会话，密钥也不会进项目目录。用户级记忆会随着每次请求的 system 写进这个工作区的 `context.jsonl`。
+
+agent home 默认按本机上这份代码的绝对路径分开，避免原版与克隆共用一份配置：
+
+1. 环境变量 `LONG_TASK_AGENT_HOME`（若设置）
+2. 否则 `~/.long-task-agent/roots/<仓库路径的哈希>/`
+3. 找不到桌面端仓库根时，退回 `~/.long-task-agent/`
+
+升级后第一个启动的检出若发现旧的扁平 `config.json` 还在、且自己的 roots 目录还空，会把旧目录复制进自己的 roots，并留下 `roots/.legacy-claim`；之后的克隆看到 claim 就从空 home 开始。
 
 每个会话有三份日志，各回答一个问题：模型下次能看见什么（`messages.jsonl`）、发生过什么（`trace.jsonl`）、某次请求到底发了什么（`context.jsonl`）。三者用 id 互相指认。
 
 ## 落盘位置
 
 ```text
-~/.long-task-agent/
-  config.json                    模型配置、工作区列表、可选限额。先写临时文件再改名。POSIX 上目录 0700、文件 0600
+~/.long-task-agent/roots/<hash>/     这一份检出的 agent home（或 LONG_TASK_AGENT_HOME）
+  config.json                    模型配置、工作区列表、可选限额。先写临时文件再改名。每次保存前先复制成 config.json.bak。POSIX 上目录 0700、文件 0600
+  config.json.bak                上一次成功保存前的副本
   mcp-servers.json               MCP server 清单和密钥，见 mcp.md
   skills/<name>/                 已安装的技能，见 skills.md
   skills/.skill-settings.json    停用的技能名单
@@ -19,6 +28,7 @@
   projects/<key>/
     project.json                 这个键对应的仓库根目录和创建时间
     memory/                      本项目的记忆，结构同上面的 memory/
+~/.long-task-agent/roots/.legacy-claim   哪一份检出认领了旧的扁平目录
 
 {workspace}/.agent/sessions/{sessionId}/
   meta.json                      会话身份：id、工作区路径、标题、标题来源、时间
@@ -121,12 +131,12 @@ flowchart TB
 
 ## 配置
 
-`~/.long-task-agent/config.json` 的字段见 [README 的配置表](../README.md#配置)。
+agent home 下 `config.json` 的字段见 [README 的配置表](../README.md#配置)。
 
 - 保存时先读回磁盘上的配置再合并，所以手改的限额不会被界面的保存冲掉；但写入是整份重写。
 - 目录 chmod 0700，失败会被忽略；文件以 0600 创建，之后再 chmod 一次。Windows 上 chmod 基本不起作用，文件靠用户目录本身的权限保护。
-- 读取时去掉 BOM，并对 Base URL、模型、密钥去掉首尾空白。不是合法 JSON 时，文件改名为 `config.json.broken-<时间>`，启动时说明这个路径；文件不存在则不动。应用继续用默认值和空密钥，要自己把备份改回去。
-- 文件解析失败时，退回默认值和空密钥，不报错。
+- 读取时去掉 BOM，并对 Base URL、模型、密钥去掉首尾空白。不是合法 JSON 时，文件改名为 `config.json.broken-<时间>`，启动时说明这个路径；文件不存在则不动。缺少配置时不会再悄悄写成 OpenAI 地址；保存工作区等字段时若尚无文件，只写入空的模型字段。每次成功保存前会更新 `config.json.bak`。
+- 文件解析失败时，不自动捏造供应商地址；发送前会提示先配置模型。
 - 密钥明文保存，只靠文件权限保护。
 
 ## 什么不会写进日志
