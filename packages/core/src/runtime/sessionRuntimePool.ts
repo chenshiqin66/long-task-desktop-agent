@@ -19,8 +19,22 @@ export function sessionRunKey(workspace: string, sessionId: string): string {
 export interface PooledRuntime {
   readonly isTurnRunning: boolean;
   hasDeferredWork(): boolean;
-  submit(sessionId: string, text: string, images?: unknown, videos?: unknown, audios?: unknown): Promise<void>;
-  replay(sessionId: string, text: string, images: unknown, videos?: unknown, audios?: unknown): Promise<void>;
+  submit(
+    sessionId: string,
+    text: string,
+    images?: unknown,
+    videos?: unknown,
+    audios?: unknown,
+    options?: unknown,
+  ): Promise<void>;
+  replay(
+    sessionId: string,
+    text: string,
+    images: unknown,
+    videos?: unknown,
+    audios?: unknown,
+    options?: unknown,
+  ): Promise<void>;
   cancel(): void;
   watchSession(sessionId: string | null): Promise<void>;
   stopDeferred(): Promise<void>;
@@ -72,11 +86,12 @@ export class SessionRuntimePool<T extends PooledRuntime> {
     configKey: string,
     videos?: unknown,
     audios?: unknown,
+    options?: unknown,
   ): Promise<void> {
     const key = sessionRunKey(workspace, sessionId);
     const runtime = await this.acquire(workspace, sessionId, configKey);
     try {
-      await runtime.submit(sessionId, text, images, videos, audios);
+      await runtime.submit(sessionId, text, images, videos, audios, options);
     } finally {
       this.releaseIfIdle(key);
     }
@@ -90,11 +105,12 @@ export class SessionRuntimePool<T extends PooledRuntime> {
     configKey: string,
     videos?: unknown,
     audios?: unknown,
+    options?: unknown,
   ): Promise<void> {
     const key = sessionRunKey(workspace, sessionId);
     const runtime = await this.acquire(workspace, sessionId, configKey);
     try {
-      await runtime.replay(sessionId, text, images, videos, audios);
+      await runtime.replay(sessionId, text, images, videos, audios, options);
     } finally {
       this.releaseIfIdle(key);
     }

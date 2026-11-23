@@ -200,7 +200,7 @@ npm start
 
 ## 配置
 
-配置文件在 **agent home** 下的 `config.json`。默认是 `~/.long-task-agent/<本机仓库路径哈希>/config.json`（可用环境变量 `LONG_TASK_AGENT_HOME` 整目录改掉）；每个克隆的路径不同，因此不会共用、也不会互相覆盖。第一次从旧版升级时，最先启动的那一份检出会把原来的扁平 `~/.long-task-agent/` 复制进自己的 `<hash>/`。每次保存前会留下 `config.json.bak`。「模型」页维护模型列表和当前选用的那一条，并同步顶层的 `baseUrl`、`model`、`apiKey`。每条模型有类型（生文、生图、生视频、语音合成 `tts`、语音识别 `asr`、网搜；旧值 `audio` 读入为 `tts`），缺省为生文。解释侧栏另有一个生文模型选择，写在 `currentExplainModelId`；`web_search` 另有一个网搜模型选择，写在 `currentSearchModelId`；麦克风听写另有 `currentAsrModelId`。顶层的 `baseUrl`、`model`、`apiKey` 只同步对话模型，网搜 / 旁路听写模型不会写进去。
+配置文件在 **agent home** 下的 `config.json`。默认是 `~/.long-task-agent/<本机仓库路径哈希>/config.json`（可用环境变量 `LONG_TASK_AGENT_HOME` 整目录改掉）；每个克隆的路径不同，因此不会共用、也不会互相覆盖。第一次从旧版升级时，最先启动的那一份检出会把原来的扁平 `~/.long-task-agent/` 复制进自己的 `<hash>/`。每次保存前会留下 `config.json.bak`。「模型」页维护模型列表；主输入框先选品类（Chat / 生图 / 合成语音 / 生视频），再选该品类下的模型。`composerKind` 与 `currentModelByKind` 记住品类与各类上次模型；`currentModelId` 与顶层的 `baseUrl`、`model`、`apiKey` 同步当前品类那一条。每条模型有类型（生文、生图、生视频、语音合成 `tts`、语音识别 `asr`、网搜；旧值 `audio` 读入为 `tts`），缺省为生文。解释侧栏另有 `currentExplainModelId`；`web_search` 有 `currentSearchModelId`；麦克风听写有 `currentAsrModelId`（旁路，不占品类 Tab）。
 
 模型页可以复制一条。复制、修改、移除在鼠标移到该条时才出现，「使用」始终在最右侧。工作区相关的字段由侧栏维护，常用文件夹由工作台维护，自动记忆由「记忆」页维护。限额和旧的 `searchBaseUrl`、`searchApiKey` 没有界面，需要直接编辑这个文件。应用保存配置时会保留它们，下次发送时生效。
 
@@ -212,7 +212,9 @@ npm start
 | `model` | `gpt-4o-mini` | 当前模型名。与列表里当前那一条保持一致 |
 | `apiKey` | 空 | 当前模型的密钥，明文保存，只靠文件权限保护。与列表里当前那一条保持一致 |
 | `models` | 无 | 已配置的模型列表。每项有 `id`、显示名、Base URL、模型名、API Key 和 `kind`（`text` / `image` / `video` / `tts` / `asr` / `search`，缺省 `text`；旧值 `audio` 读入为 `tts`）。`kind` 为 `video` 时还可有 `video` 与 `videoByModel`；`kind` 为 `tts` 时可有 `tts`（音色、格式、采样率）。没有这项时，顶层的 `baseUrl`、`model`、`apiKey` 当作一条 |
-| `currentModelId` | 无 | 当前选用的那一条的 `id`。没有或对不上时用列表里的第一条。主输入框旁的选择器改的就是这一项 |
+| `currentModelId` | 无 | 当前品类正在用的那一条的 `id`。没有或对不上时用该品类列表里的第一条。主输入框旁的选择器改的就是这一项 |
+| `composerKind` | `text` | Composer 一级品类：`text`（Chat）/ `image` / `tts` / `video`。缺省为 Chat。语音识别与网搜不在此列 |
+| `currentModelByKind` | 无 | 各品类上次选用的模型 `id`（`text` / `image` / `tts` / `video`）。切换品类时恢复 |
 | `currentExplainModelId` | 无 | 解释侧栏当前选用的生文模型 `id`。没有、对不上，或那一条不是生文时，改用一条生文模型。解释栏的选择器改的是这一项，不会改掉主对话的当前模型 |
 | `currentSearchModelId` | 无 | `web_search` 指向的网搜模型 `id`。没有、对不上，或那一条不是网搜时，改用第一条网搜模型。它和 `currentModelId` 同时生效：网搜模型不会成为对话的当前模型，也不出现在输入框的选择器里。没有网搜模型时，`web_search` 退回旧字段 `searchBaseUrl` / `searchApiKey` |
 | `currentAsrModelId` | 无 | 麦克风听写指向的 ASR 模型 `id`。没有或对不上时用第一条 ASR。可与对话模型同时生效 |

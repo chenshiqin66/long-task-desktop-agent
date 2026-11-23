@@ -193,6 +193,11 @@ export interface AgentConfig {
   tts?: TtsModelOptions;
 }
 
+/** Per-turn overrides from the composer (not written to config.json). */
+export type TurnSubmitOptions = {
+  video?: Partial<Pick<VideoModelOptions, "mode" | "resolution" | "duration" | "ratio">>;
+};
+
 export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, "baseUrl" | "model" | "apiKey"> = {
   kind: "text",
   bashTimeoutMs: 60_000,

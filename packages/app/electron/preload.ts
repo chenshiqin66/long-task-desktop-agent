@@ -60,7 +60,8 @@ contextBridge.exposeInMainWorld("agent", {
     videos?: Array<{ mime: string; base64: string }>,
     workspace?: string,
     audios?: Array<{ mime: string; base64: string }>,
-  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, videos, workspace, audios),
+    options?: { video?: Record<string, unknown> },
+  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, videos, workspace, audios, options),
   replay: (
     sessionId: string,
     text: string,
@@ -68,7 +69,8 @@ contextBridge.exposeInMainWorld("agent", {
     videos?: Array<{ id: string; mime: string; path: string }>,
     workspace?: string,
     audios?: Array<{ id: string; mime: string; path: string }>,
-  ) => ipcRenderer.invoke("agent:replay", sessionId, text, images, videos, workspace, audios),
+    options?: { video?: Record<string, unknown> },
+  ) => ipcRenderer.invoke("agent:replay", sessionId, text, images, videos, workspace, audios, options),
   watchSession: (sessionId: string | null, workspace?: string) =>
     ipcRenderer.invoke("agent:watchSession", sessionId, workspace),
   listSkills: () => ipcRenderer.invoke("agent:listSkills"),

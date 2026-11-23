@@ -101,7 +101,7 @@ describe("prompt images", () => {
     if (!Array.isArray(latest?.content)) return;
     expect(latest.content[1]).toMatchObject({ type: "image_url" });
     const older = (calls[2] ?? []).find((message) => message.role === "user");
-    expect(older?.content).toContain(imageOmissionNote(1));
+    expect(older?.content).toContain(imageOmissionNote([image!.path]));
 
     await expect(
       rt.replay(meta.session_id, "再问", [{ id: image!.id, mime: "image/png", path: "images/../../meta.json" }]),
@@ -144,7 +144,7 @@ describe("prompt images", () => {
       },
     );
     expect(reads).toEqual(["images/new.png"]);
-    expect(out[0]?.content).toBe(`第一张\n${imageOmissionNote(1)}`);
+    expect(out[0]?.content).toBe(`第一张\n${imageOmissionNote(["images/old.png"])}`);
     expect(out[0]).not.toHaveProperty("images");
     expect(out[2]?.content).toEqual([
       { type: "text", text: "第二张" },
@@ -163,7 +163,7 @@ describe("prompt images", () => {
         throw new Error("should not read pixels");
       },
     );
-    expect(out[0]?.content).toBe(`看图\n${imageOmissionNote(1)}`);
+    expect(out[0]?.content).toBe(`看图\n${imageOmissionNote(["images/old.png"])}`);
     expect(JSON.stringify(out)).not.toContain("image_url");
   });
 
@@ -193,10 +193,11 @@ describe("prompt images", () => {
 
     const second = JSON.stringify(seen[1]);
     expect(second).not.toContain(PNG);
-    expect(second).toContain(imageOmissionNote(1));
-    const stored = await rt.loadMessages(meta.session_id);
-    const first = stored.find((m) => m.role === "user" && m.content === "看图");
-    expect(first?.images).toHaveLength(1);
-    expect(JSON.stringify(first)).not.toContain("像素未再次发送");
+    const firstStored = (await rt.loadMessages(meta.session_id)).find(
+      (m) => m.role === "user" && m.content === "看图",
+    );
+    expect(second).toContain(imageOmissionNote([firstStored!.images![0]!.path]));
+    expect(firstStored?.images).toHaveLength(1);
+    expect(JSON.stringify(firstStored)).not.toContain("未再次发送像素");
   });
 });

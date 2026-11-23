@@ -12,10 +12,12 @@ export interface PreparedOutbound {
   sentImages: SentImage[][];
 }
 
+export type MediaNoteSource = "user" | "assistant" | "other";
+
 /**
- * Turn stored image and video references into chat content parts.
- * Only the latest user message keeps media bytes. Older media messages become
- * a one-line note on the outbound copy. Disk messages are not rewritten.
+ * Turn stored image / video / audio references into chat content parts.
+ * Only the latest **user** message may keep image/video bytes. Older media and
+ * all audios become path notes on the outbound copy. Disk messages are not rewritten.
  * `sentImages` lists only the image files whose bytes were inlined.
  */
 export async function prepareOutbound(
@@ -30,26 +32,36 @@ export async function prepareOutbound(
     const message = messages[i]!;
     const images = message.images ?? [];
     const videos = message.videos ?? [];
-    if (!images.length && !videos.length) {
+    const audios = message.audios ?? [];
+    if (!images.length && !videos.length && !audios.length) {
       out.push(withoutMedia(message));
       sentImages.push([]);
       continue;
     }
     const text = typeof message.content === "string" ? message.content.trim() : "";
-    if (i !== liveAt) {
+    const source = mediaNoteSource(message.role);
+    const inlineHere = i === liveAt && message.role === "user" && (images.length > 0 || videos.length > 0);
+    if (!inlineHere) {
       const notes = [
-        images.length ? imageOmissionNote(images.length) : "",
-        videos.length ? videoOmissionNote(videos.length) : "",
+        images.length ? imageOmissionNote(images.map((row) => row.path), source) : "",
+        videos.length ? videoOmissionNote(videos.map((row) => row.path), source) : "",
+        audios.length ? audioOmissionNote(audios.map((row) => row.path), source) : "",
       ].filter(Boolean);
       const note = notes.join("\n");
       out.push({ ...withoutMedia(message), content: text ? `${text}\n${note}` : note });
       sentImages.push([]);
       continue;
     }
-    const fallback = mediaFallbackCaption(images.length > 0, videos.length > 0);
+    const fallback = mediaFallbackCaption(images.length > 0, videos.length > 0, audios.length > 0);
     const parts: Exclude<OutboundContent, string> = [];
     const sent: SentImage[] = [];
-    parts.push({ type: "text", text: text || fallback });
+    const leadNotes = [
+      audios.length ? audioOmissionNote(audios.map((row) => row.path), source) : "",
+    ].filter(Boolean);
+    const lead = [text || (images.length || videos.length ? fallback : ""), ...leadNotes]
+      .filter(Boolean)
+      .join("\n");
+    parts.push({ type: "text", text: lead || fallback });
     for (const image of images) {
       const loaded = await readImage(image.path);
       if (!loaded) continue;
@@ -61,21 +73,29 @@ export async function prepareOutbound(
       if (!loaded) continue;
       parts.push({ type: "video_url", video_url: { url: loaded.dataUrl } });
     }
-    out.push({ ...withoutMedia(message), content: parts.length > 1 ? parts : text || fallback });
+    out.push({ ...withoutMedia(message), content: parts.length > 1 ? parts : lead || fallback });
     sentImages.push(sent);
   }
   return { messages: out, sentImages };
 }
 
+function mediaNoteSource(role: string): MediaNoteSource {
+  if (role === "assistant") return "assistant";
+  if (role === "user") return "user";
+  return "other";
+}
+
 function withoutMedia(message: AssembledMessage): AssembledMessage {
-  const { images: _images, videos: _videos, ...rest } = message;
+  const { images: _images, videos: _videos, audios: _audios, ...rest } = message;
   return rest;
 }
 
-function mediaFallbackCaption(hasImages: boolean, hasVideos: boolean): string {
+function mediaFallbackCaption(hasImages: boolean, hasVideos: boolean, hasAudios = false): string {
   if (hasImages && hasVideos) return "请看附件。";
   if (hasVideos) return "请看视频。";
-  return "请看图片。";
+  if (hasImages) return "请看图片。";
+  if (hasAudios) return "请看音频附件。";
+  return "请看附件。";
 }
 
 export async function materializeImages(
@@ -109,12 +129,33 @@ export function liveMediaMessageIndex(messages: AssembledMessage[]): number {
   return -1;
 }
 
-export function imageOmissionNote(count: number): string {
-  return `（此轮附有 ${count} 张图片，像素未再次发送。）`;
+function pathList(paths: string[]): string {
+  return paths.filter(Boolean).join("、");
 }
 
-export function videoOmissionNote(count: number): string {
-  return `（此轮附有 ${count} 个视频，未再次发送。）`;
+function whoLabel(source: MediaNoteSource): string {
+  if (source === "assistant") return "助手生成";
+  if (source === "user") return "附件";
+  return "消息中的";
+}
+
+/** Path stub for chat outbound — never includes pixels. */
+export function imageOmissionNote(paths: string[], source: MediaNoteSource = "user"): string {
+  const list = pathList(paths);
+  if (!list) return `（${whoLabel(source)}图片，未再次发送像素。）`;
+  return `（${whoLabel(source)}图片，未再次发送像素：${list}）`;
+}
+
+export function videoOmissionNote(paths: string[], source: MediaNoteSource = "user"): string {
+  const list = pathList(paths);
+  if (!list) return `（${whoLabel(source)}视频，未再次发送文件。）`;
+  return `（${whoLabel(source)}视频，未再次发送文件：${list}）`;
+}
+
+export function audioOmissionNote(paths: string[], source: MediaNoteSource = "user"): string {
+  const list = pathList(paths);
+  if (!list) return `（${whoLabel(source)}音频，未再次发送文件。）`;
+  return `（${whoLabel(source)}音频，未再次发送文件：${list}）`;
 }
 
 export function countOutboundImages(messages: AssembledMessage[]): number {

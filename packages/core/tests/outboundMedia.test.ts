@@ -1,9 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { liveMediaMessageIndex, prepareOutbound, videoOmissionNote } from "../src/context/images.js";
+import {
+  audioOmissionNote,
+  imageOmissionNote,
+  liveMediaMessageIndex,
+  prepareOutbound,
+  videoOmissionNote,
+} from "../src/context/images.js";
 import type { AssembledMessage } from "../src/context/assemble.js";
 
 const video = { id: "vid_1", mime: "video/mp4" as const, path: "videos/vid_1.mp4" };
 const image = { id: "img_1", mime: "image/png" as const, path: "images/img_1.png" };
+const audio = { id: "aud_1", mime: "audio/mpeg" as const, path: "audios/aud_1.mp3" };
 
 describe("outbound media", () => {
   it("inlines only the latest user video as a video_url part", async () => {
@@ -20,7 +27,7 @@ describe("outbound media", () => {
           ? { dataUrl: "data:video/mp4;base64,AAA", bytes: 3 }
           : null,
     );
-    expect(prepared.messages[0]?.content).toBe(`先看这个\n${videoOmissionNote(1)}`);
+    expect(prepared.messages[0]?.content).toBe(`先看这个\n${videoOmissionNote([video.path])}`);
     const last = prepared.messages[2];
     expect(Array.isArray(last?.content)).toBe(true);
     if (!Array.isArray(last?.content)) return;
@@ -29,9 +36,15 @@ describe("outbound media", () => {
     expect(last).not.toHaveProperty("videos");
   });
 
-  it("returns the exact video omission note", () => {
-    expect(videoOmissionNote(1)).toBe("（此轮附有 1 个视频，未再次发送。）");
-    expect(videoOmissionNote(3)).toBe("（此轮附有 3 个视频，未再次发送。）");
+  it("returns path-based media omission notes", () => {
+    expect(videoOmissionNote(["videos/a.mp4"])).toBe("（附件视频，未再次发送文件：videos/a.mp4）");
+    expect(videoOmissionNote(["videos/a.mp4", "videos/b.mp4"])).toBe(
+      "（附件视频，未再次发送文件：videos/a.mp4、videos/b.mp4）",
+    );
+    expect(imageOmissionNote(["images/x.png"], "assistant")).toBe(
+      "（助手生成图片，未再次发送像素：images/x.png）",
+    );
+    expect(audioOmissionNote(["audios/a.mp3"])).toBe("（附件音频，未再次发送文件：audios/a.mp3）");
   });
 
   it("uses 请看视频。 when the latest user message has only a video and no text", async () => {
@@ -61,7 +74,7 @@ describe("outbound media", () => {
     expect(prepared.messages[0]).not.toHaveProperty("videos");
   });
 
-  it("keeps 请看图片。 when the latest user message has only images and no text", async () => {
+  it("uses 请看图片。 when the latest user message has only images and no text", async () => {
     const prepared = await prepareOutbound(
       [{ role: "user", content: "", images: [image] }],
       async () => ({ dataUrl: "data:image/png;base64,IMG", bytes: 2 }),
@@ -103,11 +116,32 @@ describe("outbound media", () => {
       async (relativePath) =>
         relativePath === image.path ? { dataUrl: "data:image/png;base64,IMG", bytes: 2 } : null,
     );
-    expect(prepared.messages[0]?.content).toBe(`旧图\n（此轮附有 1 张图片，像素未再次发送。）`);
+    expect(prepared.messages[0]?.content).toBe(`旧图\n${imageOmissionNote(["images/old.png"])}`);
     expect(prepared.messages[2]?.content).toEqual([
       { type: "text", text: "新图" },
       { type: "image_url", image_url: { url: "data:image/png;base64,IMG" } },
     ]);
+  });
+
+  it("path-stubs assistant-generated media and never inlines audio", async () => {
+    const prepared = await prepareOutbound(
+      [
+        {
+          role: "assistant",
+          content: "",
+          images: [{ id: "g", mime: "image/png", path: "images/img_gen.png" }],
+        },
+        { role: "user", content: "听这段", audios: [audio] },
+        { role: "user", content: "继续聊" },
+      ],
+      async () => {
+        throw new Error("should not read pixels");
+      },
+    );
+    expect(prepared.messages[0]?.content).toBe(imageOmissionNote(["images/img_gen.png"], "assistant"));
+    expect(prepared.messages[1]?.content).toBe(`听这段\n${audioOmissionNote([audio.path])}`);
+    expect(JSON.stringify(prepared.messages)).not.toContain("audio_url");
+    expect(JSON.stringify(prepared.messages)).not.toContain("data:");
   });
 
   it("liveMediaMessageIndex follows the last user message", () => {
@@ -149,7 +183,7 @@ describe("outbound media", () => {
       },
     );
     expect(prepared.messages[0]?.content).toBe(
-      `上次\n（此轮附有 1 张图片，像素未再次发送。）\n${videoOmissionNote(1)}`,
+      `上次\n${imageOmissionNote([image.path])}\n${videoOmissionNote([video.path])}`,
     );
     expect(prepared.messages[0]).not.toHaveProperty("images");
     expect(prepared.messages[0]).not.toHaveProperty("videos");

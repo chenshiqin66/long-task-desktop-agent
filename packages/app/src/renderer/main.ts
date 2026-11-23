@@ -29,7 +29,13 @@ import {
 import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
 import { attachMcpLibrary } from "./mcp.js";
-import { attachModelsLibrary } from "./models.js";
+import { attachModelsLibrary, composerKindOf, parseComposerKind } from "./models.js";
+import {
+  VIDEO_GEN_MODE_OPTIONS,
+  defaultVideoModelOptions,
+  type VideoGenMode,
+  type VideoModelOptions,
+} from "./videoModelForm.js";
 import { showHomeLabelPrompt, showSettingsModal } from "./homeLabel.js";
 import { escapeAction } from "./escapeKey.js";
 import { installImageViewer, isImageViewerOpen } from "./imageViewer.js";
@@ -179,6 +185,7 @@ declare global {
         videos?: Array<{ mime: string; base64: string }>,
         workspace?: string,
         audios?: Array<{ mime: string; base64: string }>,
+        options?: { video?: Partial<VideoModelOptions> },
       ): Promise<void>;
       replay(
         sessionId: string,
@@ -187,6 +194,7 @@ declare global {
         videos?: Array<{ id: string; mime: string; path: string }>,
         workspace?: string,
         audios?: Array<{ id: string; mime: string; path: string }>,
+        options?: { video?: Partial<VideoModelOptions> },
       ): Promise<void>;
       readSessionAudio(sessionId: string, relativePath: string): Promise<string>;
       readWorkspaceAudio(path: string, sessionId: string, relativePath: string): Promise<string>;
@@ -321,6 +329,10 @@ const statusEl = document.getElementById("status")!;
 const toastEl = document.getElementById("app-toast")!;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
 const composerLockNote = document.getElementById("composer-lock-note") as HTMLElement;
+const composerKindEl = document.getElementById("composer-kind") as HTMLElement;
+const composerVideoChip = document.getElementById("composer-video-chip") as HTMLElement;
+const composerVideoSummary = document.getElementById("composer-video-summary") as HTMLButtonElement;
+const composerVideoPop = document.getElementById("composer-video-pop") as HTMLElement;
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnImage = document.getElementById("btn-image") as HTMLButtonElement;
@@ -502,6 +514,11 @@ let micBaseText = "";
 let unsubAsr: Array<() => void> = [];
 /** Drafts belong to one page: the blank「新建会话」page, or one session. Not the global box. */
 const composerDrafts = new Map<string, ComposerDraft>();
+/**
+ * Composer kind per session page (incl. blank「新建会话」). Missing → Chat.
+ * Only lives for this run, same idea as questionsOnly.
+ */
+const composerKindByView = new Map<string, "text" | "image" | "tts" | "video">();
 /** One rendered transcript per opened session. Switching reattaches it instead of parsing again. */
 const SESSION_VIEW_LIMIT = 8;
 /** `questionsOnly`: the session's own "只看用户问题" state, so switching sessions does not carry it over. */
@@ -1770,7 +1787,9 @@ function updateChrome(): void {
   const stopHere = running && !asking && !wakeDraft;
   const stopping = stopHere && Boolean(run?.stopRequested);
   btnSend.disabled = stopping ? true : stopHere || asking ? false : !canCompose || !hasDraft;
-  paintSendButton(btnSend, asking ? "answer" : stopping ? "stopping" : stopHere ? "stop" : "send");
+  paintSendButton(btnSend, asking ? "answer" : stopping ? "stopping" : stopHere ? "stop" : "send", {
+    sendNoun: COMPOSER_SEND_NOUN[activeComposerKind],
+  });
   btnNew.disabled = !hasWorkspace || creatingSession;
   // Sessions are created in the active workspace; say which one, so 新建 never lands somewhere unexpected.
   btnNew.title = activeWorkspace ? `在「${workspaceLabel(activeWorkspace)}」新建会话` : "请先选择工作区";
@@ -1792,7 +1811,7 @@ function updateChrome(): void {
     thinkingHint.hide();
     inputEl.placeholder = asking
       ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
-      : "向CSQ-Agent发送消息...";
+      : COMPOSER_PLACEHOLDER[activeComposerKind];
   }
   if (running && run?.liveStatus && !stopping) {
     setStatus(run.liveStatus, true, "run");
@@ -1878,6 +1897,7 @@ function restoreComposer(): void {
 
 function forgetComposer(workspace: string | null, sessionId: string | null): void {
   const key = composerKey(workspace, sessionId);
+  composerKindByView.delete(key);
   const draft = composerDrafts.get(key);
   if (!draft) return;
   if (pendingImages === draft.images) pendingImages = [];
@@ -2638,6 +2658,11 @@ async function showSession(workspace: string, sessionId: string, title: string):
     clearStoreCache();
     setLogsAvailable(true);
     restoreComposer();
+    try {
+      await applyComposerKindForCurrentView();
+    } catch {
+      /* keep previous kind if config write fails */
+    }
     setMainView("chat");
     markSessionListActive(workspace, sessionId);
     updateChrome();
@@ -2695,6 +2720,17 @@ async function showNewPage(): Promise<void> {
   followTail = true;
   setMainView("chat");
   restoreComposer();
+  try {
+    composerKindByView.set(currentComposerKey(), "text");
+    await modelsApi.resetComposerKindToChat();
+    activeComposerKind = "text";
+    videoModeLocked = false;
+    videoTurnOverride = {};
+    closeVideoPop();
+    paintComposerKindTabs();
+  } catch {
+    /* keep previous kind if config write fails */
+  }
   await refreshSessions();
   syncEmptyState();
   setStatus("", false);
@@ -2958,6 +2994,274 @@ const modelsApi = attachModelsLibrary(btnConfig, modelsPage, composerModel, comp
 });
 attachSkillMenu(inputEl, skillMenu);
 
+type ComposerKind = "text" | "image" | "tts" | "video";
+const COMPOSER_SEND_NOUN: Record<ComposerKind, string> = {
+  text: "发送",
+  image: "生成图片",
+  tts: "合成语音",
+  video: "生成视频",
+};
+const COMPOSER_PLACEHOLDER: Record<ComposerKind, string> = {
+  text: "向CSQ-Agent发送消息...",
+  image: "描述要生成的图片…",
+  tts: "输入要朗读的文本…",
+  video: "描述要生成的视频…",
+};
+
+let activeComposerKind: ComposerKind = "text";
+/** When true, attachment changes do not overwrite the user's mode choice. */
+let videoModeLocked = false;
+let videoTurnOverride: Partial<Pick<VideoModelOptions, "mode" | "resolution" | "duration" | "ratio">> = {};
+let videoPopOpen = false;
+
+function inferComposerVideoMode(images: number, videos: number, audios: number): VideoGenMode {
+  if (videos > 0 || audios > 0 || images >= 3) return "reference";
+  if (images === 2) return "first_last";
+  if (images === 1) return "first_frame";
+  return "text";
+}
+
+function rememberedComposerKind(key = currentComposerKey()): ComposerKind {
+  return parseComposerKind(composerKindByView.get(key) ?? "text");
+}
+
+function paintComposerKindTabs(): void {
+  for (const btn of Array.from(composerKindEl.querySelectorAll<HTMLButtonElement>(".composer-kind-tab"))) {
+    const kind = parseComposerKind(btn.dataset.kind);
+    const on = kind === activeComposerKind;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  composerEl.dataset.kind = activeComposerKind;
+  composerMediaCaps(); // refresh caps usage via side effect callers
+  syncComposerVideoChip();
+}
+
+/** Model library「使用」changed global kind — bind it to this session page. */
+async function refreshComposerKindFromConfig(): Promise<void> {
+  try {
+    activeComposerKind = await modelsApi.composerKind();
+  } catch {
+    activeComposerKind = "text";
+  }
+  composerKindByView.set(currentComposerKey(), activeComposerKind);
+  paintComposerKindTabs();
+  updateChrome();
+}
+
+async function setActiveComposerKind(kind: ComposerKind, opts?: { remember?: boolean }): Promise<void> {
+  const next = await modelsApi.setComposerKind(kind);
+  activeComposerKind = next;
+  if (opts?.remember !== false) composerKindByView.set(currentComposerKey(), next);
+  if (next !== "video") {
+    videoModeLocked = false;
+    videoTurnOverride = {};
+    closeVideoPop();
+  }
+  paintComposerKindTabs();
+  updateChrome();
+}
+
+/** Apply this session page's kind (default Chat). Does not invent a new preference. */
+async function applyComposerKindForCurrentView(): Promise<void> {
+  const kind = rememberedComposerKind();
+  if (kind === activeComposerKind) {
+    try {
+      const cfgKind = await modelsApi.composerKind();
+      if (cfgKind !== kind) await modelsApi.setComposerKind(kind);
+    } catch {
+      /* keep UI kind */
+    }
+    paintComposerKindTabs();
+    updateChrome();
+    return;
+  }
+  await setActiveComposerKind(kind, { remember: false });
+}
+
+composerKindEl.addEventListener("click", (event) => {
+  const btn = (event.target as HTMLElement | null)?.closest?.(".composer-kind-tab") as HTMLButtonElement | null;
+  if (!btn || btn.disabled) return;
+  const kind = parseComposerKind(btn.dataset.kind);
+  const folded =
+    composerEl.classList.contains("is-collapsed") ||
+    composerEl.classList.contains("is-compact") ||
+    composerEl.classList.contains("is-thinking");
+  if (folded) {
+    // 1A: collapsed rail shows only the active kind; click expands the card first.
+    inputEl.focus();
+    if (kind === activeComposerKind) return;
+  }
+  void setActiveComposerKind(kind).catch(showStatusError);
+});
+
+window.addEventListener("agent-models-changed", () => {
+  void refreshComposerKindFromConfig();
+});
+
+function closeVideoPop(): void {
+  videoPopOpen = false;
+  composerVideoPop.hidden = true;
+  composerVideoSummary.setAttribute("aria-expanded", "false");
+}
+
+function videoModeLabel(mode: VideoGenMode): string {
+  return VIDEO_GEN_MODE_OPTIONS.find((row) => row.value === mode)?.label ?? mode;
+}
+
+async function activeVideoModelOptions(): Promise<VideoModelOptions | null> {
+  const cfg = await modelsApi.loadConfig();
+  if (composerKindOf(cfg) !== "video") return null;
+  const entry = (cfg?.models ?? []).find((row: { id: string }) => row.id === cfg?.currentModelId);
+  if (!entry || (entry.kind ?? "text") !== "video") return null;
+  return entry.video ?? defaultVideoModelOptions(entry.model);
+}
+
+function effectiveVideoTurn(base: VideoModelOptions): {
+  mode: VideoGenMode;
+  resolution: VideoModelOptions["resolution"];
+  duration: number;
+  ratio: VideoModelOptions["ratio"];
+} {
+  const inferred = inferComposerVideoMode(pendingImages.length, pendingVideos.length, pendingAudios.length);
+  const mode = (videoModeLocked && videoTurnOverride.mode ? videoTurnOverride.mode : inferred) as VideoGenMode;
+  return {
+    mode: base.modes.includes(mode) ? mode : base.mode,
+    resolution: videoTurnOverride.resolution && base.resolutions.includes(videoTurnOverride.resolution)
+      ? videoTurnOverride.resolution
+      : base.resolution,
+    duration:
+      videoTurnOverride.duration != null && base.durations.includes(videoTurnOverride.duration)
+        ? videoTurnOverride.duration
+        : base.duration,
+    ratio:
+      videoTurnOverride.ratio && base.ratios.includes(videoTurnOverride.ratio)
+        ? videoTurnOverride.ratio
+        : base.ratio,
+  };
+}
+
+async function syncComposerVideoChip(): Promise<void> {
+  const show = activeComposerKind === "video";
+  composerVideoChip.hidden = !show;
+  if (!show) {
+    closeVideoPop();
+    return;
+  }
+  const base = await activeVideoModelOptions();
+  if (!base) {
+    composerVideoSummary.textContent = "未配置生视频模型";
+    composerVideoSummary.title = "未配置生视频模型";
+    return;
+  }
+  const eff = effectiveVideoTurn(base);
+  if (!videoModeLocked) videoTurnOverride = { ...videoTurnOverride, mode: eff.mode };
+  const parts = [videoModeLabel(eff.mode), eff.resolution, `${eff.duration}s`, eff.ratio];
+  const nImg = pendingImages.length;
+  const nVid = pendingVideos.length;
+  const nAud = pendingAudios.length;
+  if (nImg || nVid || nAud) parts.push(`图${nImg} 视${nVid} 音${nAud}`);
+  const summary = parts.join(" · ");
+  composerVideoSummary.textContent = summary;
+  composerVideoSummary.title = summary;
+}
+
+function paintVideoPop(base: VideoModelOptions): void {
+  const eff = effectiveVideoTurn(base);
+  composerVideoPop.replaceChildren();
+  const addSelect = (
+    labelText: string,
+    value: string,
+    options: string[],
+    onChange: (v: string) => void,
+  ) => {
+    const label = document.createElement("label");
+    label.textContent = labelText;
+    const select = document.createElement("select");
+    for (const opt of options) {
+      const option = document.createElement("option");
+      option.value = opt;
+      option.textContent = labelText === "素材模式" ? videoModeLabel(opt as VideoGenMode) : opt;
+      select.append(option);
+    }
+    select.value = value;
+    select.addEventListener("change", () => onChange(select.value));
+    label.append(select);
+    composerVideoPop.append(label);
+  };
+  addSelect(
+    "素材模式",
+    eff.mode,
+    base.modes,
+    (v) => {
+      videoModeLocked = true;
+      videoTurnOverride = { ...videoTurnOverride, mode: v as VideoGenMode };
+      void syncComposerVideoChip();
+      paintVideoPop(base);
+    },
+  );
+  addSelect("分辨率", eff.resolution, base.resolutions, (v) => {
+    videoTurnOverride = { ...videoTurnOverride, resolution: v as VideoModelOptions["resolution"] };
+    void syncComposerVideoChip();
+  });
+  addSelect(
+    "时长",
+    String(eff.duration),
+    base.durations.map(String),
+    (v) => {
+      videoTurnOverride = { ...videoTurnOverride, duration: Number(v) };
+      void syncComposerVideoChip();
+    },
+  );
+  const frameMode =
+    eff.mode === "first_frame" || eff.mode === "last_frame" || eff.mode === "first_last";
+  const ratioChoices = frameMode
+    ? (["adaptive"] as VideoModelOptions["ratio"][])
+    : base.ratios.filter((r) => !(eff.mode === "text" && r === "adaptive"));
+  addSelect(
+    "画幅",
+    frameMode ? "adaptive" : ratioChoices.includes(eff.ratio) ? eff.ratio : ratioChoices[0]!,
+    ratioChoices,
+    (v) => {
+      videoTurnOverride = { ...videoTurnOverride, ratio: v as VideoModelOptions["ratio"] };
+      void syncComposerVideoChip();
+    },
+  );
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "btn btn-ghost";
+  reset.textContent = "按附件重新推断模式";
+  reset.addEventListener("click", () => {
+    videoModeLocked = false;
+    videoTurnOverride = {};
+    void syncComposerVideoChip().then(() => paintVideoPop(base));
+  });
+  composerVideoPop.append(reset);
+}
+
+composerVideoSummary.addEventListener("click", () => {
+  if (composerVideoChip.hidden) return;
+  void (async () => {
+    if (videoPopOpen) {
+      closeVideoPop();
+      return;
+    }
+    const base = await activeVideoModelOptions();
+    if (!base) return;
+    paintVideoPop(base);
+    videoPopOpen = true;
+    composerVideoPop.hidden = false;
+    composerVideoSummary.setAttribute("aria-expanded", "true");
+  })();
+});
+
+document.addEventListener("click", (event) => {
+  if (!videoPopOpen) return;
+  const t = event.target as Node | null;
+  if (t && composerVideoChip.contains(t)) return;
+  closeVideoPop();
+});
+
 function libraryFormOpen(): boolean {
   return mcpApi.isFormOpen() || modelsApi.isFormOpen() || memoryPage.isFormOpen();
 }
@@ -3044,6 +3348,7 @@ function renderPendingImages(): void {
   composerImages.hidden =
     pendingImages.length === 0 && pendingVideos.length === 0 && pendingAudios.length === 0;
   composerCollapse?.refresh();
+  void syncComposerVideoChip();
   pendingImages.forEach((image, index) => {
     const thumb = document.createElement("div");
     thumb.className = "composer-thumb";
@@ -3389,9 +3694,12 @@ async function ensureSession(): Promise<string | null> {
   try {
     // A blank chat belongs to the selected workspace; create the session there explicitly.
     const meta = await window.agent.createSession("会话", activeWorkspace ?? undefined);
+    const kindFromBlank = rememberedComposerKind("new");
+    composerKindByView.delete("new");
     currentSessionId = meta.session_id;
     viewWorkspace = activeWorkspace;
     currentSessionTitle = meta.title || "会话";
+    composerKindByView.set(currentComposerKey(), kindFromBlank);
     clearStoreCache();
     setLogsAvailable(true);
     resetStreamTarget(null);
@@ -3454,14 +3762,12 @@ function isPreflightSendFailure(err: unknown): boolean {
 }
 
 function currentComposerModelKind(): string {
-  const option = composerModel.selectedOptions[0];
-  const kind = option?.dataset.kind;
-  return kind || "text";
+  return activeComposerKind;
 }
 
 /** Composer attachment caps: 生视频 uses MiniMax reference limits so 参考素材 can attach multi media. */
 function composerMediaCaps(): { images: number; videos: number; audios: number } {
-  if (currentComposerModelKind() === "video") {
+  if (activeComposerKind === "video") {
     return {
       images: MAX_PENDING_IMAGES_VIDEO_REF,
       videos: MAX_PENDING_VIDEOS_VIDEO_REF,
@@ -3742,6 +4048,15 @@ async function sendMessage(): Promise<void> {
   updateChrome();
   void refreshSessions();
   try {
+    const turnOptions =
+      activeComposerKind === "video"
+        ? await (async () => {
+            const base = await activeVideoModelOptions();
+            if (!base) return undefined;
+            const eff = effectiveVideoTurn(base);
+            return { video: { mode: eff.mode, resolution: eff.resolution, duration: eff.duration, ratio: eff.ratio } };
+          })()
+        : undefined;
     await window.agent.submit(
       sessionId,
       text,
@@ -3755,6 +4070,7 @@ async function sendMessage(): Promise<void> {
       audios.length
         ? audios.map((audio) => ({ mime: audio.mime, base64: audio.base64 }))
         : undefined,
+      turnOptions,
     );
   } catch (err) {
     if (!joiningWake) {

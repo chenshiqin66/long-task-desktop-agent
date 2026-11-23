@@ -1,3 +1,4 @@
+import type { ComposerKind, CurrentModelByKind } from "./composerKind.js";
 import type { ModelKind } from "./modelKind.js";
 import type { TtsModelOptions } from "./speechOptions.js";
 import type { VideoModelOptions } from "./videoOptions.js";
@@ -25,8 +26,15 @@ export interface StoredConfig {
   apiKey: string;
   /** When missing, the top-level baseUrl / model / apiKey are treated as one entry. */
   models?: StoredModel[];
-  /** Which models[] entry is current. Missing or unknown means the first entry. */
+  /** Which models[] entry is current. Missing or unknown means the first entry of composerKind. */
   currentModelId?: string;
+  /**
+   * Composer primary category (Chat / 生图 / 合成语音 / 生视频).
+   * Missing means text. ASR and search are not values here.
+   */
+  composerKind?: ComposerKind;
+  /** Last chosen model id per composer kind. Switching tabs restores these. */
+  currentModelByKind?: CurrentModelByKind;
   /** Text model used by the explain pane. Missing or non-text falls back to a text model. */
   currentExplainModelId?: string;
   /**

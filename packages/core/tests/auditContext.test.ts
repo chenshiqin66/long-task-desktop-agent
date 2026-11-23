@@ -84,14 +84,16 @@ describe("outbound context audit", () => {
       images?: unknown;
     }>;
     const older = secondMessages.find((message) => message.text.includes("看图"));
-    expect(older?.text).toBe(`看图\n${imageOmissionNote(1)}`);
+    const firstPath = seen?.images?.[0]?.path;
+    expect(firstPath).toBeTruthy();
+    expect(older?.text).toBe(`看图\n${imageOmissionNote([firstPath!])}`);
     expect(older).not.toHaveProperty("images");
 
     const stored = await readFile(
       join(workspace, ".agent", "sessions", meta.session_id, "messages.jsonl"),
       "utf8",
     );
-    expect(stored).not.toContain("像素未再次发送");
+    expect(stored).not.toContain("未再次发送像素");
     expect(stored).not.toContain(PNG);
 
     const traces = await readFile(

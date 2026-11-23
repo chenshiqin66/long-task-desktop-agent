@@ -2,6 +2,13 @@ import { copyFile, mkdir, readFile, chmod, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { replaceFile, errorCode } from "../store/fileLock.js";
 import type { StoredConfig, StoredModel } from "./types.js";
+import {
+  isComposerKind,
+  parseComposerKind,
+  readCurrentModelByKind,
+  type ComposerKind,
+  type CurrentModelByKind,
+} from "./composerKind.js";
 import { isAsrModel, isSearchModel, modelKindOf } from "./modelKind.js";
 import {
   defaultTtsModelOptions,
@@ -176,11 +183,37 @@ export function modelsOf(stored: StoredConfig | null): StoredModel[] {
   return one ? [one] : [];
 }
 
-/** The current chat model. A search model is never chosen, not even as the first-entry fallback. */
+/**
+ * Active composer category. Explicit `composerKind` wins; otherwise infer from
+ * `currentModelId` when that entry is a composer kind (upgrade path).
+ */
+export function composerKindOf(stored: StoredConfig | null): ComposerKind {
+  if (!stored) return "text";
+  if (stored.composerKind !== undefined) return parseComposerKind(stored.composerKind);
+  const cur = modelsOf(stored).find((entry) => entry.id === stored.currentModelId);
+  const kind = modelKindOf(cur);
+  return isComposerKind(kind) ? kind : "text";
+}
+
+/** Models listed in the composer picker for one category. */
+export function modelsForComposerKind(
+  stored: StoredConfig | null,
+  kind: ComposerKind = composerKindOf(stored),
+): StoredModel[] {
+  return modelsOf(stored).filter((entry) => modelKindOf(entry) === kind);
+}
+
+/**
+ * The current composer model for `composerKind`.
+ * Search / ASR never win. Missing pool for that kind → null.
+ */
 export function currentModelOf(stored: StoredConfig | null): StoredModel | null {
-  const chat = modelsOf(stored).filter((entry) => !isSearchModel(entry));
-  if (!chat.length) return null;
-  return chat.find((entry) => entry.id === stored?.currentModelId) ?? chat[0]!;
+  const kind = composerKindOf(stored);
+  const pool = modelsForComposerKind(stored, kind);
+  if (!pool.length) return null;
+  const byKind = readCurrentModelByKind(stored?.currentModelByKind);
+  const preferred = stored?.currentModelId ?? byKind[kind];
+  return pool.find((entry) => entry.id === preferred) ?? pool[0]!;
 }
 
 /** The model web_search points to: the chosen search model, else the first one, else none. */
@@ -272,7 +305,12 @@ function withAsrModelId(next: StoredConfig, asrId: string | undefined): StoredCo
  */
 export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
   const models = modelsOf(stored);
-  const current = currentModelOf(stored);
+  const kind = composerKindOf(stored);
+  const byKind: CurrentModelByKind = { ...readCurrentModelByKind(stored.currentModelByKind) };
+  const current = currentModelOf({ ...stored, models, composerKind: kind, currentModelByKind: byKind });
+  if (current && isComposerKind(modelKindOf(current))) {
+    byKind[modelKindOf(current) as ComposerKind] = current.id;
+  }
   const searchId = searchModelOf({ ...stored, models })?.id;
   const asrId = asrModelOf({ ...stored, models })?.id;
   if (!current) {
@@ -282,6 +320,8 @@ export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
           {
             ...stored,
             models,
+            composerKind: kind,
+            currentModelByKind: byKind,
             currentModelId: undefined,
             baseUrl: "",
             model: "",
@@ -300,6 +340,8 @@ export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
         {
           ...stored,
           models,
+          composerKind: kind,
+          currentModelByKind: byKind,
           currentModelId: current.id,
           baseUrl: current.baseUrl,
           model: current.model,
@@ -313,13 +355,42 @@ export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
   );
 }
 
+/** Switch composer category; restore that kind's last model (or the first of the kind). */
+export function withComposerKind(stored: StoredConfig, kind: ComposerKind): StoredConfig {
+  const parsed = parseComposerKind(kind);
+  const models = modelsOf(stored);
+  const pool = models.filter((entry) => modelKindOf(entry) === parsed);
+  const byKind: CurrentModelByKind = { ...readCurrentModelByKind(stored.currentModelByKind) };
+  let id = byKind[parsed];
+  if (!id || !pool.some((entry) => entry.id === id)) id = pool[0]?.id;
+  if (id) byKind[parsed] = id;
+  return normalizeStoredConfig({
+    ...stored,
+    models,
+    composerKind: parsed,
+    currentModelByKind: byKind,
+    currentModelId: id,
+  });
+}
+
 export function withCurrentModel(stored: StoredConfig, modelId: string): StoredConfig {
   const models = modelsOf(stored);
-  // A search model can't be the chat model, so an id that points at one is ignored.
-  const chat = models.filter((entry) => !isSearchModel(entry));
+  // Search / ASR are bypasses — they cannot become the composer current model.
+  const chat = models.filter((entry) => isComposerKind(modelKindOf(entry)));
   const current = chat.find((entry) => entry.id === modelId) ?? chat[0];
   if (!current) return normalizeStoredConfig({ ...stored, models, currentModelId: undefined });
-  return normalizeStoredConfig({ ...stored, models, currentModelId: current.id });
+  const kind = modelKindOf(current) as ComposerKind;
+  const byKind: CurrentModelByKind = {
+    ...readCurrentModelByKind(stored.currentModelByKind),
+    [kind]: current.id,
+  };
+  return normalizeStoredConfig({
+    ...stored,
+    models,
+    composerKind: kind,
+    currentModelByKind: byKind,
+    currentModelId: current.id,
+  });
 }
 
 export function upsertModel(stored: StoredConfig, entry: StoredModel): StoredConfig {
@@ -342,11 +413,25 @@ export function upsertModel(stored: StoredConfig, entry: StoredModel): StoredCon
 
 export function removeModel(stored: StoredConfig, modelId: string): StoredConfig {
   const models = modelsOf(stored).filter((entry) => entry.id !== modelId);
+  const kind = composerKindOf(stored);
+  const pool = models.filter((entry) => modelKindOf(entry) === kind);
+  const byKind: CurrentModelByKind = { ...readCurrentModelByKind(stored.currentModelByKind) };
+  delete byKind[kind];
+  for (const k of Object.keys(byKind) as ComposerKind[]) {
+    if (!models.some((entry) => entry.id === byKind[k])) delete byKind[k];
+  }
   const currentId =
-    stored.currentModelId && stored.currentModelId !== modelId && models.some((entry) => entry.id === stored.currentModelId)
+    stored.currentModelId && stored.currentModelId !== modelId && pool.some((entry) => entry.id === stored.currentModelId)
       ? stored.currentModelId
-      : models[0]?.id;
-  return normalizeStoredConfig({ ...stored, models, currentModelId: currentId });
+      : pool[0]?.id;
+  if (currentId) byKind[kind] = currentId;
+  return normalizeStoredConfig({
+    ...stored,
+    models,
+    composerKind: kind,
+    currentModelByKind: byKind,
+    currentModelId: currentId,
+  });
 }
 
 export function duplicateModel(stored: StoredConfig, modelId: string): StoredConfig {

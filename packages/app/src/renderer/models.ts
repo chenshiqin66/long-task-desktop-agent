@@ -22,8 +22,10 @@ import {
 } from "./videoModelForm.js";
 
 type ModelKind = "text" | "image" | "video" | "tts" | "asr" | "search";
+type ComposerKind = "text" | "image" | "tts" | "video";
 
 const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "tts", "asr", "search"];
+const COMPOSER_KINDS: readonly ComposerKind[] = ["text", "image", "tts", "video"];
 
 type TtsModelOptions = {
   speaker: string;
@@ -55,6 +57,8 @@ type StoredConfig = {
   apiKey: string;
   models?: StoredModel[];
   currentModelId?: string;
+  composerKind?: ComposerKind;
+  currentModelByKind?: Partial<Record<ComposerKind, string>>;
   /** web_search's model. Separate from currentModelId: both are in use at the same time. */
   currentSearchModelId?: string;
   /** Mic dictation's ASR model. Separate from currentModelId. */
@@ -64,9 +68,35 @@ type StoredConfig = {
 
 export type KindedModel = { id: string; kind?: unknown };
 
-/** Models the composer picker lists. Search models are left out: they only serve web_search. */
+/** Models the composer picker used to list (all non-search). Prefer modelsForComposerKind. */
 export function chatModelsOf<T extends KindedModel>(models: readonly T[] | undefined): T[] {
   return (models ?? []).filter((entry) => parseModelKind(entry.kind) !== "search");
+}
+
+export function parseComposerKind(raw: unknown): ComposerKind {
+  return typeof raw === "string" && (COMPOSER_KINDS as readonly string[]).includes(raw)
+    ? (raw as ComposerKind)
+    : "text";
+}
+
+export function isComposerKind(kind: ModelKind): kind is ComposerKind {
+  return (COMPOSER_KINDS as readonly string[]).includes(kind);
+}
+
+/** Models shown in the composer picker for one primary category. */
+export function modelsForComposerKind<T extends KindedModel>(
+  models: readonly T[] | undefined,
+  kind: ComposerKind,
+): T[] {
+  return (models ?? []).filter((entry) => parseModelKind(entry.kind) === kind);
+}
+
+export function composerKindOf(cfg: StoredConfig | null | undefined): ComposerKind {
+  if (!cfg) return "text";
+  if (cfg.composerKind !== undefined) return parseComposerKind(cfg.composerKind);
+  const cur = (cfg.models ?? []).find((entry) => entry.id === cfg.currentModelId);
+  const kind = parseModelKind(cur?.kind);
+  return isComposerKind(kind) ? kind : "text";
 }
 
 export function searchModelsOf<T extends KindedModel>(models: readonly T[] | undefined): T[] {
@@ -173,6 +203,10 @@ export function attachModelsLibrary(
   reload(): Promise<void>;
   isFormOpen(): boolean;
   cancelForm(): void;
+  setComposerKind(kind: ComposerKind): Promise<ComposerKind>;
+  resetComposerKindToChat(): Promise<void>;
+  composerKind(): Promise<ComposerKind>;
+  loadConfig(): Promise<StoredConfig | null>;
 } {
   const list = page.querySelector("#models-list") as HTMLElement;
   const note = page.querySelector("#models-note") as HTMLElement;
@@ -446,9 +480,11 @@ export function attachModelsLibrary(
   }
 
   function paintPicker(cfg: StoredConfig | null): void {
-    // Search models never appear here: they only serve web_search and have their own "use" in the models page.
-    const models = chatModelsOf(cfg?.models);
-    const currentId = inUseId(models, cfg?.currentModelId) ?? "";
+    // Only the active composer category. Search / ASR never appear here.
+    const kind = composerKindOf(cfg);
+    const models = modelsForComposerKind(cfg?.models, kind);
+    const remembered = cfg?.currentModelByKind?.[kind];
+    const currentId = inUseId(models, cfg?.currentModelId ?? remembered) ?? "";
     painting = true;
     select.replaceChildren();
     if (!models.length) {
@@ -464,9 +500,10 @@ export function attachModelsLibrary(
       for (const entry of models) {
         const option = document.createElement("option");
         option.value = entry.id;
-        const kind = modelKindOf(entry);
-        option.dataset.kind = kind;
-        option.textContent = composerModelOptionText(modelLabel(entry), kindLabelFromSelect(kindSelect, kind));
+        const entryKind = modelKindOf(entry);
+        option.dataset.kind = entryKind;
+        // Same category for every option — show name only to keep the control short.
+        option.textContent = modelLabel(entry);
         select.append(option);
       }
       select.value = models.some((entry) => entry.id === currentId) ? currentId : models[0]!.id;
@@ -501,18 +538,22 @@ export function attachModelsLibrary(
   }
 
   function modelRow(entry: StoredModel, cfg: StoredConfig): HTMLElement {
-    // Search and ASR each have a side "current" besides the chat model.
+    // Composer current is scoped to composerKind; search / ASR stay side currents.
     const kind = modelKindOf(entry);
     const isSearch = kind === "search";
     const isAsrSide = kind === "asr";
-    const chatCurrent = entry.id === inUseId(chatModelsOf(cfg.models), cfg.currentModelId);
+    const activeKind = composerKindOf(cfg);
+    const chatCurrent =
+      isComposerKind(kind) &&
+      activeKind === kind &&
+      entry.id === inUseId(modelsForComposerKind(cfg.models, kind), cfg.currentModelId);
     const searchCurrent = isSearch
       ? entry.id === inUseId(searchModelsOf(cfg.models), cfg.currentSearchModelId)
       : false;
     const asrCurrent = isAsrSide
       ? entry.id === inUseId(asrModelsOf(cfg.models), cfg.currentAsrModelId)
       : false;
-    const current = isSearch ? searchCurrent : isAsrSide ? asrCurrent || chatCurrent : chatCurrent;
+    const current = isSearch ? searchCurrent : isAsrSide ? asrCurrent : chatCurrent;
     const row = document.createElement("article");
     row.className = current ? "mcp-row is-current-model" : "mcp-row";
     const main = document.createElement("div");
@@ -546,7 +587,7 @@ export function attachModelsLibrary(
     if (isAsrSide && asrCurrent) {
       const badge = document.createElement("span");
       badge.className = "mcp-state is-ok";
-      badge.textContent = chatCurrent ? "当前·对话/听写" : "当前·听写";
+      badge.textContent = "当前·听写";
       // Replace generic 「当前」 when ASR is the mic side current.
       const existing = title.querySelector(".mcp-state");
       if (existing) existing.replaceWith(badge);
@@ -601,26 +642,27 @@ export function attachModelsLibrary(
     const chosen = models.find((entry) => entry.id === id);
     if (!chosen) throw new Error("找不到这个模型");
     if (modelKindOf(chosen) === "search") {
-      // Only web_search's model changes. The chat model stays exactly as it was.
+      // Only web_search's model changes. The composer model stays exactly as it was.
       await persist({ ...cur, models, currentSearchModelId: chosen.id });
       return;
     }
     if (modelKindOf(chosen) === "asr") {
-      // Mic side current. Also becomes the chat model when used from the list (upload ASR).
+      // Mic side current only — does not switch composerKind.
       await persist({
         ...cur,
         models,
         currentAsrModelId: chosen.id,
-        currentModelId: chosen.id,
-        baseUrl: chosen.baseUrl,
-        model: chosen.model,
-        apiKey: chosen.apiKey,
       });
       return;
     }
+    const kind = modelKindOf(chosen);
+    if (!isComposerKind(kind)) throw new Error("请选择 Chat / 生图 / 合成语音 / 生视频 模型");
+    const byKind = { ...(cur.currentModelByKind ?? {}), [kind]: chosen.id };
     await persist({
       ...cur,
       models,
+      composerKind: kind,
+      currentModelByKind: byKind,
       currentModelId: chosen.id,
       baseUrl: chosen.baseUrl,
       model: chosen.model,
@@ -628,15 +670,50 @@ export function attachModelsLibrary(
     });
   }
 
-  async function deleteModel(id: string): Promise<void> {
+  async function setComposerKind(kind: ComposerKind): Promise<ComposerKind> {
     const cur = (await loadConfig()) ?? emptyConfig();
-    const models = (cur.models ?? []).filter((entry) => entry.id !== id);
-    // The chat model and the search model are picked from their own pools.
-    const chat = chatModelsOf(models);
-    const chosen = chat.find((entry) => entry.id === cur.currentModelId) ?? chat[0];
+    const parsed = parseComposerKind(kind);
+    const models = cur.models ?? [];
+    const pool = modelsForComposerKind(models, parsed);
+    const byKind = { ...(cur.currentModelByKind ?? {}) };
+    let id = byKind[parsed];
+    if (!id || !pool.some((entry) => entry.id === id)) id = pool[0]?.id;
+    if (id) byKind[parsed] = id;
+    const chosen = pool.find((entry) => entry.id === id);
     await persist({
       ...cur,
       models,
+      composerKind: parsed,
+      currentModelByKind: byKind,
+      currentModelId: chosen?.id,
+      baseUrl: chosen?.baseUrl ?? "",
+      model: chosen?.model ?? "",
+      apiKey: chosen?.apiKey ?? "",
+    });
+    return parsed;
+  }
+
+  async function resetComposerKindToChat(): Promise<void> {
+    await setComposerKind("text");
+  }
+
+  async function deleteModel(id: string): Promise<void> {
+    const cur = (await loadConfig()) ?? emptyConfig();
+    const models = (cur.models ?? []).filter((entry) => entry.id !== id);
+    const kind = composerKindOf({ ...cur, models });
+    const pool = modelsForComposerKind(models, kind);
+    const byKind = { ...(cur.currentModelByKind ?? {}) };
+    delete byKind[kind];
+    for (const key of COMPOSER_KINDS) {
+      if (byKind[key] && !models.some((entry) => entry.id === byKind[key])) delete byKind[key];
+    }
+    const chosen = pool.find((entry) => entry.id === cur.currentModelId) ?? pool[0];
+    if (chosen) byKind[kind] = chosen.id;
+    await persist({
+      ...cur,
+      models,
+      composerKind: kind,
+      currentModelByKind: byKind,
       currentModelId: chosen?.id,
       baseUrl: chosen?.baseUrl ?? "",
       model: chosen?.model ?? "",
@@ -768,5 +845,9 @@ export function attachModelsLibrary(
     cancelForm: () => {
       if (!form.hidden) closeForm();
     },
+    setComposerKind,
+    resetComposerKindToChat,
+    composerKind: async () => composerKindOf(await loadConfig()),
+    loadConfig,
   };
 }

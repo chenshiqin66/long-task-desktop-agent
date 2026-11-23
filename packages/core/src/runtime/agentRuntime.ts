@@ -13,8 +13,11 @@ import type {
   SubmittedVideo,
   ToolCall,
   TraceEvent,
+  TurnSubmitOptions,
   VideoAttachment,
 } from "../types.js";
+import type { VideoModelOptions } from "../config/videoOptions.js";
+import { defaultVideoModelOptions } from "../config/videoOptions.js";
 import {
   MAX_AUDIOS_PER_MESSAGE,
   MAX_AUDIO_BYTES,
@@ -293,7 +296,10 @@ export class AgentRuntime {
     images: SubmittedImage[];
     videos: SubmittedVideo[];
     audios: SubmittedAudio[];
+    options?: TurnSubmitOptions;
   } | null = null;
+  /** Composer per-turn overrides (e.g. video mode). Cleared when the submit settles. */
+  private turnOptions: TurnSubmitOptions | null = null;
   private readonly skillsRoot: string;
   /** Bodies pinned for the submit currently running. Cleared when it ends. */
   private skillBodies: SkillBodyAttachment[] = [];
@@ -663,7 +669,13 @@ export class AgentRuntime {
     await this.withInbox(async () => {
       if (this.running && this.turnKind === "wakeup" && this.activeSessionId === sessionId && !this.heldSubmit) {
         if (opts?.allowHold === false) throw new AgentError("A turn is already running", "busy");
-        this.heldSubmit = { text, images, videos, audios };
+        this.heldSubmit = {
+          text,
+          images,
+          videos,
+          audios,
+          ...(this.turnOptions ? { options: this.turnOptions } : {}),
+        };
         if (this.exiting) this.exitWake = true;
         held = true;
         return;
@@ -870,11 +882,13 @@ export class AgentRuntime {
     images?: SubmittedImage[],
     videos?: SubmittedVideo[],
     audios?: SubmittedAudio[],
+    options?: TurnSubmitOptions,
   ): Promise<void> {
     const trimmed = text.trim();
     const incoming = images ?? [];
     const incomingVideos = videos ?? [];
     const incomingAudios = audios ?? [];
+    this.turnOptions = normalizeTurnOptions(options);
     if (this.config.kind === "image" && !trimmed) {
       throw new AgentError("生图请先输入提示词", "bad_request");
     }
@@ -893,7 +907,10 @@ export class AgentRuntime {
     this.assertAttachmentCounts(incoming.length, incomingVideos.length, incomingAudios.length);
     await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
     const held = await this.beginUserTurn(sessionId, trimmed, incoming, incomingVideos, incomingAudios);
-    if (held) return;
+    if (held) {
+      this.turnOptions = null;
+      return;
+    }
     try {
       const storedImages = [];
       for (const image of incoming) {
@@ -913,6 +930,7 @@ export class AgentRuntime {
     } finally {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
+      this.turnOptions = null;
       this.skillBodies = [];
       this.turnMemory = EMPTY_TURN_MEMORY;
       this.turnWritesAllowed = false;
@@ -927,11 +945,13 @@ export class AgentRuntime {
     images: ImageAttachment[] = [],
     videos: VideoAttachment[] = [],
     audios: AudioAttachment[] = [],
+    options?: TurnSubmitOptions,
   ): Promise<void> {
     const trimmed = text.trim();
     const incoming = images ?? [];
     const incomingVideos = videos ?? [];
     const incomingAudios = audios ?? [];
+    this.turnOptions = normalizeTurnOptions(options);
     if (this.config.kind === "image" && !trimmed) {
       throw new AgentError("生图请先输入提示词", "bad_request");
     }
@@ -958,6 +978,7 @@ export class AgentRuntime {
     } finally {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
+      this.turnOptions = null;
       this.skillBodies = [];
       this.turnMemory = EMPTY_TURN_MEMORY;
       this.turnWritesAllowed = false;
@@ -2587,8 +2608,22 @@ export class AgentRuntime {
     return true;
   }
 
+  private effectiveVideoOptions(): VideoModelOptions {
+    const base = this.config.video ?? defaultVideoModelOptions(this.config.model || "MiniMax-H3-Lite");
+    const over = this.turnOptions?.video;
+    if (!over) return base;
+    return {
+      ...base,
+      ...(over.mode ? { mode: over.mode } : {}),
+      ...(over.resolution ? { resolution: over.resolution } : {}),
+      ...(over.duration != null ? { duration: over.duration } : {}),
+      ...(over.ratio ? { ratio: over.ratio } : {}),
+    };
+  }
+
   private assertAttachmentCounts(images: number, videos: number, audios: number): void {
-    const videoRef = this.config.kind === "video" && (this.config.video?.mode ?? "text") === "reference";
+    const mode = this.effectiveVideoOptions().mode;
+    const videoRef = this.config.kind === "video" && mode === "reference";
     const maxImages = videoRef ? VIDEO_REF_MAX_IMAGES : MAX_IMAGES_PER_MESSAGE;
     const maxVideos = videoRef ? VIDEO_REF_MAX_VIDEOS : MAX_VIDEOS_PER_MESSAGE;
     const maxAudios = videoRef ? VIDEO_REF_MAX_AUDIOS : MAX_AUDIOS_PER_MESSAGE;
@@ -2617,7 +2652,8 @@ export class AgentRuntime {
       return true;
     }
 
-    const mode = this.config.video?.mode ?? "text";
+    const videoOpts = this.effectiveVideoOptions();
+    const mode = videoOpts.mode ?? "text";
     if (mode !== "reference") {
       if (videos.length) {
         this.emit({
@@ -2753,12 +2789,12 @@ export class AgentRuntime {
     const hasFrames = mode !== "reference" && refImages.length > 0;
     const ratio =
       mode === "reference"
-        ? referenceVideoRatio(this.config.model, this.config.video?.ratio)
+        ? referenceVideoRatio(this.config.model, videoOpts.ratio)
         : hasFrames
           ? "adaptive"
-          : this.config.video?.ratio === "adaptive"
+          : videoOpts.ratio === "adaptive"
             ? "16:9"
-            : (this.config.video?.ratio ?? "16:9");
+            : videoOpts.ratio;
 
     let result;
     try {
@@ -2769,8 +2805,8 @@ export class AgentRuntime {
         ...(refImages.length ? { images: refImages } : {}),
         ...(refVideos.length ? { videos: refVideos } : {}),
         ...(refAudios.length ? { audios: refAudios } : {}),
-        ...(this.config.video?.resolution ? { resolution: this.config.video.resolution } : {}),
-        ...(this.config.video?.duration != null ? { duration: this.config.video.duration } : {}),
+        resolution: videoOpts.resolution,
+        duration: videoOpts.duration,
         ratio,
         signal: this.abort?.signal,
       });
@@ -3061,4 +3097,39 @@ export class AgentRuntime {
     }
     this.emit({ type: "done", turn_id, reason: "cancelled" });
   }
+}
+
+function normalizeTurnOptions(raw: unknown): TurnSubmitOptions | null {
+  if (!raw || typeof raw !== "object") return null;
+  const videoRaw = (raw as { video?: unknown }).video;
+  if (!videoRaw || typeof videoRaw !== "object") return null;
+  const row = videoRaw as Record<string, unknown>;
+  const video: NonNullable<TurnSubmitOptions["video"]> = {};
+  if (
+    row.mode === "text" ||
+    row.mode === "first_frame" ||
+    row.mode === "last_frame" ||
+    row.mode === "first_last" ||
+    row.mode === "reference"
+  ) {
+    video.mode = row.mode;
+  }
+  if (row.resolution === "480P" || row.resolution === "768P" || row.resolution === "2K") {
+    video.resolution = row.resolution;
+  }
+  if (typeof row.duration === "number" && Number.isFinite(row.duration)) {
+    video.duration = Math.round(row.duration);
+  }
+  if (
+    row.ratio === "16:9" ||
+    row.ratio === "9:16" ||
+    row.ratio === "1:1" ||
+    row.ratio === "4:3" ||
+    row.ratio === "3:4" ||
+    row.ratio === "21:9" ||
+    row.ratio === "adaptive"
+  ) {
+    video.ratio = row.ratio;
+  }
+  return Object.keys(video).length ? { video } : null;
 }

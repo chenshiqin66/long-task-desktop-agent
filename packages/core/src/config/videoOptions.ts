@@ -362,6 +362,21 @@ export function readVideoModelOptions(
   }
 }
 
+/**
+ * Suggest a video gen mode from this turn's attachments (composer inference).
+ * User can still override to last_frame etc.
+ */
+export function inferVideoGenMode(
+  imageCount: number,
+  videoCount: number,
+  audioCount: number,
+): VideoGenMode {
+  if (videoCount > 0 || audioCount > 0 || imageCount >= 3) return "reference";
+  if (imageCount === 2) return "first_last";
+  if (imageCount === 1) return "first_frame";
+  return "text";
+}
+
 /** Ratio actually sent on create, given attachments / mode. */
 export function effectiveVideoRatio(
   options: VideoModelOptions,

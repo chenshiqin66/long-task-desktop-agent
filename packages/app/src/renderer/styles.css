@@ -3354,6 +3354,27 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
     0 8px 24px rgba(26, 35, 50, 0.1);
 }
 
+/* Main composer: left kind rail + right body as one rounded card. */
+#composer {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: minmax(0, auto);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+#composer .composer-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px 8px;
+}
+
 @keyframes composer-shake {
   0%,
   100% {
@@ -3471,8 +3492,129 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .composer-actions {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+#composer .composer-kind {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  flex: none;
+  width: 44px;
+  min-width: 44px;
+  min-height: 0;
+  border-right: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+  background: color-mix(in srgb, var(--panel) 88%, #e8eef2);
+}
+
+#composer .composer-kind-tab {
+  appearance: none;
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+  padding: 4px 2px;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  writing-mode: horizontal-tb;
+  text-align: center;
+  word-break: keep-all;
+}
+
+#composer .composer-kind-tab:last-child {
+  border-bottom: none;
+}
+
+#composer .composer-kind-tab:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 70%, #fff);
+}
+
+#composer .composer-kind-tab.is-active {
+  color: #0f3d38;
+  background: color-mix(in srgb, var(--accent) 22%, #fff);
+  font-weight: 600;
+}
+
+#composer .composer-kind-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+.composer-video-chip {
+  flex: 0 1 auto;
+  position: relative;
+  min-width: 0;
+  max-width: min(200px, 28vw);
+}
+
+.composer-video-summary {
+  appearance: none;
+  display: block;
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+  background: color-mix(in srgb, var(--panel) 96%, #f3f0ff);
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 20px;
+  padding: 0 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-video-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  min-width: min(280px, 92vw);
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 10px 28px rgb(15 23 42 / 12%);
+  display: grid;
+  gap: 8px;
+}
+
+.composer-video-pop label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.composer-video-pop select {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
 }
 
 .composer-tools {
@@ -3484,10 +3626,15 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 .composer-send {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
+  flex: none;
   min-width: 0;
   margin-left: auto;
+}
+
+.composer-actions .composer-tools {
+  flex: 1 1 auto;
 }
 
 .composer-resize {
@@ -4072,6 +4219,41 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   box-shadow: var(--shadow-soft);
 }
 
+/* Collapsed main composer keeps the kind rail; only the active tab shows. */
+#composer:is(.is-compact, .is-thinking, .is-collapsed) {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  width: 50%;
+  min-height: 34px;
+}
+
+#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-kind {
+  width: 40px;
+  min-width: 40px;
+}
+
+#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-kind-tab:not(.is-active) {
+  display: none;
+}
+
+#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-kind-tab.is-active {
+  flex: 1 1 auto;
+  border-bottom: none;
+  font-size: 11px;
+}
+
+#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 6px 3px 10px;
+}
+
 :is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-images,
 :is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .btn-image,
 #explain-composer .composer-images,
@@ -4119,6 +4301,10 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 :is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-model,
 :is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-model-empty {
+  display: none;
+}
+
+#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-video-chip {
   display: none;
 }
 

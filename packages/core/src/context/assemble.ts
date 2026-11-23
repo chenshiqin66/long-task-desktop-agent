@@ -1,4 +1,4 @@
-import type { ImageAttachment, Message, ToolCall, VideoAttachment } from "../types.js";
+import type { AudioAttachment, ImageAttachment, Message, ToolCall, VideoAttachment } from "../types.js";
 import {
   readSkillHistoryStub,
   renderInstalledSkills,
@@ -37,6 +37,8 @@ export interface AssembledMessage {
   images?: ImageAttachment[];
   /** Present only before video bytes are inlined for the API call. */
   videos?: VideoAttachment[];
+  /** Present only before path notes replace audio for the API call. Never inlined for chat. */
+  audios?: AudioAttachment[];
 }
 
 export interface AssembledContext {
@@ -382,5 +384,6 @@ function toAssembled(m: Message): AssembledMessage {
     tool_calls: m.tool_calls,
     ...(m.images?.length ? { images: m.images } : {}),
     ...(m.videos?.length ? { videos: m.videos } : {}),
+    ...(m.audios?.length ? { audios: m.audios } : {}),
   };
 }

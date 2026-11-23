@@ -8,11 +8,15 @@ export const SEND_ICON_PATH =
 export const STOP_ICON_PATH =
   "M512.085642 1023.939139c-279.049295-1.251342-511.23014-229.109369-512.026448-511.91269-0.796309-282.746443 229.223127-512.026449 511.969569-512.026449a512.026449 512.026449 0 0 1 511.96957 512.026449c0 282.803322-259.14158 513.050274-511.912691 511.91269z m175.984208-639.890863a48.006035 48.006035 0 0 0-48.006035-48.006034h-255.956345a48.062914 48.062914 0 0 0-48.006035 48.006034v255.956345c0 26.505702 21.557212 48.006035 48.006035 48.006035h255.956345a48.006035 48.006035 0 0 0 48.006035-48.006035v-255.956345z";
 
-export function sendButtonLabel(mode: SendButtonMode, enabled = true): string {
+export function sendButtonLabel(
+  mode: SendButtonMode,
+  enabled = true,
+  sendNoun = "发送",
+): string {
   if (mode === "answer") return "回答";
   if (mode === "stopping") return "正在停止";
   if (mode === "stop") return "停止";
-  return enabled ? "发送" : "发送已禁用";
+  return enabled ? sendNoun : `${sendNoun}已禁用`;
 }
 
 export function sendIconKind(mode: SendButtonMode): "send" | "stop" | null {
@@ -21,9 +25,13 @@ export function sendIconKind(mode: SendButtonMode): "send" | "stop" | null {
   return null;
 }
 
-export function paintSendButton(btn: HTMLButtonElement, mode: SendButtonMode): void {
+export function paintSendButton(
+  btn: HTMLButtonElement,
+  mode: SendButtonMode,
+  opts?: { sendNoun?: string },
+): void {
   const enabled = !btn.disabled && mode !== "stopping";
-  const label = sendButtonLabel(mode, enabled);
+  const label = sendButtonLabel(mode, enabled, opts?.sendNoun ?? "发送");
   btn.classList.toggle("is-stop", mode === "stop");
   btn.classList.toggle("is-stopping", mode === "stopping");
   btn.classList.toggle("is-answer", mode === "answer");

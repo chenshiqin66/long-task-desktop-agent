@@ -960,6 +960,7 @@ app.whenReady().then(async () => {
       videos?: unknown,
       workspaceRaw?: unknown,
       audios?: unknown,
+      options?: unknown,
     ) => {
       assertValidSessionId(sessionId);
       const workspace =
@@ -974,6 +975,7 @@ app.whenReady().then(async () => {
         await currentConfigKey(),
         normalizeSubmittedVideos(videos),
         normalizeSubmittedAudios(audios),
+        options,
       );
     },
   );
@@ -987,6 +989,7 @@ app.whenReady().then(async () => {
       videos?: unknown,
       workspaceRaw?: unknown,
       audios?: unknown,
+      options?: unknown,
     ) => {
       assertValidSessionId(sessionId);
       const workspace =
@@ -1002,6 +1005,7 @@ app.whenReady().then(async () => {
         await currentConfigKey(),
         normalizeReusedVideos(videos ?? []),
         normalizeReusedAudios(audios ?? []),
+        options,
       );
     },
   );
