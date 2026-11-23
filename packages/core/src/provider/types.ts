@@ -1,4 +1,9 @@
 import type { AudioMime, ImageMime, ToolCall, VideoMime } from "../types.js";
+import type {
+  ImageBackground,
+  ImageOutputFormat,
+  ImagePromptMode,
+} from "../config/imageOptions.js";
 import type { ToolDefinition } from "../tools/types.js";
 import type { AssembledMessage } from "../context/assemble.js";
 import type { VideoCreateMode, VideoRatio, VideoResolution } from "./videoGeneration.js";
@@ -27,6 +32,11 @@ export interface ImageGenRequest {
   model: string;
   prompt: string;
   images?: { dataUrl: string }[];
+  size?: string;
+  outputFormat?: ImageOutputFormat;
+  background?: ImageBackground;
+  watermark?: boolean;
+  promptMode?: ImagePromptMode;
   signal?: AbortSignal;
 }
 

@@ -15,9 +15,11 @@ import {
   buildImageGenerationBody,
   imageUrlFromGenerationResponse,
   inferImageMimeFromUrl,
+  parseImageFormat,
   parseImageGenerationResponse,
   parseImageMime,
 } from "./imageGeneration.js";
+import type { ImageOutputFormat } from "../config/imageOptions.js";
 import {
   buildVideoGenerationBody,
   inferVideoMimeFromUrl,
@@ -104,15 +106,23 @@ export class OpenAICompatibleProvider implements LlmProvider {
       throw new Error("No image in response");
     }
     try {
-      return parseImageGenerationResponse(body, res.headers.get("content-type") ?? undefined);
+      return parseImageGenerationResponse(
+        body,
+        res.headers.get("content-type") ?? undefined,
+        req.outputFormat,
+      );
     } catch (err) {
       const imageUrl = imageUrlFromGenerationResponse(body);
       if (!imageUrl) throw err;
-      return await this.downloadGeneratedImage(imageUrl, req.signal);
+      return await this.downloadGeneratedImage(imageUrl, req.signal, req.outputFormat);
     }
   }
 
-  private async downloadGeneratedImage(imageUrl: string, signal?: AbortSignal): Promise<ImageGenResult> {
+  private async downloadGeneratedImage(
+    imageUrl: string,
+    signal?: AbortSignal,
+    preferredFormat?: ImageOutputFormat,
+  ): Promise<ImageGenResult> {
     const res = await this.fetchImpl(imageUrl, { signal });
     if (!res.ok) {
       const text = await res.text();
@@ -122,7 +132,11 @@ export class OpenAICompatibleProvider implements LlmProvider {
     if (bytes.byteLength === 0) {
       throw new Error("Empty image body");
     }
-    const mime = parseImageMime(res.headers.get("content-type")) ?? inferImageMimeFromUrl(imageUrl) ?? "image/png";
+    const mime =
+      parseImageMime(res.headers.get("content-type")) ??
+      inferImageMimeFromUrl(imageUrl) ??
+      parseImageFormat(preferredFormat) ??
+      "image/png";
     return { mime, base64: Buffer.from(bytes).toString("base64") };
   }
 
