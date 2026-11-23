@@ -305,6 +305,7 @@ export function paintCheckGroup(
   options: ReadonlyArray<{ value: string; label: string }>,
   checked: ReadonlySet<string>,
   preferred: string,
+  opts?: { minOne?: boolean },
 ): void {
   host.replaceChildren();
   const defaultName = `${name}-default`;
@@ -321,6 +322,15 @@ export function paintCheckGroup(
     enable.checked = checked.has(option.value);
     enable.title = "启用（聊天可选）";
     enable.addEventListener("change", () => {
+      if (!enable.checked && opts?.minOne) {
+        const stillChecked = host.querySelectorAll<HTMLInputElement>(
+          'input[type="checkbox"]:checked',
+        ).length;
+        if (stillChecked === 0) {
+          enable.checked = true;
+          return;
+        }
+      }
       if (!enable.checked) {
         const radio = label.querySelector<HTMLInputElement>('input[type="radio"]');
         if (radio?.checked) radio.checked = false;

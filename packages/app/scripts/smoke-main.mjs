@@ -20,6 +20,7 @@ const scripts = [
   ["test-sticky-turns.mjs"],
   ["test-memory-view.mjs"],
   ["test-model-kind-label.mjs"],
+  ["test-image-model-form.mjs"],
   ["test-composer-model-fit.mjs"],
   ["test-explain-icons.mjs"],
   ["test-composer-resize.mjs"],
