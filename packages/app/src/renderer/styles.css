@@ -3556,14 +3556,16 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   z-index: 1;
 }
 
-.composer-video-chip {
+.composer-video-chip,
+.composer-image-chip {
   flex: 0 1 auto;
   position: relative;
   min-width: 0;
   max-width: min(200px, 28vw);
 }
 
-.composer-video-summary {
+.composer-video-summary,
+.composer-image-summary {
   appearance: none;
   display: block;
   box-sizing: border-box;
@@ -3585,7 +3587,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   white-space: nowrap;
 }
 
-.composer-video-pop {
+.composer-video-pop,
+.composer-image-pop {
   position: absolute;
   left: 0;
   bottom: calc(100% + 6px);
@@ -3600,14 +3603,16 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   gap: 8px;
 }
 
-.composer-video-pop label {
+.composer-video-pop label,
+.composer-image-pop label {
   display: grid;
   gap: 4px;
   font-size: 12px;
   color: var(--muted);
 }
 
-.composer-video-pop select {
+.composer-video-pop select,
+.composer-image-pop select {
   font: inherit;
   font-size: 13px;
   padding: 4px 6px;
@@ -4304,7 +4309,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   display: none;
 }
 
-#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-video-chip {
+#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-video-chip,
+#composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-image-chip {
   display: none;
 }
 

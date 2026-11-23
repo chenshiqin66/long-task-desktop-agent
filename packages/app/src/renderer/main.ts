@@ -36,6 +36,15 @@ import {
   type VideoGenMode,
   type VideoModelOptions,
 } from "./videoModelForm.js";
+import {
+  DEFAULT_IMAGE_PRESET,
+  defaultImageModelOptions,
+  imageOptionsSummary,
+  inferImagePresetFromModel,
+  mergeImageOptions,
+  parseImagePresetId,
+  type ImageModelOptions,
+} from "./imageModelForm.js";
 import { showHomeLabelPrompt, showSettingsModal } from "./homeLabel.js";
 import { escapeAction } from "./escapeKey.js";
 import { installImageViewer, isImageViewerOpen } from "./imageViewer.js";
@@ -185,7 +194,10 @@ declare global {
         videos?: Array<{ mime: string; base64: string }>,
         workspace?: string,
         audios?: Array<{ mime: string; base64: string }>,
-        options?: { video?: Partial<VideoModelOptions> },
+        options?: {
+          video?: Partial<VideoModelOptions>;
+          image?: Partial<ImageModelOptions>;
+        },
       ): Promise<void>;
       replay(
         sessionId: string,
@@ -194,7 +206,10 @@ declare global {
         videos?: Array<{ id: string; mime: string; path: string }>,
         workspace?: string,
         audios?: Array<{ id: string; mime: string; path: string }>,
-        options?: { video?: Partial<VideoModelOptions> },
+        options?: {
+          video?: Partial<VideoModelOptions>;
+          image?: Partial<ImageModelOptions>;
+        },
       ): Promise<void>;
       readSessionAudio(sessionId: string, relativePath: string): Promise<string>;
       readWorkspaceAudio(path: string, sessionId: string, relativePath: string): Promise<string>;
@@ -333,6 +348,9 @@ const composerKindEl = document.getElementById("composer-kind") as HTMLElement;
 const composerVideoChip = document.getElementById("composer-video-chip") as HTMLElement;
 const composerVideoSummary = document.getElementById("composer-video-summary") as HTMLButtonElement;
 const composerVideoPop = document.getElementById("composer-video-pop") as HTMLElement;
+const composerImageChip = document.getElementById("composer-image-chip") as HTMLElement;
+const composerImageSummary = document.getElementById("composer-image-summary") as HTMLButtonElement;
+const composerImagePop = document.getElementById("composer-image-pop") as HTMLElement;
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnImage = document.getElementById("btn-image") as HTMLButtonElement;
@@ -2727,6 +2745,8 @@ async function showNewPage(): Promise<void> {
     videoModeLocked = false;
     videoTurnOverride = {};
     closeVideoPop();
+    imageTurnOverride = {};
+    closeImagePop();
     paintComposerKindTabs();
   } catch {
     /* keep previous kind if config write fails */
@@ -3013,6 +3033,10 @@ let activeComposerKind: ComposerKind = "text";
 let videoModeLocked = false;
 let videoTurnOverride: Partial<Pick<VideoModelOptions, "mode" | "resolution" | "duration" | "ratio">> = {};
 let videoPopOpen = false;
+let imageTurnOverride: Partial<
+  Pick<ImageModelOptions, "size" | "ratio" | "format" | "background" | "watermark" | "promptMode">
+> = {};
+let imagePopOpen = false;
 
 function inferComposerVideoMode(images: number, videos: number, audios: number): VideoGenMode {
   if (videos > 0 || audios > 0 || images >= 3) return "reference";
@@ -3035,6 +3059,7 @@ function paintComposerKindTabs(): void {
   composerEl.dataset.kind = activeComposerKind;
   composerMediaCaps(); // refresh caps usage via side effect callers
   syncComposerVideoChip();
+  syncComposerImageChip();
 }
 
 /** Model library「使用」changed global kind — bind it to this session page. */
@@ -3057,6 +3082,10 @@ async function setActiveComposerKind(kind: ComposerKind, opts?: { remember?: boo
     videoModeLocked = false;
     videoTurnOverride = {};
     closeVideoPop();
+  }
+  if (next !== "image") {
+    imageTurnOverride = {};
+    closeImagePop();
   }
   paintComposerKindTabs();
   updateChrome();
@@ -3166,6 +3195,29 @@ async function syncComposerVideoChip(): Promise<void> {
   composerVideoSummary.title = summary;
 }
 
+function addComposerSelect(
+  pop: HTMLElement,
+  labelText: string,
+  value: string,
+  options: string[],
+  onChange: (v: string) => void,
+  labelFor?: (v: string) => string,
+): void {
+  const label = document.createElement("label");
+  label.textContent = labelText;
+  const select = document.createElement("select");
+  for (const opt of options) {
+    const option = document.createElement("option");
+    option.value = opt;
+    option.textContent = labelFor ? labelFor(opt) : opt;
+    select.append(option);
+  }
+  select.value = value;
+  select.addEventListener("change", () => onChange(select.value));
+  label.append(select);
+  pop.append(label);
+}
+
 function paintVideoPop(base: VideoModelOptions): void {
   const eff = effectiveVideoTurn(base);
   composerVideoPop.replaceChildren();
@@ -3174,21 +3226,15 @@ function paintVideoPop(base: VideoModelOptions): void {
     value: string,
     options: string[],
     onChange: (v: string) => void,
-  ) => {
-    const label = document.createElement("label");
-    label.textContent = labelText;
-    const select = document.createElement("select");
-    for (const opt of options) {
-      const option = document.createElement("option");
-      option.value = opt;
-      option.textContent = labelText === "素材模式" ? videoModeLabel(opt as VideoGenMode) : opt;
-      select.append(option);
-    }
-    select.value = value;
-    select.addEventListener("change", () => onChange(select.value));
-    label.append(select);
-    composerVideoPop.append(label);
-  };
+  ) =>
+    addComposerSelect(
+      composerVideoPop,
+      labelText,
+      value,
+      options,
+      onChange,
+      labelText === "素材模式" ? (v) => videoModeLabel(v as VideoGenMode) : undefined,
+    );
   addSelect(
     "素材模式",
     eff.mode,
@@ -3256,10 +3302,140 @@ composerVideoSummary.addEventListener("click", () => {
 });
 
 document.addEventListener("click", (event) => {
-  if (!videoPopOpen) return;
   const t = event.target as Node | null;
-  if (t && composerVideoChip.contains(t)) return;
-  closeVideoPop();
+  if (videoPopOpen && !(t && composerVideoChip.contains(t))) closeVideoPop();
+  if (imagePopOpen && !(t && composerImageChip.contains(t))) closeImagePop();
+});
+
+function closeImagePop(): void {
+  imagePopOpen = false;
+  composerImagePop.hidden = true;
+  composerImageSummary.setAttribute("aria-expanded", "false");
+}
+
+function imageRatioLabel(value: string): string {
+  return value === "auto" ? "自动" : value;
+}
+
+function imageBackgroundLabel(value: string): string {
+  return value === "auto" ? "自动" : value;
+}
+
+async function activeImageModelOptions(): Promise<ImageModelOptions | null> {
+  const cfg = await modelsApi.loadConfig();
+  if (composerKindOf(cfg) !== "image") return null;
+  const entry = (cfg?.models ?? []).find((row: { id: string }) => row.id === cfg?.currentModelId);
+  if (!entry || (entry.kind ?? "text") !== "image") return null;
+  const preset =
+    parseImagePresetId(entry.imagePreset) ??
+    inferImagePresetFromModel(entry.model) ??
+    DEFAULT_IMAGE_PRESET;
+  return entry.image ?? defaultImageModelOptions(preset);
+}
+
+function effectiveImageTurn(base: ImageModelOptions): ImageModelOptions {
+  return mergeImageOptions(base, imageTurnOverride);
+}
+
+async function syncComposerImageChip(): Promise<void> {
+  const show = activeComposerKind === "image";
+  composerImageChip.hidden = !show;
+  if (!show) {
+    closeImagePop();
+    return;
+  }
+  const base = await activeImageModelOptions();
+  if (!base) {
+    composerImageSummary.textContent = "未配置生图模型";
+    composerImageSummary.title = "未配置生图模型";
+    return;
+  }
+  const summary = imageOptionsSummary(effectiveImageTurn(base));
+  composerImageSummary.textContent = summary;
+  composerImageSummary.title = summary;
+}
+
+function paintImagePop(base: ImageModelOptions): void {
+  const eff = effectiveImageTurn(base);
+  composerImagePop.replaceChildren();
+  addComposerSelect(composerImagePop, "尺寸", eff.size, base.sizes, (v) => {
+    imageTurnOverride = { ...imageTurnOverride, size: v as ImageModelOptions["size"] };
+    void syncComposerImageChip();
+  });
+  addComposerSelect(
+    composerImagePop,
+    "画幅",
+    eff.ratio,
+    base.ratios,
+    (v) => {
+      imageTurnOverride = { ...imageTurnOverride, ratio: v as ImageModelOptions["ratio"] };
+      void syncComposerImageChip();
+    },
+    imageRatioLabel,
+  );
+  const transparent = eff.background === "transparent";
+  const formatChoices = transparent ? ["png"] : base.formats;
+  addComposerSelect(
+    composerImagePop,
+    "输出格式",
+    transparent ? "png" : eff.format,
+    formatChoices,
+    (v) => {
+      imageTurnOverride = { ...imageTurnOverride, format: v as ImageModelOptions["format"] };
+      void syncComposerImageChip();
+    },
+  );
+  addComposerSelect(
+    composerImagePop,
+    "背景",
+    eff.background,
+    base.backgrounds,
+    (v) => {
+      imageTurnOverride = { ...imageTurnOverride, background: v as ImageModelOptions["background"] };
+      if (v === "transparent") imageTurnOverride = { ...imageTurnOverride, format: "png" };
+      void syncComposerImageChip();
+      paintImagePop(base);
+    },
+    imageBackgroundLabel,
+  );
+  addComposerSelect(composerImagePop, "水印", eff.watermark ? "开" : "关", ["开", "关"], (v) => {
+    imageTurnOverride = { ...imageTurnOverride, watermark: v === "开" };
+    void syncComposerImageChip();
+  });
+  if (base.promptModes.length > 1) {
+    addComposerSelect(composerImagePop, "提示词优化", eff.promptMode, base.promptModes, (v) => {
+      imageTurnOverride = {
+        ...imageTurnOverride,
+        promptMode: v as ImageModelOptions["promptMode"],
+      };
+      void syncComposerImageChip();
+    });
+  }
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "btn btn-ghost";
+  reset.textContent = "恢复模型默认";
+  reset.addEventListener("click", () => {
+    imageTurnOverride = {};
+    void syncComposerImageChip().then(() => paintImagePop(base));
+  });
+  composerImagePop.append(reset);
+}
+
+composerImageSummary.addEventListener("click", () => {
+  if (composerImageChip.hidden) return;
+  void (async () => {
+    if (imagePopOpen) {
+      closeImagePop();
+      return;
+    }
+    const base = await activeImageModelOptions();
+    if (!base) return;
+    paintImagePop(base);
+    imagePopOpen = true;
+    composerImagePop.hidden = false;
+    composerImageSummary.setAttribute("aria-expanded", "true");
+  })();
 });
 
 function libraryFormOpen(): boolean {
@@ -4056,7 +4232,23 @@ async function sendMessage(): Promise<void> {
             const eff = effectiveVideoTurn(base);
             return { video: { mode: eff.mode, resolution: eff.resolution, duration: eff.duration, ratio: eff.ratio } };
           })()
-        : undefined;
+        : activeComposerKind === "image"
+          ? await (async () => {
+              const base = await activeImageModelOptions();
+              if (!base) return undefined;
+              const eff = effectiveImageTurn(base);
+              return {
+                image: {
+                  size: eff.size,
+                  ratio: eff.ratio,
+                  format: eff.format,
+                  background: eff.background,
+                  watermark: eff.watermark,
+                  promptMode: eff.promptMode,
+                },
+              };
+            })()
+          : undefined;
     await window.agent.submit(
       sessionId,
       text,

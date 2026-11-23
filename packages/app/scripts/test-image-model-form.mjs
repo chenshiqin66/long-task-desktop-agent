@@ -62,6 +62,9 @@ for (const id of [
   "model-image-prompt-modes",
   "model-image-prompt-note",
   "model-image-baseurl-hint",
+  "composer-image-chip",
+  "composer-image-summary",
+  "composer-image-pop",
 ]) {
   assert.match(html, new RegExp(`id="${id}"`));
 }
