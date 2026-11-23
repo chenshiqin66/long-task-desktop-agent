@@ -95,7 +95,7 @@ agent home 默认按本机上这份代码的绝对路径分开，避免原版与
 - `{type: "tools", sha256, tools}`：一份工具定义，同一个哈希只写一次。
 - `{type: "request", id, turn_id, model, tools_sha256, messages}`：一次请求。每条消息记角色、正文、`name`、`tool_call_id`、`tool_calls`；图片和视频只记路径和字节数，不存像素或视频数据。
 
-工具定义不写进 system 正文。同一份定义按 sha256 只在 `{type: "tools"}` 行写一次，请求行用 `tools_sha256` 指向它。生图请求也写一行，带 `kind: "image"`，没有工具定义，也没有 `tools_sha256`；消息里是提示词和可选参考图的路径、字节数。空提示词或这一轮附了视频而被拒绝时，不写这一行。生视频请求同样写一行，带 `kind: "video"`，没有工具定义；消息里是提示词和可选首帧/尾帧图的路径、字节数；参考素材模式还可记参考视频与参考音频的路径、字节数。校验失败（空提示词、模式与附件张数不符、参考模式无图/视、只附音频等）不写这一行。语音合成写 `kind: "tts"`；语音识别写 `kind: "asr"`（用户音频路径与字节数）。TTS/ASR 与参考素材音频落在会话目录的 `audios/`。
+工具定义不写进 system 正文。同一份定义按 sha256 只在 `{type: "tools"}` 行写一次，请求行用 `tools_sha256` 指向它。生图请求也写一行，带 `kind: "image"`，没有工具定义，也没有 `tools_sha256`；消息里是提示词和可选参考图的路径、字节数。请求参数包括 `size`、`output_format`、`background`、`watermark`；5.0-pro 另带 `optimize_prompt_options.mode`。响应 MIME 按 `mime` → `output_format` → `content-type` → 请求的格式 → `image/png` 判断，`jpeg` 不会被存成 `.png`。空提示词或这一轮附了视频而被拒绝时，不写这一行。生视频请求同样写一行，带 `kind: "video"`，没有工具定义；消息里是提示词和可选首帧/尾帧图的路径、字节数；参考素材模式还可记参考视频与参考音频的路径、字节数。校验失败（空提示词、模式与附件张数不符、参考模式无图/视、只附音频等）不写这一行。语音合成写 `kind: "tts"`；语音识别写 `kind: "asr"`（用户音频路径与字节数）。TTS/ASR 与参考素材音频落在会话目录的 `audios/`。
 
 ## 标识与关系
 
@@ -134,6 +134,8 @@ flowchart TB
 ## 配置
 
 agent home 下 `config.json` 的字段见 [README 的配置表](../README.md#配置)。
+
+`kind` 为 `image` 的模型条目还保存 `imagePreset`、`image` 和 `imageByModel`。每组参数有 `sizes` / `size`、`ratios` / `ratio`、`formats` / `format`、`backgrounds` / `background`、`watermark`、`promptModes` / `promptMode`。默认尺寸 2K、画幅自动；默认格式和背景随型号（5.0-pro 为 jpeg / opaque，5.5 为 png / auto，5.0-flash 为 jpeg / opaque）。启用透明背景时格式必须包含 `png`。
 
 - 保存时先读回磁盘上的配置再合并，所以手改的限额不会被界面的保存冲掉；但写入是整份重写。
 - 目录 chmod 0700，失败会被忽略；文件以 0600 创建，之后再 chmod 一次。Windows 上 chmod 基本不起作用，文件靠用户目录本身的权限保护。
