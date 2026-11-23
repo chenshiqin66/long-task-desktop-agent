@@ -46,6 +46,7 @@ export * from "./store/explainStore.js";
 export * from "./config/types.js";
 export * from "./config/modelKind.js";
 export * from "./config/composerKind.js";
+export * from "./config/imageOptions.js";
 export * from "./config/videoOptions.js";
 export * from "./config/agentHome.js";
 export * from "./config/homeMeta.js";

@@ -1,3 +1,4 @@
+import type { ImageModelOptions } from "./config/imageOptions.js";
 import type { ModelKind } from "./config/modelKind.js";
 import type { TtsModelOptions } from "./config/speechOptions.js";
 import type { VideoModelOptions } from "./config/videoOptions.js";
@@ -191,11 +192,16 @@ export interface AgentConfig {
   video?: VideoModelOptions;
   /** From the current TTS model entry. Only set when kind is tts. */
   tts?: TtsModelOptions;
+  /** From the current image model entry. Only set when kind is image. */
+  image?: ImageModelOptions;
 }
 
 /** Per-turn overrides from the composer (not written to config.json). */
 export type TurnSubmitOptions = {
   video?: Partial<Pick<VideoModelOptions, "mode" | "resolution" | "duration" | "ratio">>;
+  image?: Partial<
+    Pick<ImageModelOptions, "size" | "ratio" | "format" | "background" | "watermark" | "promptMode">
+  >;
 };
 
 export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, "baseUrl" | "model" | "apiKey"> = {

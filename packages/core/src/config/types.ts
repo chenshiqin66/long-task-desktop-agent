@@ -1,4 +1,5 @@
 import type { ComposerKind, CurrentModelByKind } from "./composerKind.js";
+import type { ImageByModel, ImageModelOptions, ImagePresetId } from "./imageOptions.js";
 import type { ModelKind } from "./modelKind.js";
 import type { TtsModelOptions } from "./speechOptions.js";
 import type { VideoModelOptions } from "./videoOptions.js";
@@ -17,6 +18,12 @@ export interface StoredModel {
   videoByModel?: Record<string, VideoModelOptions>;
   /** Present when kind is tts. */
   tts?: TtsModelOptions;
+  /** Present when kind is image. Active tab's options (mirrors imageByModel[imagePreset]). */
+  image?: ImageModelOptions;
+  /** Per Seedream preset options. Each tab keeps its own parameter set. */
+  imageByModel?: ImageByModel;
+  /** Active Seedream preset. Model itself may be an official id or an endpoint id. */
+  imagePreset?: ImagePresetId;
 }
 
 export interface StoredConfig {
