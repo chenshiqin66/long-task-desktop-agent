@@ -20,6 +20,14 @@ import {
   normalizeVideoModelOptions,
   readVideoModelOptions,
 } from "./videoOptions.js";
+import {
+  DEFAULT_IMAGE_PRESET,
+  defaultImageModelOptions,
+  inferImagePresetFromModel,
+  normalizeImageByModel,
+  parseImagePresetId,
+  readImageModelOptions,
+} from "./imageOptions.js";
 import { newId } from "../ids.js";
 import type { AgentConfig } from "../types.js";
 import { DEFAULT_AGENT_CONFIG } from "../types.js";
@@ -118,6 +126,16 @@ function cleanModel(entry: StoredModel): StoredModel {
   if (kind === "tts") {
     cleaned.tts = entry.tts ? readTtsModelOptions(entry.tts) : defaultTtsModelOptions();
   }
+  if (kind === "image") {
+    const preset =
+      parseImagePresetId(entry.imagePreset) ??
+      inferImagePresetFromModel(model) ??
+      DEFAULT_IMAGE_PRESET;
+    const packed = normalizeImageByModel(preset, entry.imageByModel, entry.image);
+    cleaned.imagePreset = packed.preset;
+    cleaned.image = packed.image;
+    cleaned.imageByModel = packed.imageByModel;
+  }
   return cleaned;
 }
 
@@ -128,6 +146,10 @@ function readModelEntry(raw: unknown): StoredModel | null {
   if (!id) return null;
   const modelName = asString(row.model);
   const kind = modelKindOf(row);
+  const imagePreset =
+    parseImagePresetId(row.imagePreset) ??
+    inferImagePresetFromModel(modelName) ??
+    DEFAULT_IMAGE_PRESET;
   const model = cleanModel({
     id,
     name: asString(row.name),
@@ -145,6 +167,16 @@ function readModelEntry(raw: unknown): StoredModel | null {
         }
       : {}),
     ...(kind === "tts" ? { tts: readTtsModelOptions(row.tts) } : {}),
+    ...(kind === "image"
+      ? {
+          imagePreset,
+          image: row.image ? readImageModelOptions(imagePreset, row.image) : undefined,
+          imageByModel:
+            row.imageByModel && typeof row.imageByModel === "object"
+              ? (row.imageByModel as StoredModel["imageByModel"])
+              : undefined,
+        }
+      : {}),
   });
   if (!model.name) model.name = model.model || "未命名模型";
   return model;
@@ -472,6 +504,13 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
       ? { video: current?.video ?? defaultVideoModelOptions(model || "MiniMax-H3-Lite") }
       : {}),
     ...(kind === "tts" ? { tts: current?.tts ?? defaultTtsModelOptions() } : {}),
+    ...(kind === "image"
+      ? {
+          image:
+            current?.image ??
+            defaultImageModelOptions(inferImagePresetFromModel(model) ?? DEFAULT_IMAGE_PRESET),
+        }
+      : {}),
     ...searchTargetOf(stored),
   };
 }

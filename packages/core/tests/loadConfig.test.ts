@@ -18,6 +18,7 @@ import {
   removeModel,
   duplicateModel,
 } from "../src/config/loadConfig.js";
+import { defaultImageModelOptions } from "../src/config/imageOptions.js";
 
 describe("loadConfig", () => {
   let dir: string;
@@ -460,4 +461,80 @@ describe("loadConfig", () => {
     ).toBeNull();
   });
 
+  it("normalizes image options and infers the preset from the model name", () => {
+    const stored = {
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "doubao-seedream-5-5-261028",
+      apiKey: "sk",
+      models: [
+        {
+          id: "img",
+          name: "生图",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+          model: "doubao-seedream-5-5-261028",
+          apiKey: "sk",
+          kind: "image" as const,
+        },
+      ],
+      currentModelId: "img",
+    };
+    const model = modelsOf(stored)[0]!;
+    expect(model.imagePreset).toBe("Doubao-Seedream-5.5");
+    expect(model.image).toMatchObject({
+      size: "2K",
+      ratio: "auto",
+      format: "png",
+      background: "auto",
+    });
+    expect(model.imageByModel?.["Doubao-Seedream-5.0-pro"]).toBeDefined();
+    expect(toAgentConfig(stored).image).toEqual(model.image);
+  });
+
+  it("keeps an endpoint id and falls back to the first preset", () => {
+    const stored = {
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "ep-20240101",
+      apiKey: "sk",
+      models: [
+        {
+          id: "img",
+          name: "生图",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+          model: "ep-20240101",
+          apiKey: "sk",
+          kind: "image" as const,
+        },
+      ],
+      currentModelId: "img",
+    };
+    const model = modelsOf(stored)[0]!;
+    expect(model.model).toBe("ep-20240101");
+    expect(model.imagePreset).toBe("Doubao-Seedream-5.0-pro");
+    expect(model.image?.format).toBe("jpeg");
+  });
+
+  it("copies image options when duplicating a model", () => {
+    const image = defaultImageModelOptions("Doubao-Seedream-5.0-flash");
+    const stored = {
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "doubao-seedream-5-0-flash-260915",
+      apiKey: "sk",
+      models: [
+        {
+          id: "img",
+          name: "生图",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+          model: "doubao-seedream-5-0-flash-260915",
+          apiKey: "sk",
+          kind: "image" as const,
+          imagePreset: "Doubao-Seedream-5.0-flash" as const,
+          image,
+        },
+      ],
+      currentModelId: "img",
+    };
+    const copied = duplicateModel(stored, "img").models?.find((row) => row.name.includes("副本"));
+    expect(copied?.imagePreset).toBe("Doubao-Seedream-5.0-flash");
+    expect(copied?.image).toEqual(image);
+  });
 });
