@@ -43,4 +43,26 @@ assert.throws(
     }),
   /尺寸/,
 );
+
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const html = readFileSync(join(root, "src/renderer/index.html"), "utf8");
+for (const id of [
+  "model-image-options",
+  "model-image-tabs",
+  "model-image-blurb",
+  "model-image-sizes",
+  "model-image-ratios",
+  "model-image-formats",
+  "model-image-backgrounds",
+  "model-image-watermark",
+  "model-image-prompt-modes",
+  "model-image-prompt-note",
+  "model-image-baseurl-hint",
+]) {
+  assert.match(html, new RegExp(`id="${id}"`));
+}
 console.log("image model form tests ok");

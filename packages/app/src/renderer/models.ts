@@ -20,6 +20,33 @@ import {
   type VideoRatio,
   type VideoResolution,
 } from "./videoModelForm.js";
+import {
+  DEFAULT_IMAGE_PRESET,
+  IMAGE_BACKGROUND_OPTIONS,
+  IMAGE_FORMAT_OPTIONS,
+  IMAGE_MODEL_PRESETS,
+  IMAGE_PROMPT_MODE_OPTIONS,
+  IMAGE_RATIO_OPTIONS,
+  IMAGE_SIZE_OPTIONS,
+  defaultImageByModel,
+  defaultImageModelIds,
+  defaultImageModelOptions,
+  imageModelBlurb,
+  imageOptionsSummary,
+  imagePresetLabel,
+  inferImagePresetFromModel,
+  normalizeImageByModel,
+  normalizeImageModelOptions,
+  parseImagePresetId,
+  type ImageBackground,
+  type ImageByModel,
+  type ImageModelOptions,
+  type ImageOutputFormat,
+  type ImagePresetId,
+  type ImagePromptMode,
+  type ImageRatio,
+  type ImageSizeTier,
+} from "./imageModelForm.js";
 
 type ModelKind = "text" | "image" | "video" | "tts" | "asr" | "search";
 type ComposerKind = "text" | "image" | "tts" | "video";
@@ -49,6 +76,9 @@ type StoredModel = {
   video?: VideoModelOptions;
   videoByModel?: VideoByModel;
   tts?: TtsModelOptions;
+  image?: ImageModelOptions;
+  imageByModel?: ImageByModel;
+  imagePreset?: ImagePresetId;
 };
 
 type StoredConfig = {
@@ -236,11 +266,26 @@ export function attachModelsLibrary(
   const videoDurationValue = page.querySelector("#model-video-duration-value") as HTMLElement;
   const videoBlurb = page.querySelector("#model-video-blurb") as HTMLElement;
   const videoRatiosHost = page.querySelector("#model-video-ratios") as HTMLElement;
+  const imageOptions = page.querySelector("#model-image-options") as HTMLElement;
+  const imageTabsHost = page.querySelector("#model-image-tabs") as HTMLElement;
+  const imageBlurb = page.querySelector("#model-image-blurb") as HTMLElement;
+  const imageSizesHost = page.querySelector("#model-image-sizes") as HTMLElement;
+  const imageRatiosHost = page.querySelector("#model-image-ratios") as HTMLElement;
+  const imageFormatsHost = page.querySelector("#model-image-formats") as HTMLElement;
+  const imageBackgroundsHost = page.querySelector("#model-image-backgrounds") as HTMLElement;
+  const imageWatermark = page.querySelector("#model-image-watermark") as HTMLInputElement;
+  const imagePromptModesHost = page.querySelector("#model-image-prompt-modes") as HTMLElement;
+  const imagePromptGroup = page.querySelector("#model-image-prompt-group") as HTMLElement;
+  const imagePromptNote = page.querySelector("#model-image-prompt-note") as HTMLElement;
+  const imageBaseUrlHint = page.querySelector("#model-image-baseurl-hint") as HTMLElement | null;
 
   let editing: string | null = null;
   let painting = false;
   let activeVideoModel = "MiniMax-H3-Lite";
   let videoDraftByModel: VideoByModel = defaultVideoByModel();
+  let activeImagePreset: ImagePresetId = DEFAULT_IMAGE_PRESET;
+  let imageDraftByModel: ImageByModel = defaultImageByModel();
+  let imageModelDraftByPreset: Record<ImagePresetId, string> = defaultImageModelIds();
 
   function durationBounds(model: string): { min: number; max: number } {
     const preset = videoPresetOf(model) ?? VIDEO_MODEL_PRESETS[0]!;
@@ -377,6 +422,153 @@ export function attachModelsLibrary(
     paintVideoParams(activeVideoModel, videoDraftByModel[activeVideoModel as keyof VideoByModel]);
   }
 
+  function readImageForm(preset: ImagePresetId): ImageModelOptions {
+    const sizes = readCheckGroup(imageSizesHost) as ImageSizeTier[];
+    const ratios = readCheckGroup(imageRatiosHost) as ImageRatio[];
+    const formats = readCheckGroup(imageFormatsHost) as ImageOutputFormat[];
+    const backgrounds = readCheckGroup(imageBackgroundsHost) as ImageBackground[];
+    const background = readCheckGroupDefault(imageBackgroundsHost) as ImageBackground | undefined;
+    const format = readCheckGroupDefault(imageFormatsHost) as ImageOutputFormat | undefined;
+    if (backgrounds.includes("transparent") && !formats.includes("png")) {
+      throw new Error("透明背景需要同时启用 PNG 格式");
+    }
+    if (background === "transparent" && format !== "png") {
+      throw new Error("透明背景需要选择 PNG");
+    }
+    const pro = preset === "Doubao-Seedream-5.0-pro";
+    const promptModes = pro
+      ? (readCheckGroup(imagePromptModesHost) as ImagePromptMode[])
+      : (["standard"] as ImagePromptMode[]);
+    const promptMode = pro
+      ? (readCheckGroupDefault(imagePromptModesHost) as ImagePromptMode | undefined)
+      : "standard";
+    return normalizeImageModelOptions(preset, {
+      sizes,
+      ratios,
+      formats,
+      backgrounds,
+      watermark: imageWatermark.checked,
+      promptModes,
+      size: readCheckGroupDefault(imageSizesHost) as ImageSizeTier | undefined,
+      ratio: readCheckGroupDefault(imageRatiosHost) as ImageRatio | undefined,
+      format,
+      background,
+      promptMode,
+    });
+  }
+
+  function stashActiveImageTab(): void {
+    try {
+      imageDraftByModel = {
+        ...imageDraftByModel,
+        [activeImagePreset]: readImageForm(activeImagePreset),
+      } as ImageByModel;
+      imageModelDraftByPreset = {
+        ...imageModelDraftByPreset,
+        [activeImagePreset]: modelInput.value.trim(),
+      };
+    } catch {
+      /* keep previous draft for this tab */
+    }
+  }
+
+  function paintImageParams(preset: ImagePresetId, options?: ImageModelOptions | null): void {
+    const opts = normalizeImageModelOptions(preset, options ?? defaultImageModelOptions(preset));
+    const row = IMAGE_MODEL_PRESETS.find((item) => item.id === preset) ?? IMAGE_MODEL_PRESETS[0];
+    imageBlurb.textContent = imageModelBlurb(preset) || row.blurb;
+    paintCheckGroup(
+      imageSizesHost,
+      "image-size",
+      IMAGE_SIZE_OPTIONS.filter((item) => row.sizes.includes(item.value)),
+      new Set(opts.sizes),
+      opts.size,
+      { minOne: true },
+    );
+    paintCheckGroup(
+      imageRatiosHost,
+      "image-ratio",
+      IMAGE_RATIO_OPTIONS.filter((item) => row.ratios.includes(item.value)),
+      new Set(opts.ratios),
+      opts.ratio,
+      { minOne: true },
+    );
+    paintCheckGroup(
+      imageFormatsHost,
+      "image-format",
+      IMAGE_FORMAT_OPTIONS.filter((item) => row.formats.includes(item.value)),
+      new Set(opts.formats),
+      opts.format,
+      { minOne: true },
+    );
+    paintCheckGroup(
+      imageBackgroundsHost,
+      "image-background",
+      IMAGE_BACKGROUND_OPTIONS.filter((item) =>
+        (row.backgrounds as readonly string[]).includes(item.value),
+      ),
+      new Set(opts.backgrounds),
+      opts.background,
+      { minOne: true },
+    );
+    imageWatermark.checked = opts.watermark;
+    const pro = preset === "Doubao-Seedream-5.0-pro";
+    imagePromptGroup.hidden = !pro;
+    imagePromptNote.hidden = pro;
+    if (pro) {
+      paintCheckGroup(
+        imagePromptModesHost,
+        "image-prompt-mode",
+        IMAGE_PROMPT_MODE_OPTIONS.filter((item) =>
+          (row.promptModes as readonly string[]).includes(item.value),
+        ),
+        new Set(opts.promptModes),
+        opts.promptMode,
+        { minOne: true },
+      );
+    } else {
+      imagePromptModesHost.replaceChildren();
+    }
+  }
+
+  function paintImageTabs(active: ImagePresetId): void {
+    imageTabsHost.replaceChildren();
+    for (const preset of IMAGE_MODEL_PRESETS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = preset.id === active ? "video-option-tab is-active" : "video-option-tab";
+      btn.role = "tab";
+      btn.dataset.imageModel = preset.id;
+      btn.setAttribute("aria-selected", preset.id === active ? "true" : "false");
+      btn.title = preset.id;
+      btn.textContent = imagePresetLabel(preset.id);
+      btn.addEventListener("click", () => {
+        if (preset.id === activeImagePreset) return;
+        stashActiveImageTab();
+        activeImagePreset = preset.id;
+        paintImageTabs(activeImagePreset);
+        paintImageParams(activeImagePreset, imageDraftByModel[activeImagePreset]);
+        modelInput.value = imageModelDraftByPreset[activeImagePreset];
+      });
+      imageTabsHost.append(btn);
+    }
+  }
+
+  function loadImageDraft(entry?: StoredModel | null): void {
+    const preset =
+      parseImagePresetId(entry?.imagePreset) ??
+      inferImagePresetFromModel(entry?.model ?? "") ??
+      DEFAULT_IMAGE_PRESET;
+    const packed = normalizeImageByModel(preset, entry?.imageByModel, entry?.image);
+    activeImagePreset = packed.preset;
+    imageDraftByModel = packed.imageByModel;
+    imageModelDraftByPreset = defaultImageModelIds();
+    imageModelDraftByPreset[activeImagePreset] =
+      entry?.model?.trim() || imageModelDraftByPreset[activeImagePreset];
+    paintImageTabs(activeImagePreset);
+    paintImageParams(activeImagePreset, imageDraftByModel[activeImagePreset]);
+    modelInput.value = imageModelDraftByPreset[activeImagePreset];
+  }
+
   videoDurationInput.addEventListener("input", () => {
     const { min, max } = durationBounds(activeVideoModel);
     const rangeMax = clampTo(Number(videoDurationInput.value), min, max);
@@ -389,6 +581,7 @@ export function attachModelsLibrary(
     const kind = parseModelKind(kindSelect.value);
     const search = kind === "search";
     const video = kind === "video";
+    const image = kind === "image";
     const speech = kind === "tts" || kind === "asr";
     const tts = kind === "tts";
     modelInput.placeholder = search
@@ -400,17 +593,26 @@ export function attachModelsLibrary(
           : "";
     baseUrlInput.placeholder = search
       ? "https://api.deepseek.com"
-      : video
-        ? "https://api.ppio.com"
-        : speech
-          ? "（可选）方舟 Plan 地址仅作占位"
-          : "";
+      : image
+        ? "https://ark.cn-beijing.volces.com/api/v3"
+        : video
+          ? "https://api.ppio.com"
+          : speech
+            ? "（可选）方舟 Plan 地址仅作占位"
+            : "";
     modelField.hidden = video;
     videoOptions.hidden = !video;
+    imageOptions.hidden = !image;
     if (ttsOptions) ttsOptions.hidden = !tts;
     if (video) {
       if (!baseUrlInput.value.trim()) baseUrlInput.value = "https://api.ppio.com";
       loadVideoDraft();
+    }
+    if (image) {
+      if (!baseUrlInput.value.trim()) {
+        baseUrlInput.value = "https://ark.cn-beijing.volces.com/api/v3";
+      }
+      loadImageDraft();
     }
     if (tts && ttsSpeaker && ttsFormat && ttsSampleRate) {
       if (!ttsSpeaker.value.trim()) ttsSpeaker.value = DEFAULT_TTS.speaker;
@@ -428,6 +630,7 @@ export function attachModelsLibrary(
       }
     }
     if (videoBaseUrlHint) videoBaseUrlHint.hidden = !video;
+    if (imageBaseUrlHint) imageBaseUrlHint.hidden = !image;
     if (speechBaseUrlHint) speechBaseUrlHint.hidden = !speech;
   }
 
@@ -469,6 +672,9 @@ export function attachModelsLibrary(
     apiKeyInput.value = entry?.apiKey ?? "";
     if (modelKindOf(entry) === "video") {
       loadVideoDraft(entry);
+    }
+    if (modelKindOf(entry) === "image") {
+      loadImageDraft(entry);
     }
     if (modelKindOf(entry) === "tts") {
       paintTtsFields(entry);
@@ -577,13 +783,24 @@ export function attachModelsLibrary(
     summary.className = "mcp-summary";
     const videoLine =
       kind === "video" ? videoOptionsSummary(entry.video ?? defaultVideoModelOptions(entry.model)) : "";
+    const imageLine =
+      kind === "image"
+        ? imageOptionsSummary(
+            entry.image ??
+              defaultImageModelOptions(
+                parseImagePresetId(entry.imagePreset) ??
+                  inferImagePresetFromModel(entry.model) ??
+                  DEFAULT_IMAGE_PRESET,
+              ),
+          )
+        : "";
     const ttsLine =
       kind === "tts"
         ? `音色 ${normalizeTts(entry.tts).speaker} · ${normalizeTts(entry.tts).format}`
         : "";
     const speechHost =
       kind === "tts" || kind === "asr" ? "openspeech.bytedance.com" : entry.baseUrl || "未填写 Base URL";
-    summary.textContent = [speechHost, videoLine, ttsLine].filter(Boolean).join(" · ");
+    summary.textContent = [speechHost, videoLine, imageLine, ttsLine].filter(Boolean).join(" · ");
     if (isAsrSide && asrCurrent) {
       const badge = document.createElement("span");
       badge.className = "mcp-state is-ok";
@@ -766,12 +983,27 @@ export function attachModelsLibrary(
       let video: VideoModelOptions | undefined;
       let videoByModel: VideoByModel | undefined;
       let tts: TtsModelOptions | undefined;
+      let image: ImageModelOptions | undefined;
+      let imageByModel: ImageByModel | undefined;
+      let imagePreset: ImagePresetId | undefined;
       if (kind === "video") {
         stashActiveVideoTab();
         const packed = normalizeVideoByModel(activeVideoModel, videoDraftByModel, videoDraftByModel[activeVideoModel as keyof VideoByModel]);
         model = packed.model;
         video = packed.video;
         videoByModel = packed.videoByModel;
+      }
+      if (kind === "image") {
+        const activeOptions = readImageForm(activeImagePreset);
+        const packed = normalizeImageByModel(
+          activeImagePreset,
+          { ...imageDraftByModel, [activeImagePreset]: activeOptions },
+          activeOptions,
+        );
+        imagePreset = packed.preset;
+        image = packed.image;
+        imageByModel = packed.imageByModel;
+        model = modelInput.value.trim() || imageModelDraftByPreset[activeImagePreset];
       }
       if (kind === "tts") {
         tts = readTtsFields();
@@ -798,6 +1030,7 @@ export function attachModelsLibrary(
         kind,
         ...(video ? { video, videoByModel } : {}),
         ...(tts ? { tts } : {}),
+        ...(image ? { image, imageByModel, imagePreset } : {}),
       };
       const index = models.findIndex((item) => item.id === id);
       if (index >= 0) models[index] = entry;

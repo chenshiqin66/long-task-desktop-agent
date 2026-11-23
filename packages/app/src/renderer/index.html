@@ -273,6 +273,40 @@
                   </fieldset>
                 </div>
               </div>
+              <p id="model-image-baseurl-hint" class="models-intro" hidden>
+                生图走方舟 /images/generations。Base URL 填 https://ark.cn-beijing.volces.com/api/v3；Model 可填官方 ID 或 ep- 开头的 Endpoint ID。
+              </p>
+              <div id="model-image-options" class="model-video-options" hidden>
+                <div id="model-image-tabs" class="video-option-tabs" role="tablist" aria-label="生图型号"></div>
+                <div class="video-option-panel" role="tabpanel">
+                  <p id="model-image-blurb" class="video-model-blurb"></p>
+                  <fieldset class="video-check-group">
+                    <legend>尺寸 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-image-sizes" class="video-check-row"></div>
+                  </fieldset>
+                  <fieldset class="video-check-group">
+                    <legend>画幅 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-image-ratios" class="video-check-row"></div>
+                  </fieldset>
+                  <fieldset class="video-check-group">
+                    <legend>输出格式 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-image-formats" class="video-check-row"></div>
+                  </fieldset>
+                  <fieldset class="video-check-group">
+                    <legend>背景 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-image-backgrounds" class="video-check-row"></div>
+                  </fieldset>
+                  <label class="video-check">
+                    <input id="model-image-watermark" type="checkbox" checked />
+                    <span class="video-check-label">默认加水印</span>
+                  </label>
+                  <fieldset class="video-check-group" id="model-image-prompt-group">
+                    <legend>提示词优化 <span class="video-check-legend-hint">圆点默认</span></legend>
+                    <div id="model-image-prompt-modes" class="video-check-row"></div>
+                  </fieldset>
+                  <p id="model-image-prompt-note" class="models-intro" hidden>该型号固定 standard。</p>
+                </div>
+              </div>
               <label class="field">API Key
                 <input id="model-apiKey" type="password" autocomplete="off" />
               </label>
