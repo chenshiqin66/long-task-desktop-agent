@@ -13,6 +13,7 @@ import type {
 } from "../src/provider/types.js";
 import type { ModelKind } from "../src/config/modelKind.js";
 import { defaultVideoModelOptions, type VideoModelOptions } from "../src/config/videoOptions.js";
+import { defaultImageModelOptions, type ImageModelOptions } from "../src/config/imageOptions.js";
 import { defaultTtsModelOptions } from "../src/config/speechOptions.js";
 import type { RuntimeEvent } from "../src/types.js";
 import { DEFAULT_AGENT_CONFIG } from "../src/types.js";
@@ -39,6 +40,7 @@ function makeRuntime(
   kind: ModelKind,
   provider: LlmProvider,
   video?: VideoModelOptions,
+  image?: ImageModelOptions,
 ): AgentRuntime {
   return new AgentRuntime({
     workspacePath: workspace,
@@ -63,6 +65,9 @@ function makeRuntime(
           }
         : {}),
       ...(kind === "tts" ? { tts: defaultTtsModelOptions() } : {}),
+      ...(kind === "image"
+        ? { image: image ?? defaultImageModelOptions("Doubao-Seedream-5.0-pro") }
+        : {}),
     },
     provider,
   });
@@ -558,5 +563,93 @@ describe("runtime routing by model kind", () => {
     expect(stored.some((message) => message.role === "assistant")).toBe(false);
     expect(errorMessage(events, undefined)).toMatch(/HTTP 400/);
     expect(events.some((event) => event.type === "done" && event.reason === "error")).toBe(true);
+  });
+
+  it("sends the configured image options", async () => {
+    const { provider, generateCalls } = imageProvider();
+    const image = {
+      ...defaultImageModelOptions("Doubao-Seedream-5.0-pro"),
+      size: "1.5K" as const,
+      ratio: "16:9" as const,
+      format: "png" as const,
+      background: "transparent" as const,
+      watermark: false,
+      promptMode: "fast" as const,
+    };
+    const rt = makeRuntime(workspace, "image", provider, undefined, image);
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "一只猫");
+
+    expect(generateCalls[0]).toMatchObject({
+      size: "1920x1080",
+      outputFormat: "png",
+      background: "transparent",
+      watermark: false,
+      promptMode: "fast",
+    });
+  });
+
+  it("applies this turn's image overrides", async () => {
+    const { provider, generateCalls } = imageProvider();
+    const rt = makeRuntime(workspace, "image", provider);
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "一只猫", undefined, undefined, undefined, {
+      image: {
+        size: "1.5K",
+        ratio: "9:16",
+        format: "png",
+        background: "transparent",
+        watermark: false,
+        promptMode: "fast",
+      },
+    });
+
+    expect(generateCalls[0]).toMatchObject({
+      size: "1080x1920",
+      outputFormat: "png",
+      background: "transparent",
+      watermark: false,
+      promptMode: "fast",
+    });
+  });
+
+  it("ignores image overrides the model does not enable", async () => {
+    const { provider, generateCalls } = imageProvider();
+    const rt = makeRuntime(workspace, "image", provider);
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "一只猫", undefined, undefined, undefined, {
+      image: { size: "4K", ratio: "21:9", format: "gif" },
+    });
+
+    expect(generateCalls[0]).toMatchObject({ size: "2K", outputFormat: "jpeg" });
+  });
+
+  it("forces png when the configured background is transparent", async () => {
+    const { provider, generateCalls } = imageProvider();
+    const image = {
+      ...defaultImageModelOptions("Doubao-Seedream-5.0-pro"),
+      background: "transparent" as const,
+      format: "jpeg" as const,
+    };
+    const rt = makeRuntime(workspace, "image", provider, undefined, image);
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "一只猫");
+
+    expect(generateCalls[0]).toMatchObject({ background: "transparent", outputFormat: "png" });
+  });
+
+  it("does not send prompt mode for a model without fast", async () => {
+    const { provider, generateCalls } = imageProvider();
+    const rt = makeRuntime(
+      workspace,
+      "image",
+      provider,
+      undefined,
+      defaultImageModelOptions("Doubao-Seedream-5.5"),
+    );
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "一只猫");
+
+    expect(generateCalls[0]?.promptMode).toBeUndefined();
   });
 });

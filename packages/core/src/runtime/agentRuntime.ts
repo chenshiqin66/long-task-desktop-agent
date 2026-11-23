@@ -18,6 +18,19 @@ import type {
 } from "../types.js";
 import type { VideoModelOptions } from "../config/videoOptions.js";
 import { defaultVideoModelOptions } from "../config/videoOptions.js";
+import type { ImageModelOptions } from "../config/imageOptions.js";
+import {
+  DEFAULT_IMAGE_PRESET,
+  IMAGE_BACKGROUNDS,
+  IMAGE_OUTPUT_FORMATS,
+  IMAGE_PROMPT_MODES,
+  IMAGE_RATIOS,
+  IMAGE_SIZE_TIERS,
+  defaultImageModelOptions,
+  inferImagePresetFromModel,
+  mergeImageOptions,
+} from "../config/imageOptions.js";
+import { resolveImageSize } from "../provider/imageGeneration.js";
 import {
   MAX_AUDIOS_PER_MESSAGE,
   MAX_AUDIO_BYTES,
@@ -2539,10 +2552,16 @@ export class AgentRuntime {
 
     let result;
     try {
+      const imageOpts = this.effectiveImageOptions();
       result = await this.provider.generateImage({
         model: this.config.model,
         prompt,
         ...(refImages.length ? { images: refImages } : {}),
+        size: resolveImageSize(imageOpts),
+        outputFormat: imageOpts.format,
+        background: imageOpts.background,
+        watermark: imageOpts.watermark,
+        ...(imageOpts.promptModes.includes("fast") ? { promptMode: imageOpts.promptMode } : {}),
         signal: this.abort?.signal,
       });
     } catch (err) {
@@ -2619,6 +2638,15 @@ export class AgentRuntime {
       ...(over.duration != null ? { duration: over.duration } : {}),
       ...(over.ratio ? { ratio: over.ratio } : {}),
     };
+  }
+
+  private effectiveImageOptions(): ImageModelOptions {
+    const base =
+      this.config.image ??
+      defaultImageModelOptions(
+        inferImagePresetFromModel(this.config.model) ?? DEFAULT_IMAGE_PRESET,
+      );
+    return mergeImageOptions(base, this.turnOptions?.image);
   }
 
   private assertAttachmentCounts(images: number, videos: number, audios: number): void {
@@ -3099,11 +3127,11 @@ export class AgentRuntime {
   }
 }
 
-function normalizeTurnOptions(raw: unknown): TurnSubmitOptions | null {
-  if (!raw || typeof raw !== "object") return null;
-  const videoRaw = (raw as { video?: unknown }).video;
-  if (!videoRaw || typeof videoRaw !== "object") return null;
-  const row = videoRaw as Record<string, unknown>;
+function normalizeVideoTurnOptions(
+  raw: unknown,
+): NonNullable<TurnSubmitOptions["video"]> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const row = raw as Record<string, unknown>;
   const video: NonNullable<TurnSubmitOptions["video"]> = {};
   if (
     row.mode === "text" ||
@@ -3131,5 +3159,51 @@ function normalizeTurnOptions(raw: unknown): TurnSubmitOptions | null {
   ) {
     video.ratio = row.ratio;
   }
-  return Object.keys(video).length ? { video } : null;
+  return Object.keys(video).length ? video : undefined;
+}
+
+function normalizeImageTurnOptions(
+  raw: unknown,
+): NonNullable<TurnSubmitOptions["image"]> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const row = raw as Record<string, unknown>;
+  const image: NonNullable<TurnSubmitOptions["image"]> = {};
+  if (typeof row.size === "string" && (IMAGE_SIZE_TIERS as readonly string[]).includes(row.size)) {
+    image.size = row.size as ImageModelOptions["size"];
+  }
+  if (typeof row.ratio === "string" && (IMAGE_RATIOS as readonly string[]).includes(row.ratio)) {
+    image.ratio = row.ratio as ImageModelOptions["ratio"];
+  }
+  if (
+    typeof row.format === "string" &&
+    (IMAGE_OUTPUT_FORMATS as readonly string[]).includes(row.format)
+  ) {
+    image.format = row.format as ImageModelOptions["format"];
+  }
+  if (
+    typeof row.background === "string" &&
+    (IMAGE_BACKGROUNDS as readonly string[]).includes(row.background)
+  ) {
+    image.background = row.background as ImageModelOptions["background"];
+  }
+  if (typeof row.watermark === "boolean") image.watermark = row.watermark;
+  if (
+    typeof row.promptMode === "string" &&
+    (IMAGE_PROMPT_MODES as readonly string[]).includes(row.promptMode)
+  ) {
+    image.promptMode = row.promptMode as ImageModelOptions["promptMode"];
+  }
+  return Object.keys(image).length ? image : undefined;
+}
+
+function normalizeTurnOptions(raw: unknown): TurnSubmitOptions | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as { video?: unknown; image?: unknown };
+  const video = normalizeVideoTurnOptions(row.video);
+  const image = normalizeImageTurnOptions(row.image);
+  if (!video && !image) return null;
+  return {
+    ...(video ? { video } : {}),
+    ...(image ? { image } : {}),
+  };
 }
