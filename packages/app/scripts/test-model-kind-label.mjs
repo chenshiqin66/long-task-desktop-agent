@@ -18,7 +18,7 @@ assert.equal(modelRowHeading("画图", modelKindLabel("image")), "画图 · 生�
 assert.equal(composerModelOptionText("画图", MODEL_KIND_LABELS.image), "画图（生图）");
 assert.equal(modelRowHeading("对话", modelKindLabel("text")), "对话 · 生文");
 assert.equal(composerModelOptionText("短片", modelKindLabel("video")), "短片（生视频）");
-assert.equal(composerModelOptionText("配音", MODEL_KIND_LABELS.audio), "配音（生音）");
+assert.equal(composerModelOptionText("配音", MODEL_KIND_LABELS.tts), "配音（语音合成）");
 
 for (const kind of MODEL_KINDS) {
   const match = new RegExp(`<option value="${kind}">([^<]+)</option>`).exec(html);
