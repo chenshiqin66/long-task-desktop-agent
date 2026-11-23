@@ -2,7 +2,11 @@ import { copyFile, mkdir, readFile, chmod, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { replaceFile, errorCode } from "../store/fileLock.js";
 import type { StoredConfig, StoredModel } from "./types.js";
-import { isSearchModel, modelKindOf } from "./modelKind.js";
+import { isAsrModel, isSearchModel, modelKindOf } from "./modelKind.js";
+import {
+  defaultTtsModelOptions,
+  readTtsModelOptions,
+} from "./speechOptions.js";
 import {
   defaultVideoModelOptions,
   normalizeVideoByModel,
@@ -104,6 +108,9 @@ function cleanModel(entry: StoredModel): StoredModel {
     cleaned.video = packed.video;
     cleaned.videoByModel = packed.videoByModel;
   }
+  if (kind === "tts") {
+    cleaned.tts = entry.tts ? readTtsModelOptions(entry.tts) : defaultTtsModelOptions();
+  }
   return cleaned;
 }
 
@@ -130,6 +137,7 @@ function readModelEntry(raw: unknown): StoredModel | null {
               : undefined,
         }
       : {}),
+    ...(kind === "tts" ? { tts: readTtsModelOptions(row.tts) } : {}),
   });
   if (!model.name) model.name = model.model || "未命名模型";
   return model;
@@ -182,7 +190,14 @@ export function searchModelOf(stored: StoredConfig | null): StoredModel | null {
   return search.find((entry) => entry.id === stored?.currentSearchModelId) ?? search[0]!;
 }
 
-/** Memory extraction always uses a text model, never the current image, video, or audio model. */
+/** The ASR model mic dictation points to: chosen ASR, else the first one, else none. */
+export function asrModelOf(stored: StoredConfig | null): StoredModel | null {
+  const asr = modelsOf(stored).filter((entry) => isAsrModel(entry));
+  if (!asr.length) return null;
+  return asr.find((entry) => entry.id === stored?.currentAsrModelId) ?? asr[0]!;
+}
+
+/** Memory extraction always uses a text model, never the current image, video, tts, or asr model. */
 export function textModelForMemory(stored: StoredConfig | null): StoredModel | null {
   const models = modelsOf(stored);
   const current = currentModelOf(stored);
@@ -190,7 +205,7 @@ export function textModelForMemory(stored: StoredConfig | null): StoredModel | n
   return models.find((entry) => modelKindOf(entry) === "text") ?? null;
 }
 
-/** The explain pane uses a text model of its own, not the current image, video, or audio model. */
+/** The explain pane uses a text model of its own, not the current image, video, tts, or asr model. */
 export function textModelForExplain(stored: StoredConfig | null): StoredModel | null {
   const models = modelsOf(stored);
   const chosen = models.find((entry) => entry.id === stored?.currentExplainModelId);
@@ -210,6 +225,13 @@ export function withSearchModel(stored: StoredConfig, modelId: string): StoredCo
   const chosen = modelsOf(stored).find((entry) => entry.id === modelId);
   if (!chosen || !isSearchModel(chosen)) throw new Error("请选择网搜模型");
   return normalizeStoredConfig({ ...stored, currentSearchModelId: chosen.id });
+}
+
+/** Point mic dictation at an ASR model. The chat model stays as it is. */
+export function withAsrModel(stored: StoredConfig, modelId: string): StoredConfig {
+  const chosen = modelsOf(stored).find((entry) => entry.id === modelId);
+  if (!chosen || !isAsrModel(chosen)) throw new Error("请选择语音识别模型");
+  return normalizeStoredConfig({ ...stored, currentAsrModelId: chosen.id });
 }
 
 function explainModelIdOf(stored: StoredConfig, models: StoredModel[]): string | undefined {
@@ -235,6 +257,15 @@ function withSearchModelId(next: StoredConfig, searchId: string | undefined): St
   return next;
 }
 
+function withAsrModelId(next: StoredConfig, asrId: string | undefined): StoredConfig {
+  if (asrId) {
+    next.currentAsrModelId = asrId;
+    return next;
+  }
+  delete next.currentAsrModelId;
+  return next;
+}
+
 /**
  * Copy the current chat entry into the top-level fields older readers still use.
  * The list always keeps its search models, even when there is no chat model.
@@ -243,35 +274,42 @@ export function normalizeStoredConfig(stored: StoredConfig): StoredConfig {
   const models = modelsOf(stored);
   const current = currentModelOf(stored);
   const searchId = searchModelOf({ ...stored, models })?.id;
+  const asrId = asrModelOf({ ...stored, models })?.id;
   if (!current) {
-    return withSearchModelId(
+    return withAsrModelId(
+      withSearchModelId(
+        withExplainModelId(
+          {
+            ...stored,
+            models,
+            currentModelId: undefined,
+            baseUrl: "",
+            model: "",
+            apiKey: "",
+          },
+          undefined,
+        ),
+        searchId,
+      ),
+      asrId,
+    );
+  }
+  return withAsrModelId(
+    withSearchModelId(
       withExplainModelId(
         {
           ...stored,
           models,
-          currentModelId: undefined,
-          baseUrl: "",
-          model: "",
-          apiKey: "",
+          currentModelId: current.id,
+          baseUrl: current.baseUrl,
+          model: current.model,
+          apiKey: current.apiKey,
         },
-        undefined,
+        explainModelIdOf(stored, models),
       ),
       searchId,
-    );
-  }
-  return withSearchModelId(
-    withExplainModelId(
-      {
-        ...stored,
-        models,
-        currentModelId: current.id,
-        baseUrl: current.baseUrl,
-        model: current.model,
-        apiKey: current.apiKey,
-      },
-      explainModelIdOf(stored, models),
     ),
-    searchId,
+    asrId,
   );
 }
 
@@ -348,6 +386,7 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
     ...(kind === "video"
       ? { video: current?.video ?? defaultVideoModelOptions(model || "MiniMax-H3-Lite") }
       : {}),
+    ...(kind === "tts" ? { tts: current?.tts ?? defaultTtsModelOptions() } : {}),
     ...searchTargetOf(stored),
   };
 }
@@ -356,10 +395,17 @@ export function toAgentConfig(stored: StoredConfig): AgentConfig {
  * Why the chat cannot start with this config. Null means a chat model is present and filled in.
  * Fresh installs have no config file; without this check the app used to POST to a default OpenAI
  * URL with an empty key and surface an opaque "fetch failed".
+ * TTS/ASR call fixed openspeech hosts, so Base URL is optional for those kinds.
  */
 export function chatModelProblem(stored: StoredConfig | null): string | null {
   const current = currentModelOf(stored);
   if (!current) return "还没有配置模型，请先在「模型」页添加";
+  const kind = modelKindOf(current);
+  if (kind === "tts" || kind === "asr") {
+    if (!current.apiKey.trim()) return "当前模型还没有填写 API Key，请打开「模型」页补全（需豆包语音专属 Key）";
+    if (!current.model.trim()) return "当前模型还没有填写 Model，请打开「模型」页补全";
+    return null;
+  }
   if (!current.apiKey.trim()) return "当前模型还没有填写 API Key，请打开「模型」页补全";
   if (!current.baseUrl.trim()) return "当前模型还没有填写 Base URL，请打开「模型」页补全";
   if (!current.model.trim()) return "当前模型还没有填写 Model，请打开「模型」页补全";

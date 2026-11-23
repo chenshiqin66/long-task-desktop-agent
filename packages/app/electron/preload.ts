@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:readWorkspaceImage", path, sessionId, relativePath),
   readWorkspaceVideo: (path: string, sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readWorkspaceVideo", path, sessionId, relativePath),
+  readWorkspaceAudio: (path: string, sessionId: string, relativePath: string) =>
+    ipcRenderer.invoke("agent:readWorkspaceAudio", path, sessionId, relativePath),
   renameWorkspaceSession: (
     path: string,
     sessionId: string,
@@ -57,14 +59,16 @@ contextBridge.exposeInMainWorld("agent", {
     images?: Array<{ mime: string; base64: string }>,
     videos?: Array<{ mime: string; base64: string }>,
     workspace?: string,
-  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, videos, workspace),
+    audios?: Array<{ mime: string; base64: string }>,
+  ) => ipcRenderer.invoke("agent:submit", sessionId, text, images, videos, workspace, audios),
   replay: (
     sessionId: string,
     text: string,
     images: Array<{ id: string; mime: string; path: string }>,
     videos?: Array<{ id: string; mime: string; path: string }>,
     workspace?: string,
-  ) => ipcRenderer.invoke("agent:replay", sessionId, text, images, videos, workspace),
+    audios?: Array<{ id: string; mime: string; path: string }>,
+  ) => ipcRenderer.invoke("agent:replay", sessionId, text, images, videos, workspace, audios),
   watchSession: (sessionId: string | null, workspace?: string) =>
     ipcRenderer.invoke("agent:watchSession", sessionId, workspace),
   listSkills: () => ipcRenderer.invoke("agent:listSkills"),
@@ -91,6 +95,37 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:readSessionImage", sessionId, relativePath),
   readSessionVideo: (sessionId: string, relativePath: string) =>
     ipcRenderer.invoke("agent:readSessionVideo", sessionId, relativePath),
+  readSessionAudio: (sessionId: string, relativePath: string) =>
+    ipcRenderer.invoke("agent:readSessionAudio", sessionId, relativePath),
+  asrMicStart: () => ipcRenderer.invoke("agent:asrMicStart"),
+  asrMicChunk: (pcm: ArrayBuffer | Uint8Array) => ipcRenderer.invoke("agent:asrMicChunk", pcm),
+  asrMicStop: () => ipcRenderer.invoke("agent:asrMicStop"),
+  onAsrPartial: (cb: (text: string) => void) => {
+    const listener = (_: unknown, text: unknown) => {
+      if (typeof text === "string") cb(text);
+    };
+    ipcRenderer.on("agent:asr-partial", listener);
+    return () => ipcRenderer.removeListener("agent:asr-partial", listener);
+  },
+  onAsrFinal: (cb: (text: string) => void) => {
+    const listener = (_: unknown, text: unknown) => {
+      if (typeof text === "string") cb(text);
+    };
+    ipcRenderer.on("agent:asr-final", listener);
+    return () => ipcRenderer.removeListener("agent:asr-final", listener);
+  },
+  onAsrError: (cb: (message: string) => void) => {
+    const listener = (_: unknown, message: unknown) => {
+      if (typeof message === "string") cb(message);
+    };
+    ipcRenderer.on("agent:asr-error", listener);
+    return () => ipcRenderer.removeListener("agent:asr-error", listener);
+  },
+  onAsrClosed: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on("agent:asr-closed", listener);
+    return () => ipcRenderer.removeListener("agent:asr-closed", listener);
+  },
   cancel: (sessionId?: string, workspace?: string) =>
     ipcRenderer.invoke("agent:cancel", sessionId, workspace),
   explainLoad: (workspace: string, sessionId: string) =>

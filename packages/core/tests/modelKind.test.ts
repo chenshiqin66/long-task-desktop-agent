@@ -15,20 +15,28 @@ describe("modelKind", () => {
     expect(modelKindOf({})).toBe("text");
     expect(modelKindOf({ kind: "image" })).toBe("image");
     expect(modelKindOf({ kind: "video" })).toBe("video");
-    expect(modelKindOf({ kind: "audio" })).toBe("audio");
+    expect(modelKindOf({ kind: "tts" })).toBe("tts");
+    expect(modelKindOf({ kind: "asr" })).toBe("asr");
     expect(modelKindOf({ kind: "search" })).toBe("search");
     expect(modelKindOf({ kind: "text" })).toBe("text");
   });
 
-  it("labels the five kinds in Chinese", () => {
+  it("maps legacy audio kind to tts", () => {
+    expect(parseModelKind("audio")).toBe("tts");
+    expect(modelKindOf({ kind: "audio" })).toBe("tts");
+  });
+
+  it("labels the kinds in Chinese", () => {
     expect(MODEL_KIND_LABELS).toEqual({
       text: "生文",
       image: "生图",
       video: "生视频",
-      audio: "生音",
+      tts: "语音合成",
+      asr: "语音识别",
       search: "网搜",
     });
-    expect(modelKindLabel("image")).toBe("生图");
+    expect(modelKindLabel("tts")).toBe("语音合成");
+    expect(modelKindLabel("asr")).toBe("语音识别");
     expect(modelKindLabel("search")).toBe("网搜");
   });
 });

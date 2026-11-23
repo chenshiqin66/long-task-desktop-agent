@@ -11,6 +11,7 @@ import {
   scopeTitle,
   sourceWorkspace,
   stampText,
+  typeTag,
 } from "../dist/src/renderer/memoryView.js";
 
 const note = (over) => ({
@@ -44,6 +45,10 @@ assert.deepEqual(
 );
 assert.equal(scopeTitle("project"), "本项目");
 assert.equal(scopeTitle("user"), "所有项目");
+assert.equal(typeTag("user"), "🏷️用户");
+assert.equal(typeTag("feedback"), "🏷️反馈");
+assert.equal(typeTag("project"), "🏷️项目");
+assert.equal(typeTag("reference"), "🏷️参考");
 assert.equal(originText("extracted"), "自动提取");
 assert.equal(originText("edited"), "手改");
 assert.equal(originText("manual"), "手写");

@@ -29,8 +29,8 @@ type ExplainMessage = {
   created_at?: string;
 };
 
-type ModelKind = "text" | "image" | "video" | "audio" | "search";
-const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio", "search"];
+type ModelKind = "text" | "image" | "video" | "tts" | "asr" | "search";
+const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "tts", "asr", "search"];
 
 type PendingImage = { previewUrl: string; mime: "image/png" | "image/jpeg"; base64: string };
 type PendingVideo = { previewUrl: string; mime: "video/mp4" | "video/webm" | "video/quicktime"; base64: string };

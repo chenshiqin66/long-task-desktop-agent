@@ -169,9 +169,17 @@ function insertMessageTime(msg: HTMLElement, at: Date): void {
   msg.after(time);
 }
 
-function stampVisibleBubble(msg: HTMLElement, role: string, content: string, at: string | undefined, images?: string[], videos?: string[]): void {
+function stampVisibleBubble(
+  msg: HTMLElement,
+  role: string,
+  content: string,
+  at: string | undefined,
+  images?: string[],
+  videos?: string[],
+  audios?: string[],
+): void {
   if (role !== "user" && role !== "assistant") return;
-  const visible = Boolean(content.trim() || images?.length || videos?.length);
+  const visible = Boolean(content.trim() || images?.length || videos?.length || audios?.length);
   if (!visible) return;
   const parsed = parseStamp(at);
   if (!parsed) return;
@@ -190,9 +198,10 @@ export function ensureMessageTime(body: HTMLElement, at: string | Date = new Dat
 }
 
 /** Returns the `.msg-body` element (streaming appends here). */
-function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[]): void {
+function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[], audios?: string[]): void {
   msg.querySelector(":scope > .msg-images")?.remove();
   msg.querySelector(":scope > .msg-videos")?.remove();
+  msg.querySelector(":scope > .msg-audios")?.remove();
   const body = msg.querySelector(":scope > .msg-body");
   const place = (row: HTMLElement) => {
     if (body) msg.insertBefore(row, body);
@@ -216,16 +225,33 @@ function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[])
     }
     place(row);
   }
+  if (audios?.length) {
+    const row = el("div", { class: "msg-audios" });
+    for (const src of audios) {
+      const audio = el("audio", { src, controls: "" });
+      audio.controls = true;
+      row.append(audio);
+    }
+    place(row);
+  }
 }
 
 export function applyMessageMedia(
   body: HTMLElement,
-  opts: { images?: string[]; videos?: string[]; content?: string; rich?: boolean; messageId?: string; at?: string },
+  opts: {
+    images?: string[];
+    videos?: string[];
+    audios?: string[];
+    content?: string;
+    rich?: boolean;
+    messageId?: string;
+    at?: string;
+  },
 ): void {
   const msg = body.closest(".msg");
   if (!(msg instanceof HTMLElement)) return;
   if (opts.messageId) msg.dataset.messageId = opts.messageId;
-  if (opts.images || opts.videos) appendMediaRows(msg, opts.images, opts.videos);
+  if (opts.images || opts.videos || opts.audios) appendMediaRows(msg, opts.images, opts.videos, opts.audios);
   if (opts.content !== undefined) {
     if (msg.classList.contains("assistant") && opts.rich !== false) setRichText(body, opts.content, true);
     else {
@@ -236,8 +262,9 @@ export function applyMessageMedia(
   const content = opts.content !== undefined ? opts.content : (body.textContent ?? "");
   const images = opts.images ?? Array.from(msg.querySelectorAll(":scope > .msg-images img")).map((node) => (node as HTMLImageElement).src);
   const videos = opts.videos ?? Array.from(msg.querySelectorAll(":scope > .msg-videos video")).map((node) => (node as HTMLVideoElement).src);
-  stampVisibleBubble(msg, msg.classList.contains("user") ? "user" : "assistant", content, opts.at, images, videos);
-  if (!opts.at && (content.trim() || images.length || videos.length)) ensureMessageTime(body);
+  const audios = opts.audios ?? Array.from(msg.querySelectorAll(":scope > .msg-audios audio")).map((node) => (node as HTMLAudioElement).src);
+  stampVisibleBubble(msg, msg.classList.contains("user") ? "user" : "assistant", content, opts.at, images, videos, audios);
+  if (!opts.at && (content.trim() || images.length || videos.length || audios.length)) ensureMessageTime(body);
 }
 
 export function removeTranscriptMessage(body: HTMLElement): void {
@@ -262,14 +289,21 @@ export function appendMessage(
   container: HTMLElement,
   role: string,
   content: string,
-  opts?: { rich?: boolean; images?: string[]; videos?: string[]; messageId?: string; at?: string },
+  opts?: {
+    rich?: boolean;
+    images?: string[];
+    videos?: string[];
+    audios?: string[];
+    messageId?: string;
+    at?: string;
+  },
 ) {
   if (role === "error") return appendErrorRow(container, content);
   // The next question means the error has been dealt with; a new failure opens its own row.
   if (role === "user") foldErrorRows(container);
   const div = el("div", { class: `msg ${role}` });
   if (opts?.messageId) div.dataset.messageId = opts.messageId;
-  appendMediaRows(div, opts?.images, opts?.videos);
+  appendMediaRows(div, opts?.images, opts?.videos, opts?.audios);
   const body = el("div", { class: "msg-body" });
   messageRoot.set(body, div);
   if (role === "assistant" && opts?.rich !== false) {
@@ -281,9 +315,11 @@ export function appendMessage(
   if (role !== "user" && role !== "assistant") {
     div.append(el("span", { class: "msg-role" }, ROLE_LABEL[role] ?? role));
   }
-  if (content || role !== "user" || opts?.images?.length || opts?.videos?.length) div.append(body);
+  if (content || role !== "user" || opts?.images?.length || opts?.videos?.length || opts?.audios?.length) {
+    div.append(body);
+  }
   placeTranscript(container, div, role === "user");
-  stampVisibleBubble(div, role, content, opts?.at, opts?.images, opts?.videos);
+  stampVisibleBubble(div, role, content, opts?.at, opts?.images, opts?.videos, opts?.audios);
   return body;
 }
 

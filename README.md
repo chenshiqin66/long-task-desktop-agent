@@ -23,8 +23,9 @@
 - **模型。** 在侧栏「模型」里添加多条模型，每条有类型，缺省为生文。可以复制一条。在输入框旁选择当前要用的那一条，发送时按它的类型处理，不会根据你的话猜测。
   - **生文**：走对话补全，可以附带最多 4 张图片和 1 个视频。
   - **生图**：请求 `${baseUrl}/images/generations`，只发送模型名、提示词和可选的参考图，生成的图出现在助手气泡里。
-  - **生视频**：走派欧云 MiniMax H3 异步协议（创建任务再查询）。Base URL 填 `https://api.ppio.com`（勿带 `/v1`）。型号为 Lite / Highspeed / Max / H3 四档，各自保存素材模式、分辨率、可生成时长范围和画幅；默认时长取范围下限。生成的视频写入会话的 `videos/`，出现在助手气泡里。参考素材模式这一版尚未接通。
-  - **生音**：这一版还不能用，选中后只会提示改选生文、生图或生视频，不会发出请求。
+  - **生视频**：走派欧云 MiniMax H3 异步协议（创建任务再查询）。Base URL 填 `https://api.ppio.com`（勿带 `/v1`）。型号为 Lite / Highspeed / Max / H3 四档，各自保存素材模式、分辨率、可生成时长范围和画幅；默认时长取范围下限。生成的视频写入会话的 `videos/`，出现在助手气泡里。**参考素材**模式可附图片（≤9）/ 视频（≤3）/ 音频（≤3），请求体带 `reference_image` / `reference_video` / `reference_audio`；不能只附音频。对话内本轮覆盖时长/分辨率/模式仍未做。
+  - **语音合成（TTS）**：走火山豆包 openspeech HTTP（`seed-tts-2.0`）。输入文本后，音频写入会话 `audios/`，在助手气泡里播放。方舟 Agent Plan 的 Base URL 只作开通/计费占位，运行时忽略并改打 openspeech；请用豆包语音专属 Key（`X-Api-Key`）。
+  - **语音识别（ASR）**：上传一段音频可转写为文本；输入框旁麦克风听写写入草稿（不自动发送），使用旁路「当前听写」模型（`currentAsrModelId`）。WebSocket 端点为 nostream（上传）/ async（麦克风）。
   - **网搜**：只给 `web_search` 用，不出现在输入框的选择器里。在模型页点它的「使用」，它和对话模型各有一个「当前」，同时生效。换对话模型不影响搜索。
 - **图片查看。** 对话里的图片可以点开，在应用内的查看器里放大、缩小，并切换同一条消息里的其他图片，不会调用系统看图软件。
 - **需要你拿主意时停下来。** 遇到写操作，或者需要你判断时，会停下来等你。
@@ -199,7 +200,7 @@ npm start
 
 ## 配置
 
-配置文件在 **agent home** 下的 `config.json`。默认是 `~/.long-task-agent/<本机仓库路径哈希>/config.json`（可用环境变量 `LONG_TASK_AGENT_HOME` 整目录改掉）；每个克隆的路径不同，因此不会共用、也不会互相覆盖。第一次从旧版升级时，最先启动的那一份检出会把原来的扁平 `~/.long-task-agent/` 复制进自己的 `<hash>/`。每次保存前会留下 `config.json.bak`。「模型」页维护模型列表和当前选用的那一条，并同步顶层的 `baseUrl`、`model`、`apiKey`。每条模型有类型（生文、生图、生视频、生音、网搜），缺省为生文。解释侧栏另有一个生文模型选择，写在 `currentExplainModelId`；`web_search` 另有一个网搜模型选择，写在 `currentSearchModelId`。顶层的 `baseUrl`、`model`、`apiKey` 只同步对话模型，网搜模型不会写进去。
+配置文件在 **agent home** 下的 `config.json`。默认是 `~/.long-task-agent/<本机仓库路径哈希>/config.json`（可用环境变量 `LONG_TASK_AGENT_HOME` 整目录改掉）；每个克隆的路径不同，因此不会共用、也不会互相覆盖。第一次从旧版升级时，最先启动的那一份检出会把原来的扁平 `~/.long-task-agent/` 复制进自己的 `<hash>/`。每次保存前会留下 `config.json.bak`。「模型」页维护模型列表和当前选用的那一条，并同步顶层的 `baseUrl`、`model`、`apiKey`。每条模型有类型（生文、生图、生视频、语音合成 `tts`、语音识别 `asr`、网搜；旧值 `audio` 读入为 `tts`），缺省为生文。解释侧栏另有一个生文模型选择，写在 `currentExplainModelId`；`web_search` 另有一个网搜模型选择，写在 `currentSearchModelId`；麦克风听写另有 `currentAsrModelId`。顶层的 `baseUrl`、`model`、`apiKey` 只同步对话模型，网搜 / 旁路听写模型不会写进去。
 
 模型页可以复制一条。复制、修改、移除在鼠标移到该条时才出现，「使用」始终在最右侧。工作区相关的字段由侧栏维护，常用文件夹由工作台维护，自动记忆由「记忆」页维护。限额和旧的 `searchBaseUrl`、`searchApiKey` 没有界面，需要直接编辑这个文件。应用保存配置时会保留它们，下次发送时生效。
 
@@ -210,10 +211,11 @@ npm start
 | `baseUrl` | `https://api.openai.com/v1` | 当前模型的 OpenAI 兼容接口地址。与列表里当前那一条保持一致，方便旧代码读取 |
 | `model` | `gpt-4o-mini` | 当前模型名。与列表里当前那一条保持一致 |
 | `apiKey` | 空 | 当前模型的密钥，明文保存，只靠文件权限保护。与列表里当前那一条保持一致 |
-| `models` | 无 | 已配置的模型列表。每项有 `id`、显示名、Base URL、模型名、API Key 和 `kind`（`text` 生文、`image` 生图、`video` 生视频、`audio` 生音、`search` 网搜，缺省为 `text`）。`kind` 为 `video` 时还可有 `video`（当前激活型号的参数）和 `videoByModel`（四个 MiniMax H3 型号各自一套：素材模式、分辨率、可生成时长范围、画幅，以及各项的默认值）。没有这项时，顶层的 `baseUrl`、`model`、`apiKey` 当作一条 |
+| `models` | 无 | 已配置的模型列表。每项有 `id`、显示名、Base URL、模型名、API Key 和 `kind`（`text` / `image` / `video` / `tts` / `asr` / `search`，缺省 `text`；旧值 `audio` 读入为 `tts`）。`kind` 为 `video` 时还可有 `video` 与 `videoByModel`；`kind` 为 `tts` 时可有 `tts`（音色、格式、采样率）。没有这项时，顶层的 `baseUrl`、`model`、`apiKey` 当作一条 |
 | `currentModelId` | 无 | 当前选用的那一条的 `id`。没有或对不上时用列表里的第一条。主输入框旁的选择器改的就是这一项 |
 | `currentExplainModelId` | 无 | 解释侧栏当前选用的生文模型 `id`。没有、对不上，或那一条不是生文时，改用一条生文模型。解释栏的选择器改的是这一项，不会改掉主对话的当前模型 |
 | `currentSearchModelId` | 无 | `web_search` 指向的网搜模型 `id`。没有、对不上，或那一条不是网搜时，改用第一条网搜模型。它和 `currentModelId` 同时生效：网搜模型不会成为对话的当前模型，也不出现在输入框的选择器里。没有网搜模型时，`web_search` 退回旧字段 `searchBaseUrl` / `searchApiKey` |
+| `currentAsrModelId` | 无 | 麦克风听写指向的 ASR 模型 `id`。没有或对不上时用第一条 ASR。可与对话模型同时生效 |
 | `workspacePaths` | 无 | 侧栏里的工作区列表 |
 | `workspaceLabels` | 无 | 侧栏里的显示名，不改目录名 |
 | `workspaceCollapsed` | 无 | 折叠起来的工作区 |
@@ -294,11 +296,12 @@ npm run eval:memory           # 构建 core 和评测器，运行记忆提取的
 | [记忆](docs/memory.md) | 指令文件、四类记忆、后台提取、记忆页 |
 | [MCP](docs/mcp.md) | 连接池、两种传输、工具名、按次确认、密钥打码 |
 | [界面行为](docs/ui-behavior.md) | 每块界面的行为和文案 |
+| [生视频用法要点](docs/video-generation.md) | 四档 MiniMax H3 型号 × 五种素材模式：附件、画幅、UI 映射 |
 | [路线图](docs/roadmap.md) | 多会话同时执行的边界、有意不做的设计、已落地的改进、后续改进 |
 
 ## 还没做的
 
-没有按钮能单独停掉一个已经受理的 deferred 子代理。生音这一版还不能生成；生视频的参考素材模式尚未接通。完整列表见 [路线图](docs/roadmap.md)。
+没有按钮能单独停掉一个已经受理的 deferred 子代理。生视频对话内本轮覆盖（时长 / 分辨率 / 模式）尚未做。完整列表见 [路线图](docs/roadmap.md)。
 
 ## 许可证
 

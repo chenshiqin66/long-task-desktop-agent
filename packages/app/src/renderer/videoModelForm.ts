@@ -58,7 +58,7 @@ export const VIDEO_GEN_MODE_OPTIONS: ReadonlyArray<{ value: VideoGenMode; label:
   { value: "first_frame", label: "图生视频 · 首帧" },
   { value: "last_frame", label: "图生视频 · 尾帧" },
   { value: "first_last", label: "图生视频 · 首尾帧" },
-  { value: "reference", label: "参考素材生视频（暂未接通）" },
+  { value: "reference", label: "参考素材生视频" },
 ];
 
 export const VIDEO_RATIO_OPTIONS: ReadonlyArray<{ value: VideoRatio; label: string }> = [

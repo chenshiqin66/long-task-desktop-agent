@@ -279,7 +279,7 @@ describe("ExplainRuntime", () => {
   it("rejects explain when the current model is not text", async () => {
     const sessions = new SessionStore(workspace);
     const meta = await sessions.createSession();
-    for (const kind of ["image", "video", "audio"] as const) {
+    for (const kind of ["image", "video", "tts", "asr"] as const) {
       const seen: LlmChatRequest[] = [];
       const rt = new ExplainRuntime({
         workspacePath: workspace,

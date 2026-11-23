@@ -7,10 +7,13 @@ import type {
   ImageGenRequest,
   LlmChatRequest,
   LlmProvider,
+  SpeechGenRequest,
+  TranscribeRequest,
   VideoGenRequest,
 } from "../src/provider/types.js";
 import type { ModelKind } from "../src/config/modelKind.js";
 import { defaultVideoModelOptions, type VideoModelOptions } from "../src/config/videoOptions.js";
+import { defaultTtsModelOptions } from "../src/config/speechOptions.js";
 import type { RuntimeEvent } from "../src/types.js";
 import { DEFAULT_AGENT_CONFIG } from "../src/types.js";
 import { rmWorkspace } from "./rmWorkspace.js";
@@ -18,13 +21,17 @@ import { rmWorkspace } from "./rmWorkspace.js";
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const VIDEO = Buffer.from("fake-mp4").toString("base64");
-const UNSUPPORTED_KIND_TEXT = "这个类型第一版还不能用，请改选生文、生图或生视频";
+const AUDIO = Buffer.from("fake-mp3").toString("base64");
 
 type ImageProvider = LlmProvider & {
   generateImage: (req: ImageGenRequest) => Promise<{ mime: "image/png"; base64: string }>;
 };
 type VideoProvider = LlmProvider & {
   generateVideo: (req: VideoGenRequest) => Promise<{ mime: "video/mp4"; base64: string }>;
+};
+type SpeechProvider = LlmProvider & {
+  generateSpeech: (req: SpeechGenRequest) => Promise<{ mime: "audio/mpeg"; base64: string }>;
+  transcribeAudio: (req: TranscribeRequest) => Promise<string>;
 };
 
 function makeRuntime(
@@ -37,7 +44,16 @@ function makeRuntime(
     workspacePath: workspace,
     config: {
       baseUrl: "http://localhost",
-      model: kind === "image" ? "draw" : kind === "video" ? "MiniMax-H3-Lite" : "test",
+      model:
+        kind === "image"
+          ? "draw"
+          : kind === "video"
+            ? "MiniMax-H3-Lite"
+            : kind === "tts"
+              ? "seed-tts-2.0"
+              : kind === "asr"
+                ? "bigmodel"
+                : "test",
       apiKey: "sk-test",
       ...DEFAULT_AGENT_CONFIG,
       kind,
@@ -46,6 +62,7 @@ function makeRuntime(
             video: video ?? defaultVideoModelOptions("MiniMax-H3-Lite"),
           }
         : {}),
+      ...(kind === "tts" ? { tts: defaultTtsModelOptions() } : {}),
     },
     provider,
   });
@@ -217,18 +234,83 @@ describe("runtime routing by model kind", () => {
     expect((await rt.loadSessionArtifacts(meta.session_id)).context).toEqual([]);
   });
 
-  it("does not call the provider for audio models", async () => {
-    const { provider, generateCalls, chatCalls } = imageProvider();
-    const rt = makeRuntime(workspace, "audio", provider);
+  it("synthesizes speech and does not call chatStream", async () => {
+    const speechCalls: SpeechGenRequest[] = [];
+    const chatCalls: LlmChatRequest[] = [];
+    const provider: SpeechProvider = {
+      chatStream(req) {
+        chatCalls.push(req);
+        throw new Error("chatStream should not be called");
+      },
+      async generateSpeech(req) {
+        speechCalls.push(req);
+        return { mime: "audio/mpeg", base64: AUDIO };
+      },
+      async transcribeAudio() {
+        throw new Error("transcribeAudio should not be called");
+      },
+    };
+    const rt = makeRuntime(workspace, "tts", provider);
     const events: RuntimeEvent[] = [];
     rt.onEvent((event) => events.push(event));
     const meta = await rt.createSession();
-    await rt.submit(meta.session_id, "请生成");
+    await rt.submit(meta.session_id, "你好世界");
 
     expect(chatCalls).toHaveLength(0);
-    expect(generateCalls).toHaveLength(0);
+    expect(speechCalls).toHaveLength(1);
+    expect(speechCalls[0]?.text).toBe("你好世界");
     const assistant = (await rt.loadMessages(meta.session_id)).find((message) => message.role === "assistant");
-    expect(assistant?.content).toBe(UNSUPPORTED_KIND_TEXT);
+    expect(assistant?.audios?.[0]?.path).toMatch(/^audios\/aud_[a-f0-9]+\.mp3$/);
+    expect(events.some((event) => event.type === "generated_audios")).toBe(true);
+    expect(events.some((event) => event.type === "status" && event.phase === "generating_speech")).toBe(true);
+    expect(events.some((event) => event.type === "done" && event.reason === "completed")).toBe(true);
+  });
+
+  it("rejects ASR without an audio attachment", async () => {
+    const provider: SpeechProvider = {
+      chatStream() {
+        throw new Error("chatStream should not be called");
+      },
+      async generateSpeech() {
+        throw new Error("generateSpeech should not be called");
+      },
+      async transcribeAudio() {
+        throw new Error("transcribeAudio should not be called");
+      },
+    };
+    const rt = makeRuntime(workspace, "asr", provider);
+    const meta = await rt.createSession();
+    await expect(rt.submit(meta.session_id, "备注")).rejects.toThrow("语音识别请先添加一段音频");
+  });
+
+  it("transcribes an uploaded audio and does not call chatStream", async () => {
+    const asrCalls: TranscribeRequest[] = [];
+    const chatCalls: LlmChatRequest[] = [];
+    const provider: SpeechProvider = {
+      chatStream(req) {
+        chatCalls.push(req);
+        throw new Error("chatStream should not be called");
+      },
+      async generateSpeech() {
+        throw new Error("generateSpeech should not be called");
+      },
+      async transcribeAudio(req) {
+        asrCalls.push(req);
+        return "转写结果";
+      },
+    };
+    const rt = makeRuntime(workspace, "asr", provider);
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession();
+    await rt.submit(meta.session_id, "", undefined, undefined, [{ mime: "audio/mpeg", base64: AUDIO }]);
+
+    expect(chatCalls).toHaveLength(0);
+    expect(asrCalls).toHaveLength(1);
+    expect(asrCalls[0]?.format).toBe("mp3");
+    const assistant = (await rt.loadMessages(meta.session_id)).find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("转写结果");
+    expect(events.some((event) => event.type === "status" && event.phase === "transcribing")).toBe(true);
     expect(events.some((event) => event.type === "done" && event.reason === "completed")).toBe(true);
   });
 
@@ -352,7 +434,7 @@ describe("runtime routing by model kind", () => {
     expect(errorMessage(events, thrown)).toBe("生视频请先输入提示词");
   });
 
-  it("rejects video generation when this turn includes a reference video", async () => {
+  it("rejects a reference video when the default mode is not reference", async () => {
     const { provider, generateCalls, chatCalls } = videoProvider();
     const rt = makeRuntime(workspace, "video", provider);
     const events: RuntimeEvent[] = [];
@@ -367,6 +449,58 @@ describe("runtime routing by model kind", () => {
     expect(chatCalls).toHaveLength(0);
     expect(generateCalls).toHaveLength(0);
     expect(errorMessage(events, thrown)).toMatch(/参考视频/);
+  });
+
+  it("sends reference images and videos when mode is reference", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider, {
+      ...defaultVideoModelOptions("MiniMax-H3-Lite"),
+      mode: "reference",
+      ratio: "16:9",
+    });
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession();
+    await rt.submit(
+      meta.session_id,
+      "<Picture 1> 跳舞",
+      [{ mime: "image/png", base64: PNG }],
+      [{ mime: "video/mp4", base64: VIDEO }],
+      [{ mime: "audio/mpeg", base64: AUDIO }],
+    );
+
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(1);
+    expect(generateCalls[0]?.mode).toBe("reference");
+    expect(generateCalls[0]?.images).toHaveLength(1);
+    expect(generateCalls[0]?.videos).toHaveLength(1);
+    expect(generateCalls[0]?.audios).toHaveLength(1);
+    expect(generateCalls[0]?.ratio).toBe("16:9");
+    expect(events.some((event) => event.type === "generated_videos")).toBe(true);
+    const assistant = (await rt.loadMessages(meta.session_id)).find((message) => message.role === "assistant");
+    expect(assistant?.videos?.[0]?.path).toMatch(/^videos\/vid_[a-f0-9]+\.mp4$/);
+  });
+
+  it("rejects reference mode with audio only", async () => {
+    const { provider, generateCalls, chatCalls } = videoProvider();
+    const rt = makeRuntime(workspace, "video", provider, {
+      ...defaultVideoModelOptions("MiniMax-H3-Lite"),
+      mode: "reference",
+    });
+    const events: RuntimeEvent[] = [];
+    rt.onEvent((event) => events.push(event));
+    const meta = await rt.createSession();
+    let thrown: unknown;
+    try {
+      await rt.submit(meta.session_id, "只有声音", undefined, undefined, [
+        { mime: "audio/mpeg", base64: AUDIO },
+      ]);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(chatCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(0);
+    expect(errorMessage(events, thrown)).toMatch(/参考音频需同时/);
   });
 
   it("inlines a video_url on the latest user message for a text model", async () => {

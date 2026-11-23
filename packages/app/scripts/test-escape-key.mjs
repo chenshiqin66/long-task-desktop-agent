@@ -8,6 +8,8 @@ const idle = {
   workbenchOpen: false,
   findOpen: false,
   taskPanelOpen: false,
+  libraryFormOpen: false,
+  libraryOpen: false,
   viewingRun: false,
 };
 
@@ -19,13 +21,28 @@ assert.equal(escapeAction({ ...idle, viewingRun: true }), "stop");
 
 // the workbench covers the window, so it closes before the find bar and before stopping
 assert.equal(
-  escapeAction({ ...idle, viewingRun: true, workbenchOpen: true, findOpen: true, taskPanelOpen: true }),
+  escapeAction({
+    ...idle,
+    viewingRun: true,
+    workbenchOpen: true,
+    findOpen: true,
+    taskPanelOpen: true,
+    libraryFormOpen: true,
+    libraryOpen: true,
+  }),
   "close-workbench",
 );
 
-// open panels close first, find bar before task panel
+// open panels close first: find → tasks → in-page 取消 form → library page → stop
 assert.equal(escapeAction({ ...idle, viewingRun: true, findOpen: true, taskPanelOpen: true }), "close-find");
 assert.equal(escapeAction({ ...idle, viewingRun: true, taskPanelOpen: true }), "close-tasks");
+assert.equal(
+  escapeAction({ ...idle, viewingRun: true, libraryFormOpen: true, libraryOpen: true }),
+  "close-library-form",
+);
+assert.equal(escapeAction({ ...idle, libraryFormOpen: true, libraryOpen: true }), "close-library-form");
+assert.equal(escapeAction({ ...idle, viewingRun: true, libraryOpen: true }), "close-library");
+assert.equal(escapeAction({ ...idle, libraryOpen: true }), "close-library");
 
 // another handler already used this Esc: rename box, skill menu, context menu
 assert.equal(escapeAction({ ...idle, viewingRun: true, handled: true }), "none");

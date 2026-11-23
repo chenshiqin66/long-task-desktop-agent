@@ -75,6 +75,11 @@ export function scopeTitle(scope: MemoryScope): string {
   return scope === "project" ? "本项目" : "所有项目";
 }
 
+/** In-card type chip, e.g. 🏷️用户 — not a section heading. */
+export function typeTag(type: MemoryType): string {
+  return `🏷️${TYPE_LABEL[type]}`;
+}
+
 export function groupByType(
   entries: readonly MemoryEntryView[],
   scope: MemoryScope,

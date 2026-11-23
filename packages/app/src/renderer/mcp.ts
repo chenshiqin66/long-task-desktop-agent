@@ -26,11 +26,18 @@ const STATE_LABEL: Record<McpServerView["state"], string> = {
   error: "失败",
 };
 
+export interface McpLibrary {
+  /** True while the add/edit form with 取消 is on screen. */
+  isFormOpen(): boolean;
+  /** Same as clicking 取消. No-op when the form is already closed. */
+  cancelForm(): void;
+}
+
 export function attachMcpLibrary(
   button: HTMLButtonElement,
   page: HTMLElement,
   host: { onOpen: () => void; onClose: () => void },
-): void {
+): McpLibrary {
   const list = page.querySelector("#mcp-list") as HTMLElement;
   const note = page.querySelector("#mcp-note") as HTMLElement;
   const count = page.querySelector("#mcp-count") as HTMLElement;
@@ -263,6 +270,8 @@ export function attachMcpLibrary(
 
   button.onclick = () => {
     if (!page.hidden) {
+      // Keep an open add/edit form as-is. Closing it here would surprise the user
+      // when they reopen the page and find the draft gone.
       host.onClose();
       return;
     }
@@ -301,6 +310,13 @@ export function attachMcpLibrary(
       cwd: cwdInput.value.trim(),
     };
   }
+
+  return {
+    isFormOpen: () => formOpen && !form.hidden,
+    cancelForm: () => {
+      if (formOpen && !form.hidden) closeForm();
+    },
+  };
 }
 
 function isServerName(name: string): boolean {

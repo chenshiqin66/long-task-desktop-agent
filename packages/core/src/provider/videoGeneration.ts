@@ -3,16 +3,29 @@ import type { VideoMime } from "../types.js";
 export type VideoResolution = "480P" | "768P" | "2K";
 export type VideoRatio = "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9" | "adaptive";
 
-/** Frame / text modes for create-task. `reference` is handled elsewhere and not built here. */
+/** Frame / text modes for create-task (not including multimodal reference). */
 export type VideoFrameMode = "text" | "first_frame" | "last_frame" | "first_last";
+
+/** All create-task modes, including multimodal reference (r2va). */
+export type VideoCreateMode = VideoFrameMode | "reference";
+
+/** MiniMax H3 multimodal reference caps (images + videos + audios ≤ 12). */
+export const VIDEO_REF_MAX_IMAGES = 9;
+export const VIDEO_REF_MAX_VIDEOS = 3;
+export const VIDEO_REF_MAX_AUDIOS = 3;
+export const VIDEO_REF_MAX_MEDIA = 12;
 
 export interface VideoGenerationInput {
   model: string;
   prompt: string;
-  /** Order matters for first_last: [0]=first_frame, [1]=last_frame. */
+  /** Order matters for first_last: [0]=first_frame, [1]=last_frame. Reference: all become reference_image. */
   images?: { dataUrl: string }[];
+  /** Reference mode only: each becomes reference_video. */
+  videos?: { dataUrl: string }[];
+  /** Reference mode only: each becomes reference_audio. Cannot be used alone. */
+  audios?: { dataUrl: string }[];
   /** Defaults to text; a single attached image still becomes first_frame for compatibility. */
-  mode?: VideoFrameMode;
+  mode?: VideoCreateMode;
   resolution?: VideoResolution;
   duration?: number;
   ratio?: VideoRatio;
@@ -23,12 +36,19 @@ export const VIDEO_POLL_INTERVAL_MS = 10_000;
 /** Overall wait for create → succeed (not including download). */
 export const VIDEO_POLL_TIMEOUT_MS = 15 * 60_000;
 
+export type VideoGenerationContentPart =
+  | { type: "text"; text: string }
+  | {
+      type: "image_url";
+      image_url: { url: string };
+      role?: "first_frame" | "last_frame" | "reference_image";
+    }
+  | { type: "video_url"; video_url: { url: string }; role: "reference_video" }
+  | { type: "audio_url"; audio_url: { url: string }; role: "reference_audio" };
+
 export interface VideoGenerationBody {
   model: string;
-  content: Array<
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string }; role?: "first_frame" | "last_frame" | "reference_image" }
-  >;
+  content: VideoGenerationContentPart[];
   resolution: VideoResolution;
   duration: number;
   ratio: VideoRatio;
@@ -113,10 +133,52 @@ export function frameRolesForMode(
   throw new Error("不支持的素材模式");
 }
 
+/** Validate multimodal reference attachment counts (API caps). */
+export function assertVideoReferenceMedia(
+  imageCount: number,
+  videoCount: number,
+  audioCount: number,
+): void {
+  if (imageCount > VIDEO_REF_MAX_IMAGES) {
+    throw new Error(`参考素材模式最多 ${VIDEO_REF_MAX_IMAGES} 张图片`);
+  }
+  if (videoCount > VIDEO_REF_MAX_VIDEOS) {
+    throw new Error(`参考素材模式最多 ${VIDEO_REF_MAX_VIDEOS} 段视频`);
+  }
+  if (audioCount > VIDEO_REF_MAX_AUDIOS) {
+    throw new Error(`参考素材模式最多 ${VIDEO_REF_MAX_AUDIOS} 段音频`);
+  }
+  const total = imageCount + videoCount + audioCount;
+  if (total > VIDEO_REF_MAX_MEDIA) {
+    throw new Error(`参考素材合计最多 ${VIDEO_REF_MAX_MEDIA} 个文件`);
+  }
+  if (imageCount === 0 && videoCount === 0) {
+    if (audioCount > 0) {
+      throw new Error("参考音频需同时附图片或视频");
+    }
+    throw new Error("参考素材模式请至少附一张图片或一段视频");
+  }
+}
+
+/**
+ * Ratio for reference (r2va): not forced to adaptive.
+ * Lite forbids adaptive — fall back to a fixed ratio.
+ */
+export function referenceVideoRatio(model: string, preferred?: VideoRatio): VideoRatio {
+  const id = normalizeVideoModelId(model).toLowerCase();
+  const lite = id === "minimax-h3-lite";
+  if (lite) {
+    if (preferred && preferred !== "adaptive") return preferred;
+    return "16:9";
+  }
+  return preferred ?? "adaptive";
+}
+
 /**
  * PPIO MiniMax H3 create-task body.
  * Text-only: fixed ratio (Lite forbids adaptive for t2v).
  * Frame modes: images get first_frame / last_frame roles; ratio adaptive.
+ * Reference: images/videos/audios as reference_* roles; ratio per model (Lite ≠ adaptive).
  */
 export function buildVideoGenerationBody(req: VideoGenerationInput): VideoGenerationBody {
   const prompt = req.prompt.trim();
@@ -125,11 +187,53 @@ export function buildVideoGenerationBody(req: VideoGenerationInput): VideoGenera
   const model = normalizeVideoModelId(req.model);
   if (!model) throw new Error("生视频请填写模型名，例如 MiniMax-H3-Lite");
 
-  const mode: VideoFrameMode = req.mode ?? "text";
+  const mode: VideoCreateMode = req.mode ?? "text";
   const images = req.images ?? [];
-  const roles = frameRolesForMode(mode, images.length);
+  const videos = req.videos ?? [];
+  const audios = req.audios ?? [];
 
-  const content: VideoGenerationBody["content"] = [{ type: "text", text: prompt }];
+  if (mode === "reference") {
+    assertVideoReferenceMedia(images.length, videos.length, audios.length);
+    if (videos.some((v) => !v?.dataUrl) || audios.some((a) => !a?.dataUrl) || images.some((i) => !i?.dataUrl)) {
+      throw new Error("参考素材无效");
+    }
+    const content: VideoGenerationContentPart[] = [{ type: "text", text: prompt }];
+    for (const image of images) {
+      content.push({
+        type: "image_url",
+        image_url: { url: image.dataUrl },
+        role: "reference_image",
+      });
+    }
+    for (const video of videos) {
+      content.push({
+        type: "video_url",
+        video_url: { url: video.dataUrl },
+        role: "reference_video",
+      });
+    }
+    for (const audio of audios) {
+      content.push({
+        type: "audio_url",
+        audio_url: { url: audio.dataUrl },
+        role: "reference_audio",
+      });
+    }
+    return {
+      model,
+      content,
+      resolution: req.resolution ?? defaultVideoResolution(model),
+      duration: req.duration ?? defaultVideoDuration(model),
+      ratio: referenceVideoRatio(model, req.ratio),
+    };
+  }
+
+  if (videos.length || audios.length) {
+    throw new Error("首帧/尾帧/文生模式不支持参考视频或音频；请改用「参考素材生视频」");
+  }
+
+  const roles = frameRolesForMode(mode, images.length);
+  const content: VideoGenerationContentPart[] = [{ type: "text", text: prompt }];
   for (let i = 0; i < roles.length; i++) {
     const image = images[i];
     const role = roles[i];

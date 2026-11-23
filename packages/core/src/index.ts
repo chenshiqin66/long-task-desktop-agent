@@ -21,6 +21,19 @@ export * from "./provider/types.js";
 export * from "./provider/openaiCompatible.js";
 export * from "./provider/imageGeneration.js";
 export * from "./provider/videoGeneration.js";
+export {
+  synthesizeSpeechHttp,
+  transcribeAudioFile,
+  MicAsrSession,
+  buildTtsHttpBody,
+  asrFormatFromMime,
+  ttsOptionsFromConfig,
+  mimeForSpeechFormat,
+  type MicAsrHandlers,
+  type AsrFileRequest,
+  type SpeechFormat,
+} from "./provider/volcSpeech.js";
+export * from "./config/speechOptions.js";
 export * from "./runtime/errors.js";
 export * from "./runtime/permission.js";
 export * from "./runtime/askGate.js";

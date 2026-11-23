@@ -21,9 +21,21 @@ import {
   type VideoResolution,
 } from "./videoModelForm.js";
 
-type ModelKind = "text" | "image" | "video" | "audio" | "search";
+type ModelKind = "text" | "image" | "video" | "tts" | "asr" | "search";
 
-const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "audio", "search"];
+const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "tts", "asr", "search"];
+
+type TtsModelOptions = {
+  speaker: string;
+  format: "mp3" | "wav";
+  sampleRate: number;
+};
+
+const DEFAULT_TTS: TtsModelOptions = {
+  speaker: "zh_female_vv_uranus_bigtts",
+  format: "mp3",
+  sampleRate: 24000,
+};
 
 type StoredModel = {
   id: string;
@@ -34,6 +46,7 @@ type StoredModel = {
   kind?: ModelKind;
   video?: VideoModelOptions;
   videoByModel?: VideoByModel;
+  tts?: TtsModelOptions;
 };
 
 type StoredConfig = {
@@ -44,6 +57,8 @@ type StoredConfig = {
   currentModelId?: string;
   /** web_search's model. Separate from currentModelId: both are in use at the same time. */
   currentSearchModelId?: string;
+  /** Mic dictation's ASR model. Separate from currentModelId. */
+  currentAsrModelId?: string;
   [key: string]: unknown;
 };
 
@@ -56,6 +71,10 @@ export function chatModelsOf<T extends KindedModel>(models: readonly T[] | undef
 
 export function searchModelsOf<T extends KindedModel>(models: readonly T[] | undefined): T[] {
   return (models ?? []).filter((entry) => parseModelKind(entry.kind) === "search");
+}
+
+export function asrModelsOf<T extends KindedModel>(models: readonly T[] | undefined): T[] {
+  return (models ?? []).filter((entry) => parseModelKind(entry.kind) === "asr");
 }
 
 /** The id in use within one pool: the saved id when it belongs to the pool, else the pool's first. */
@@ -77,9 +96,21 @@ export function composerModelOptionText(name: string, kindLabel: string): string
 }
 
 function parseModelKind(raw: unknown): ModelKind {
+  if (raw === "audio") return "tts";
   return typeof raw === "string" && (MODEL_KINDS as readonly string[]).includes(raw)
     ? (raw as ModelKind)
     : "text";
+}
+
+function normalizeTts(raw?: Partial<TtsModelOptions> | null): TtsModelOptions {
+  const speaker =
+    typeof raw?.speaker === "string" && raw.speaker.trim() ? raw.speaker.trim() : DEFAULT_TTS.speaker;
+  const format = raw?.format === "wav" ? "wav" : "mp3";
+  const sampleRate =
+    typeof raw?.sampleRate === "number" && Number.isFinite(raw.sampleRate) && raw.sampleRate > 0
+      ? Math.round(raw.sampleRate)
+      : DEFAULT_TTS.sampleRate;
+  return { speaker, format, sampleRate };
 }
 
 function modelKindOf(entry: { kind?: unknown } | null | undefined): ModelKind {
@@ -138,7 +169,11 @@ export function attachModelsLibrary(
   select: HTMLSelectElement,
   emptyBtn: HTMLButtonElement,
   host: ModelsHost,
-): { reload(): Promise<void> } {
+): {
+  reload(): Promise<void>;
+  isFormOpen(): boolean;
+  cancelForm(): void;
+} {
   const list = page.querySelector("#models-list") as HTMLElement;
   const note = page.querySelector("#models-note") as HTMLElement;
   const count = page.querySelector("#models-count") as HTMLElement;
@@ -153,6 +188,11 @@ export function attachModelsLibrary(
   const cancelBtn = page.querySelector("#models-cancel") as HTMLButtonElement;
   const kindHint = page.querySelector("#model-kind-hint") as HTMLElement | null;
   const videoBaseUrlHint = page.querySelector("#model-video-baseurl-hint") as HTMLElement | null;
+  const speechBaseUrlHint = page.querySelector("#model-speech-baseurl-hint") as HTMLElement | null;
+  const ttsOptions = page.querySelector("#model-tts-options") as HTMLElement | null;
+  const ttsSpeaker = page.querySelector("#model-tts-speaker") as HTMLInputElement | null;
+  const ttsFormat = page.querySelector("#model-tts-format") as HTMLSelectElement | null;
+  const ttsSampleRate = page.querySelector("#model-tts-sample-rate") as HTMLInputElement | null;
   const videoOptions = page.querySelector("#model-video-options") as HTMLElement;
   const videoTabsHost = page.querySelector("#model-video-tabs") as HTMLElement;
   const videoModesHost = page.querySelector("#model-video-modes") as HTMLElement;
@@ -310,31 +350,67 @@ export function attachModelsLibrary(
     placeDurationLabels(min, rangeMax);
   });
 
-  /** Search / video kinds need stronger field hints than the empty defaults. */
+  /** Search / video / speech kinds need stronger field hints than the empty defaults. */
   function syncKindFields(): void {
     const kind = parseModelKind(kindSelect.value);
     const search = kind === "search";
     const video = kind === "video";
-    modelInput.placeholder = search ? "可留空：搜索接口不使用模型名" : "";
+    const speech = kind === "tts" || kind === "asr";
+    const tts = kind === "tts";
+    modelInput.placeholder = search
+      ? "可留空：搜索接口不使用模型名"
+      : tts
+        ? "seed-tts-2.0"
+        : kind === "asr"
+          ? "bigmodel"
+          : "";
     baseUrlInput.placeholder = search
       ? "https://api.deepseek.com"
       : video
         ? "https://api.ppio.com"
-        : "";
+        : speech
+          ? "（可选）方舟 Plan 地址仅作占位"
+          : "";
     modelField.hidden = video;
     videoOptions.hidden = !video;
+    if (ttsOptions) ttsOptions.hidden = !tts;
     if (video) {
       if (!baseUrlInput.value.trim()) baseUrlInput.value = "https://api.ppio.com";
       loadVideoDraft();
     }
+    if (tts && ttsSpeaker && ttsFormat && ttsSampleRate) {
+      if (!ttsSpeaker.value.trim()) ttsSpeaker.value = DEFAULT_TTS.speaker;
+      if (!ttsFormat.value) ttsFormat.value = DEFAULT_TTS.format;
+      if (!ttsSampleRate.value) ttsSampleRate.value = String(DEFAULT_TTS.sampleRate);
+    }
     if (kindHint) {
-      kindHint.hidden = !search;
+      kindHint.hidden = !(search || kind === "asr");
       if (search) {
         kindHint.textContent =
           "网搜模型只给 web_search 用，不会出现在输入框的模型选择里。它和对话模型各有一个「当前」，可以同时使用。接口按 DeepSeek 的搜索接口格式请求，Model 可以留空。";
+      } else if (kind === "asr") {
+        kindHint.textContent =
+          "语音识别可作对话模型（上传音频转写），也可点「使用」设为麦克风旁路当前（类似网搜）。麦克风听写写入输入框，不会自动发送。";
       }
     }
     if (videoBaseUrlHint) videoBaseUrlHint.hidden = !video;
+    if (speechBaseUrlHint) speechBaseUrlHint.hidden = !speech;
+  }
+
+  function paintTtsFields(entry?: StoredModel): void {
+    if (!ttsSpeaker || !ttsFormat || !ttsSampleRate) return;
+    const opts = normalizeTts(entry?.tts);
+    ttsSpeaker.value = opts.speaker;
+    ttsFormat.value = opts.format;
+    ttsSampleRate.value = String(opts.sampleRate);
+  }
+
+  function readTtsFields(): TtsModelOptions {
+    return normalizeTts({
+      speaker: ttsSpeaker?.value,
+      format: ttsFormat?.value === "wav" ? "wav" : "mp3",
+      sampleRate: Number(ttsSampleRate?.value),
+    });
   }
 
   const showNote = (err: unknown) => {
@@ -360,6 +436,11 @@ export function attachModelsLibrary(
     if (modelKindOf(entry) === "video") {
       loadVideoDraft(entry);
     }
+    if (modelKindOf(entry) === "tts") {
+      paintTtsFields(entry);
+    } else {
+      paintTtsFields();
+    }
     form.hidden = false;
     nameInput.focus();
   }
@@ -383,7 +464,9 @@ export function attachModelsLibrary(
       for (const entry of models) {
         const option = document.createElement("option");
         option.value = entry.id;
-        option.textContent = composerModelOptionText(modelLabel(entry), kindLabelFromSelect(kindSelect, modelKindOf(entry)));
+        const kind = modelKindOf(entry);
+        option.dataset.kind = kind;
+        option.textContent = composerModelOptionText(modelLabel(entry), kindLabelFromSelect(kindSelect, kind));
         select.append(option);
       }
       select.value = models.some((entry) => entry.id === currentId) ? currentId : models[0]!.id;
@@ -418,11 +501,18 @@ export function attachModelsLibrary(
   }
 
   function modelRow(entry: StoredModel, cfg: StoredConfig): HTMLElement {
-    // A search model has its own "current", so one chat model and one search model are in use at once.
-    const isSearch = modelKindOf(entry) === "search";
-    const current = isSearch
+    // Search and ASR each have a side "current" besides the chat model.
+    const kind = modelKindOf(entry);
+    const isSearch = kind === "search";
+    const isAsrSide = kind === "asr";
+    const chatCurrent = entry.id === inUseId(chatModelsOf(cfg.models), cfg.currentModelId);
+    const searchCurrent = isSearch
       ? entry.id === inUseId(searchModelsOf(cfg.models), cfg.currentSearchModelId)
-      : entry.id === inUseId(chatModelsOf(cfg.models), cfg.currentModelId);
+      : false;
+    const asrCurrent = isAsrSide
+      ? entry.id === inUseId(asrModelsOf(cfg.models), cfg.currentAsrModelId)
+      : false;
+    const current = isSearch ? searchCurrent : isAsrSide ? asrCurrent || chatCurrent : chatCurrent;
     const row = document.createElement("article");
     row.className = current ? "mcp-row is-current-model" : "mcp-row";
     const main = document.createElement("div");
@@ -445,8 +535,23 @@ export function attachModelsLibrary(
     const summary = document.createElement("p");
     summary.className = "mcp-summary";
     const videoLine =
-      modelKindOf(entry) === "video" ? videoOptionsSummary(entry.video ?? defaultVideoModelOptions(entry.model)) : "";
-    summary.textContent = [entry.baseUrl || "未填写 Base URL", videoLine].filter(Boolean).join(" · ");
+      kind === "video" ? videoOptionsSummary(entry.video ?? defaultVideoModelOptions(entry.model)) : "";
+    const ttsLine =
+      kind === "tts"
+        ? `音色 ${normalizeTts(entry.tts).speaker} · ${normalizeTts(entry.tts).format}`
+        : "";
+    const speechHost =
+      kind === "tts" || kind === "asr" ? "openspeech.bytedance.com" : entry.baseUrl || "未填写 Base URL";
+    summary.textContent = [speechHost, videoLine, ttsLine].filter(Boolean).join(" · ");
+    if (isAsrSide && asrCurrent) {
+      const badge = document.createElement("span");
+      badge.className = "mcp-state is-ok";
+      badge.textContent = chatCurrent ? "当前·对话/听写" : "当前·听写";
+      // Replace generic 「当前」 when ASR is the mic side current.
+      const existing = title.querySelector(".mcp-state");
+      if (existing) existing.replaceWith(badge);
+      else title.append(badge);
+    }
     const actions = document.createElement("div");
     actions.className = "mcp-actions";
     const hover = document.createElement("div");
@@ -500,6 +605,19 @@ export function attachModelsLibrary(
       await persist({ ...cur, models, currentSearchModelId: chosen.id });
       return;
     }
+    if (modelKindOf(chosen) === "asr") {
+      // Mic side current. Also becomes the chat model when used from the list (upload ASR).
+      await persist({
+        ...cur,
+        models,
+        currentAsrModelId: chosen.id,
+        currentModelId: chosen.id,
+        baseUrl: chosen.baseUrl,
+        model: chosen.model,
+        apiKey: chosen.apiKey,
+      });
+      return;
+    }
     await persist({
       ...cur,
       models,
@@ -524,6 +642,7 @@ export function attachModelsLibrary(
       model: chosen?.model ?? "",
       apiKey: chosen?.apiKey ?? "",
       currentSearchModelId: inUseId(searchModelsOf(models), cur.currentSearchModelId),
+      currentAsrModelId: inUseId(asrModelsOf(models), cur.currentAsrModelId),
     });
   }
 
@@ -538,7 +657,8 @@ export function attachModelsLibrary(
 
   button.onclick = () => {
     if (!page.hidden) {
-      closeForm();
+      // Keep an open add/edit form as-is. Closing it here would surprise the user
+      // when they reopen the page and find the draft gone.
       host.onClose();
       return;
     }
@@ -568,6 +688,7 @@ export function attachModelsLibrary(
       let model = modelInput.value.trim();
       let video: VideoModelOptions | undefined;
       let videoByModel: VideoByModel | undefined;
+      let tts: TtsModelOptions | undefined;
       if (kind === "video") {
         stashActiveVideoTab();
         const packed = normalizeVideoByModel(activeVideoModel, videoDraftByModel, videoDraftByModel[activeVideoModel as keyof VideoByModel]);
@@ -575,12 +696,19 @@ export function attachModelsLibrary(
         video = packed.video;
         videoByModel = packed.videoByModel;
       }
+      if (kind === "tts") {
+        tts = readTtsFields();
+        if (!model) model = "seed-tts-2.0";
+      }
+      if (kind === "asr" && !model) model = "bigmodel";
       const apiKey = apiKeyInput.value.trim();
       if (!name) throw new Error("请填写显示名");
-      if (!baseUrl) throw new Error("请填写 Base URL");
+      const speech = kind === "tts" || kind === "asr";
+      if (!speech && !baseUrl) throw new Error("请填写 Base URL");
       // The search API takes no model name, but it cannot work without a key.
       if (kind !== "search" && !model) throw new Error("请填写 Model");
       if (kind === "search" && !apiKey) throw new Error("网搜模型需要填写 API Key");
+      if (speech && !apiKey) throw new Error("语音模型需要填写豆包语音专属 API Key");
       const cur = (await loadConfig()) ?? emptyConfig();
       const models = [...(cur.models ?? [])];
       const id = editing ?? newModelId();
@@ -592,6 +720,7 @@ export function attachModelsLibrary(
         apiKey,
         kind,
         ...(video ? { video, videoByModel } : {}),
+        ...(tts ? { tts } : {}),
       };
       const index = models.findIndex((item) => item.id === id);
       if (index >= 0) models[index] = entry;
@@ -607,6 +736,10 @@ export function attachModelsLibrary(
         model: chosen?.model ?? "",
         apiKey: chosen?.apiKey ?? "",
         currentSearchModelId: inUseId(searchModelsOf(models), cur.currentSearchModelId),
+        currentAsrModelId:
+          kind === "asr"
+            ? inUseId(asrModelsOf(models), cur.currentAsrModelId ?? entry.id)
+            : inUseId(asrModelsOf(models), cur.currentAsrModelId),
       });
       closeForm();
     });
@@ -631,5 +764,9 @@ export function attachModelsLibrary(
 
   return {
     reload: () => reload().catch(showNote),
+    isFormOpen: () => !form.hidden,
+    cancelForm: () => {
+      if (!form.hidden) closeForm();
+    },
   };
 }

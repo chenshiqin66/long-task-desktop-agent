@@ -47,7 +47,20 @@ import {
   buildTaskPanel,
   McpPool,
 } from "@agent/core";
-import type { AgentConfig, ImageAttachment, ImageMime, PermissionDecision, StoredConfig, SubmittedImage, SubmittedVideo, VideoAttachment, VideoMime } from "@agent/core";
+import type {
+  AgentConfig,
+  AudioAttachment,
+  AudioMime,
+  ImageAttachment,
+  ImageMime,
+  PermissionDecision,
+  StoredConfig,
+  SubmittedAudio,
+  SubmittedImage,
+  SubmittedVideo,
+  VideoAttachment,
+  VideoMime,
+} from "@agent/core";
 import { localTargetsExist, openTarget } from "./openTarget.js";
 import { TaskbarAlert } from "./taskbarAlert.js";
 import { registerMcpHandlers } from "./mcpIpc.js";
@@ -59,6 +72,7 @@ import {
   ensureBrowserExplainStore,
 } from "./browserExplain.js";
 import { createMemoryExtractor, registerMemoryHandlers, runtimeMemory } from "./memoryIpc.js";
+import { registerSpeechHandlers } from "./speechIpc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -184,8 +198,10 @@ const EMPTY_STORED_CONFIG: StoredConfig = {
   models: [],
 };
 
+/** Strip trailing separators; on Windows also unify `/` vs `\` so both forms still match. */
 function cleanPath(p: string): string {
-  return p.replace(/[\\/]+$/, "");
+  const unified = process.platform === "win32" ? p.replace(/\//g, "\\") : p;
+  return unified.replace(/[\\/]+$/, "");
 }
 
 async function pickSkillFolder(title: string): Promise<string | null> {
@@ -275,11 +291,24 @@ async function readTaskPanel(workspace: string, sessionId: string) {
 }
 
 async function assertKnownWorkspace(raw: string): Promise<string> {
-  if (typeof raw !== "string" || !raw.trim()) throw new Error("Invalid workspace");
+  if (typeof raw !== "string" || !raw.trim()) throw new Error("工作区路径无效");
+  const asked = cleanPath(raw.trim());
   const stored = await loadStoredConfig();
-  const match = workspaceList(stored).find((p) => samePath(p, raw));
-  if (!match) throw new Error("Unknown workspace");
-  await access(match);
+  const known = workspaceList(stored);
+  const match = known.find((p) => samePath(p, asked));
+  if (!match) {
+    // Sidebar shows folder labels; this check is against config.json workspacePaths only.
+    console.warn("[workspace] not registered", { asked, known });
+    throw new Error(
+      `工作区未登记或路径不一致：${asked}。请从侧栏重新点选，或移除后重新加入`,
+    );
+  }
+  try {
+    await access(match);
+  } catch {
+    console.warn("[workspace] missing on disk", { path: match });
+    throw new Error(`工作区文件夹已不存在或无法访问：${match}`);
+  }
   return match;
 }
 
@@ -434,6 +463,45 @@ function normalizeSubmittedVideos(raw: unknown): SubmittedVideo[] | undefined {
   });
 }
 
+const AUDIO_MIMES = new Set<AudioMime>([
+  "audio/mpeg",
+  "audio/wav",
+  "audio/webm",
+  "audio/mp4",
+  "audio/ogg",
+]);
+
+function normalizeReusedAudios(raw: unknown): AudioAttachment[] {
+  if (!Array.isArray(raw)) throw new Error("Invalid audios");
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Invalid audio");
+    const mime = (item as { mime?: unknown }).mime;
+    const id = (item as { id?: unknown }).id;
+    const path = (item as { path?: unknown }).path;
+    if (typeof mime !== "string" || !AUDIO_MIMES.has(mime as AudioMime)) {
+      throw new Error("Unsupported audio type");
+    }
+    if (typeof id !== "string" || !id.length) throw new Error("Invalid audio");
+    if (typeof path !== "string" || !path.length) throw new Error("Invalid audio");
+    return { id, mime: mime as AudioMime, path };
+  });
+}
+
+function normalizeSubmittedAudios(raw: unknown): SubmittedAudio[] | undefined {
+  if (raw == null) return undefined;
+  if (!Array.isArray(raw)) throw new Error("Invalid audios");
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Invalid audio");
+    const mime = (item as { mime?: unknown }).mime;
+    const base64 = (item as { base64?: unknown }).base64;
+    if (typeof mime !== "string" || !AUDIO_MIMES.has(mime as AudioMime)) {
+      throw new Error("Unsupported audio type");
+    }
+    if (typeof base64 !== "string" || !base64.length) throw new Error("Invalid audio");
+    return { mime: mime as AudioMime, base64 };
+  });
+}
+
 async function ensureExplainRuntime(workspace: string): Promise<ExplainRuntime> {
   const config = await readExplainAgentConfig();
   const key = `${workspace}\0${agentConfigKey(config)}\0${config.kind}`;
@@ -571,6 +639,10 @@ app.whenReady().then(async () => {
       const stored = (await loadStoredConfig()) ?? { ...EMPTY_STORED_CONFIG };
       await saveStoredConfig({ ...stored, autoMemory: on });
     },
+  });
+  registerSpeechHandlers(ipcMain, async () => {
+    const stored = await loadStoredConfig();
+    return stored ? normalizeStoredConfig(stored) : null;
   });
   mcpPool.onStatus((snapshot) => {
     if (!win?.isDestroyed()) win?.webContents.send("agent:mcpStatus", snapshot);
@@ -723,6 +795,15 @@ app.whenReady().then(async () => {
     },
   );
   ipcMain.handle(
+    "agent:readWorkspaceAudio",
+    async (_e, raw: string, sessionId: string, relativePath: string) => {
+      const path = await assertKnownWorkspace(raw);
+      assertValidSessionId(sessionId);
+      if (typeof relativePath !== "string") throw new Error("Invalid audio");
+      return new SessionStore(path).readAudioDataUrl(sessionId, relativePath);
+    },
+  );
+  ipcMain.handle(
     "agent:renameWorkspaceSession",
     async (
       _e,
@@ -871,7 +952,15 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle(
     "agent:submit",
-    async (_e, sessionId: string, text: string, images?: unknown, videos?: unknown, workspaceRaw?: unknown) => {
+    async (
+      _e,
+      sessionId: string,
+      text: string,
+      images?: unknown,
+      videos?: unknown,
+      workspaceRaw?: unknown,
+      audios?: unknown,
+    ) => {
       assertValidSessionId(sessionId);
       const workspace =
         typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
@@ -884,12 +973,21 @@ app.whenReady().then(async () => {
         normalizeSubmittedImages(images),
         await currentConfigKey(),
         normalizeSubmittedVideos(videos),
+        normalizeSubmittedAudios(audios),
       );
     },
   );
   ipcMain.handle(
     "agent:replay",
-    async (_e, sessionId: string, text: string, images?: unknown, videos?: unknown, workspaceRaw?: unknown) => {
+    async (
+      _e,
+      sessionId: string,
+      text: string,
+      images?: unknown,
+      videos?: unknown,
+      workspaceRaw?: unknown,
+      audios?: unknown,
+    ) => {
       assertValidSessionId(sessionId);
       const workspace =
         typeof workspaceRaw === "string" ? await assertKnownWorkspace(workspaceRaw) : workspacePath;
@@ -903,6 +1001,7 @@ app.whenReady().then(async () => {
         normalizeReusedImages(images ?? []),
         await currentConfigKey(),
         normalizeReusedVideos(videos ?? []),
+        normalizeReusedAudios(audios ?? []),
       );
     },
   );
@@ -931,6 +1030,15 @@ app.whenReady().then(async () => {
       if (typeof relativePath !== "string") throw new Error("Invalid video path");
       if (!workspacePath) throw new Error("No workspace selected");
       return new SessionStore(workspacePath).readVideoDataUrl(sessionId, relativePath);
+    },
+  );
+  ipcMain.handle(
+    "agent:readSessionAudio",
+    async (_e, sessionId: string, relativePath: string) => {
+      assertValidSessionId(sessionId);
+      if (typeof relativePath !== "string") throw new Error("Invalid audio path");
+      if (!workspacePath) throw new Error("No workspace selected");
+      return new SessionStore(workspacePath).readAudioDataUrl(sessionId, relativePath);
     },
   );
   ipcMain.handle("agent:cancel", async (_e, sessionId?: unknown, workspaceRaw?: unknown) => {

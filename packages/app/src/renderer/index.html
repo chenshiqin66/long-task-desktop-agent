@@ -211,7 +211,8 @@
                   <option value="text">生文</option>
                   <option value="image">生图</option>
                   <option value="video">生视频</option>
-                  <option value="audio">生音</option>
+                  <option value="tts">语音合成</option>
+                  <option value="asr">语音识别</option>
                   <option value="search">网搜</option>
                 </select>
               </label>
@@ -224,6 +225,23 @@
               <p id="model-video-baseurl-hint" class="models-intro" hidden>
                 生视频走派欧云 MiniMax H3 异步协议。Base URL 填 https://api.ppio.com（勿带 /v1）。
               </p>
+              <p id="model-speech-baseurl-hint" class="models-intro" hidden>
+                语音合成 / 识别实际请求 openspeech.bytedance.com（Resource-Id：TTS 为 seed-tts-2.0，ASR 为 volc.seedasr.sauc.duration）。方舟 Agent Plan 的 ark…/api/plan/v3 只负责开通计费，保存时可作为占位，运行时会忽略该地址。请填写豆包语音专属 API Key（X-Api-Key），不要用方舟 Bearer。
+              </p>
+              <div id="model-tts-options" class="model-tts-options" hidden>
+                <label class="field">音色 speaker
+                  <input id="model-tts-speaker" type="text" autocomplete="off" spellcheck="false" placeholder="zh_female_vv_uranus_bigtts" />
+                </label>
+                <label class="field">格式
+                  <select id="model-tts-format">
+                    <option value="mp3">mp3</option>
+                    <option value="wav">wav</option>
+                  </select>
+                </label>
+                <label class="field">采样率
+                  <input id="model-tts-sample-rate" type="number" min="8000" step="1000" value="24000" />
+                </label>
+              </div>
               <label class="field" id="model-model-field">Model
                 <input id="model-model" type="text" autocomplete="off" spellcheck="false" />
               </label>
@@ -292,7 +310,7 @@
               </div>
               <div class="composer-actions">
                 <div class="composer-tools">
-                <button type="button" id="btn-image" class="btn-image" aria-label="添加图片" disabled>
+                <button type="button" id="btn-image" class="btn-image" aria-label="上传图片" data-tip="上传图片" disabled>
                   <svg viewBox="0 0 16 16" aria-hidden="true">
                     <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
                     <circle cx="5.5" cy="6" r="1.1" fill="currentColor" />
@@ -300,13 +318,27 @@
                   </svg>
                 </button>
                 <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
-                <button type="button" id="btn-video" class="btn-image" aria-label="添加视频" disabled>
+                <button type="button" id="btn-video" class="btn-image" aria-label="上传视频" data-tip="上传视频" disabled>
                   <svg viewBox="0 0 16 16" aria-hidden="true">
                     <rect x="1.5" y="3.5" width="9.5" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
                     <path d="M11 6.5 L14.5 4.5 L14.5 11.5 L11 9.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
                   </svg>
                 </button>
                 <input id="video-input" type="file" accept="video/mp4,video/webm,video/quicktime" hidden />
+                <button type="button" id="btn-audio" class="btn-image" aria-label="上传音频" data-tip="上传音频" disabled>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M4 6.5 L4 9.5 L7 9.5 L10.5 12.5 L10.5 3.5 L7 6.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                    <path d="M12 5.5 A2.5 2.5 0 0 1 12 10.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                  </svg>
+                </button>
+                <input id="audio-input" type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/wave,audio/ogg,.mp3,.wav,.ogg" hidden />
+                <button type="button" id="btn-mic" class="btn-image" aria-label="语音输入" data-tip="语音输入" disabled aria-pressed="false">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="6" y="1.5" width="4" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" />
+                    <path d="M3.5 7.5 A4.5 4.5 0 0 0 12.5 7.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                    <path d="M8 12 L8 14.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                  </svg>
+                </button>
                 <button type="button" id="btn-tasks" class="btn-tasks" hidden aria-expanded="false" aria-controls="task-panel">
                   任务<span id="task-count" class="task-count"></span>
                 </button>
@@ -320,6 +352,7 @@
                 <button type="button" id="btn-send" class="btn btn-accent btn-send-icon" disabled aria-label="发送已禁用"></button>
                 </div>
               </div>
+              <div id="app-toast" class="app-toast" hidden role="status" aria-live="polite"></div>
             </div>
           </footer>
         </div>

@@ -37,7 +37,7 @@ import { mountFavoriteFolders, mountMenuToggle, mountWorkbench, mountWorkbenchNa
 import { mountBrowser } from "./browserView.js";
 import { mountBrowserExplain, type BrowserExplain } from "./browserExplain.js";
 import { EXPLAIN_DRAG_MIME } from "./explainDrag.js";
-import { appendMemorySaved, mountMemoryPage } from "./memory.js";
+import { appendMemorySaved, mountMemoryPage, type MemoryTab } from "./memory.js";
 import {
   plainError,
   type MemoryActionResult,
@@ -102,6 +102,7 @@ declare global {
           tool_call_arguments?: string;
           images?: Array<{ id?: string; mime?: string; path: string }>;
           videos?: Array<{ id?: string; mime?: string; path: string }>;
+          audios?: Array<{ id?: string; mime?: string; path: string }>;
           created_at?: string;
         }>
       >;
@@ -121,6 +122,7 @@ declare global {
       }>>;
       readWorkspaceImage(path: string, sessionId: string, relativePath: string): Promise<string>;
       readWorkspaceVideo(path: string, sessionId: string, relativePath: string): Promise<string>;
+      readWorkspaceAudio(path: string, sessionId: string, relativePath: string): Promise<string>;
       renameWorkspaceSession(
         path: string,
         sessionId: string,
@@ -148,6 +150,7 @@ declare global {
           tool_call_arguments?: string;
           images?: Array<{ id?: string; mime?: string; path: string }>;
           videos?: Array<{ id?: string; mime?: string; path: string }>;
+          audios?: Array<{ id?: string; mime?: string; path: string }>;
           created_at?: string;
         }>
       >;
@@ -175,6 +178,7 @@ declare global {
         images?: Array<{ mime: string; base64: string }>,
         videos?: Array<{ mime: string; base64: string }>,
         workspace?: string,
+        audios?: Array<{ mime: string; base64: string }>,
       ): Promise<void>;
       replay(
         sessionId: string,
@@ -182,7 +186,17 @@ declare global {
         images: Array<{ id: string; mime: string; path: string }>,
         videos?: Array<{ id: string; mime: string; path: string }>,
         workspace?: string,
+        audios?: Array<{ id: string; mime: string; path: string }>,
       ): Promise<void>;
+      readSessionAudio(sessionId: string, relativePath: string): Promise<string>;
+      readWorkspaceAudio(path: string, sessionId: string, relativePath: string): Promise<string>;
+      asrMicStart(): Promise<{ ok: true }>;
+      asrMicChunk(pcm: ArrayBuffer | Uint8Array): Promise<void>;
+      asrMicStop(): Promise<void>;
+      onAsrPartial(cb: (text: string) => void): () => void;
+      onAsrFinal(cb: (text: string) => void): () => void;
+      onAsrError(cb: (message: string) => void): () => void;
+      onAsrClosed(cb: () => void): () => void;
       watchSession(sessionId: string | null, workspace?: string): Promise<void>;
       listSkills(): Promise<Array<{ name: string; description: string; enabled: boolean }>>;
       skillTokens(text: string): Promise<string[]>;
@@ -304,17 +318,21 @@ declare global {
 const messagesEl = document.getElementById("messages")!;
 const treesEl = document.getElementById("workspace-trees")!;
 const statusEl = document.getElementById("status")!;
+const toastEl = document.getElementById("app-toast")!;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
 const composerLockNote = document.getElementById("composer-lock-note") as HTMLElement;
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnImage = document.getElementById("btn-image") as HTMLButtonElement;
 const btnVideo = document.getElementById("btn-video") as HTMLButtonElement;
+const btnAudio = document.getElementById("btn-audio") as HTMLButtonElement;
+const btnMic = document.getElementById("btn-mic") as HTMLButtonElement;
 const btnTasks = document.getElementById("btn-tasks") as HTMLButtonElement;
 const taskCountEl = document.getElementById("task-count")!;
 const taskPanelEl = document.getElementById("task-panel")!;
 const imageInput = document.getElementById("image-input") as HTMLInputElement;
 const videoInput = document.getElementById("video-input") as HTMLInputElement;
+const audioInput = document.getElementById("audio-input") as HTMLInputElement;
 const composerEl = document.getElementById("composer")!;
 const composerImages = document.getElementById("composer-images")!;
 const mainTitle = document.getElementById("main-title")!;
@@ -353,6 +371,7 @@ const memoryPage = mountMemoryPage(
   {
     workspace: () => activeWorkspace,
     knownWorkspaces: () => workspacePaths,
+    workspaceLabel,
     openSession: (workspace, sessionId) => openMemorySource(workspace, sessionId),
   },
 );
@@ -452,16 +471,35 @@ let activeWorkspace: string | null = null;
 let viewWorkspace: string | null = null;
 const workspaceExpanded = new Map<string, boolean>();
 const MAX_PENDING_IMAGES = 4;
+/** Raised when the composer model is 生视频 · 参考素材 (MiniMax r2va caps). */
+const MAX_PENDING_IMAGES_VIDEO_REF = 9;
 const MAX_PENDING_VIDEOS = 1;
+const MAX_PENDING_VIDEOS_VIDEO_REF = 3;
+const MAX_PENDING_AUDIOS = 1;
+const MAX_PENDING_AUDIOS_VIDEO_REF = 3;
 const MAX_IMAGE_EDGE = 1600;
 const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 type PendingImage = { previewUrl: string; mime: "image/png" | "image/jpeg"; base64: string };
 type PendingVideo = { previewUrl: string; mime: "video/mp4" | "video/webm" | "video/quicktime"; base64: string };
-type ComposerDraft = { text: string; images: PendingImage[]; videos: PendingVideo[] };
+type PendingAudio = {
+  previewUrl: string;
+  mime: "audio/mpeg" | "audio/wav" | "audio/webm" | "audio/mp4" | "audio/ogg";
+  base64: string;
+};
+type ComposerDraft = { text: string; images: PendingImage[]; videos: PendingVideo[]; audios: PendingAudio[] };
 /** Folds the main box to one row until it is used. Set once the box is wired up; see below. */
 let composerCollapse: ComposerCollapse | null = null;
 let pendingImages: PendingImage[] = [];
 let pendingVideos: PendingVideo[] = [];
+let pendingAudios: PendingAudio[] = [];
+let hasAsrModel = false;
+let micListening = false;
+let micStream: MediaStream | null = null;
+let micAudioCtx: AudioContext | null = null;
+let micProcessor: ScriptProcessorNode | null = null;
+let micBaseText = "";
+let unsubAsr: Array<() => void> = [];
 /** Drafts belong to one page: the blank「新建会话」page, or one session. Not the global box. */
 const composerDrafts = new Map<string, ComposerDraft>();
 /** One rendered transcript per opened session. Switching reattaches it instead of parsing again. */
@@ -474,7 +512,7 @@ let statusIsRun = false;
 /**
  * The main agent is working and not waiting for you: the composer is folded to one row and its
  * placeholder carries the phase ("思考中……"), so the status line above it stays hidden.
- * Asking (`ask_user`) opens the composer again.
+ * Asking (`ask_user`) opens it again; stopping unfolds to the normal placeholder (still disabled).
  */
 let composerThinking = false;
 const thinkingHint = createThinkingHint(inputEl);
@@ -505,6 +543,7 @@ type RunPaint = {
   nestedTails: Map<string, HTMLElement>;
   generatedImages?: Array<{ id?: string; mime?: string; path: string }>;
   generatedVideos?: Array<{ id?: string; mime?: string; path: string }>;
+  generatedAudios?: Array<{ id?: string; mime?: string; path: string }>;
   generatedMessageId?: string;
   generatedFill?: Promise<void>;
 };
@@ -895,14 +934,14 @@ function closeMemoryPage(): void {
 }
 
 /** From the 已记住 line, or the sidebar 记忆 button. */
-function openMemoryPage(): void {
+function openMemoryPage(tab?: MemoryTab): void {
   clearSkillsChrome();
   clearMcpChrome();
   clearModelsChrome();
   memoryPageOpen = true;
   memoryPageEl.hidden = false;
   markLibraryButton(btnMemory);
-  void memoryPage.open();
+  void memoryPage.open(tab ? { tab } : undefined);
 }
 
 function closeModelsPage(): void {
@@ -1460,10 +1499,14 @@ const PHASE_LABEL: Record<string, string> = {
   awaiting_user: "等你回答…",
   generating_image: "正在生成图片…",
   generating_video: "正在生成视频…",
+  generating_speech: "正在合成语音…",
+  transcribing: "正在转写音频…",
 };
 
+/** Electron wraps thrown errors as `Error invoking remote method '…': AgentError: …`. */
 function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw.replace(/^Error invoking remote method '[^']+': (?:Error|AgentError):\s*/, "");
 }
 
 function setStatus(text: string, busy = false, source: "page" | "run" = "page"): void {
@@ -1493,14 +1536,120 @@ function syncHomeBar(): void {
   mainBar.hidden = home;
 }
 
+function isWorkspaceRegistryFailure(err: unknown): boolean {
+  const message = errText(err);
+  return (
+    message.includes("Unknown workspace") ||
+    message.includes("Invalid workspace") ||
+    message.includes("No workspace selected") ||
+    message.includes("工作区未登记") ||
+    message.includes("工作区路径无效") ||
+    message.includes("工作区文件夹已不存在") ||
+    message.includes("还没有工作区")
+  );
+}
+
 function showStatusError(err: unknown): void {
+  if (isWorkspaceRegistryFailure(err)) {
+    showWorkspaceHint(err);
+    return;
+  }
   setStatus(errText(err), true);
 }
 
 function showChatError(err: unknown): void {
+  if (isWorkspaceRegistryFailure(err)) {
+    showWorkspaceHint(err);
+    return;
+  }
   const msg = errText(err);
   setStatus(msg, true);
   appendMessage(messagesEl, "error", msg);
+}
+
+let toastTimer = 0;
+let workspaceResync: Promise<void> | null = null;
+let workspaceResyncing = false;
+
+/** Rigid preflight hints: toast only — never the transcript, status strip, or messages.jsonl. */
+function showToast(text: string, ms = 1000): void {
+  const msg = text.trim();
+  if (!msg) return;
+  toastEl.textContent = msg;
+  toastEl.hidden = false;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    if (toastEl.textContent === msg) {
+      toastEl.hidden = true;
+      toastEl.textContent = "";
+    }
+  }, ms);
+}
+
+function shakeComposer(): void {
+  composerEl.classList.remove("is-shaking");
+  // Restart the keyframes when the same hint fires again.
+  void composerEl.offsetWidth;
+  composerEl.classList.add("is-shaking");
+  const clear = () => composerEl.classList.remove("is-shaking");
+  composerEl.addEventListener("animationend", clear, { once: true });
+}
+
+function showPreflightHint(err: unknown): void {
+  showToast(errText(err), 1000);
+  shakeComposer();
+}
+
+/** Sidebar/config out of sync: toast + pull workspaces from disk (no sticky status / chat row). */
+function showWorkspaceHint(err: unknown): void {
+  const msg = errText(err);
+  setStatus("", false);
+  console.warn("[workspace]", msg);
+  showToast(msg, 2000);
+  if (workspaceResyncing) return;
+  void resyncWorkspacesFromStore();
+}
+
+async function resyncWorkspacesFromStore(): Promise<void> {
+  if (!window.agent?.restoreWorkspace) return;
+  if (workspaceResync) return workspaceResync;
+  workspaceResyncing = true;
+  workspaceResync = (async () => {
+    try {
+      const restored = await window.agent.restoreWorkspace();
+      workspacePaths = restored?.paths ?? [];
+      workspaceLabels = restored?.labels ?? {};
+      rememberWorkspaceFold(workspacePaths, restored?.collapsed ?? []);
+      const nextActive = restored?.active ?? null;
+      const activeOk =
+        Boolean(activeWorkspace) &&
+        workspacePaths.some((path) => sameWorkspace(path, activeWorkspace));
+      if (!activeOk) {
+        activeWorkspace = nextActive;
+        hasWorkspace = Boolean(activeWorkspace);
+      }
+      const viewOk =
+        Boolean(viewWorkspace) &&
+        workspacePaths.some((path) => sameWorkspace(path, viewWorkspace));
+      if (!viewOk) {
+        currentSessionId = null;
+        currentSessionTitle = "";
+        viewWorkspace = activeWorkspace;
+        messagesEl.innerHTML = "";
+        setFilterState(messagesEl, false);
+        hideStoreDock();
+        syncEmptyState();
+      }
+      await refreshSessions();
+      updateChrome();
+    } catch (err) {
+      setStatus(errText(err), true);
+    } finally {
+      workspaceResyncing = false;
+      workspaceResync = null;
+    }
+  })();
+  return workspaceResync;
 }
 
 function clearOpenTools(run: RunPaint | null = drawing): void {
@@ -1583,7 +1732,9 @@ function historyToolTitle(name: string, argsJson?: string): string {
 
 function sameWorkspace(a: string | null, b: string | null): boolean {
   if (!a || !b) return false;
-  return a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
+  const norm = (p: string) =>
+    p.replace(/\//g, "\\").replace(/[\\/]+$/, "").toLowerCase();
+  return norm(a) === norm(b);
 }
 
 function workspaceLabel(path: string): string {
@@ -1603,9 +1754,18 @@ function updateChrome(): void {
   const running = Boolean(run?.gate.isRunning);
   const asking = Boolean(run?.pendingAsk);
   const wakeHere = Boolean(run?.wakeAcceptsInput) && !asking;
-  const wakeDraft = wakeHere && (inputEl.value.trim().length > 0 || pendingImages.length > 0 || pendingVideos.length > 0);
+  const wakeDraft =
+    wakeHere &&
+    (inputEl.value.trim().length > 0 ||
+      pendingImages.length > 0 ||
+      pendingVideos.length > 0 ||
+      pendingAudios.length > 0);
   const canCompose = hasWorkspace && !asking && !creatingSession && (!running || wakeHere);
-  const hasDraft = inputEl.value.trim().length > 0 || pendingImages.length > 0 || pendingVideos.length > 0;
+  const hasDraft =
+    inputEl.value.trim().length > 0 ||
+    pendingImages.length > 0 ||
+    pendingVideos.length > 0 ||
+    pendingAudios.length > 0;
   // Stop belongs to this session. Another session's turn does not lock this box.
   const stopHere = running && !asking && !wakeDraft;
   const stopping = stopHere && Boolean(run?.stopRequested);
@@ -1614,12 +1774,13 @@ function updateChrome(): void {
   btnNew.disabled = !hasWorkspace || creatingSession;
   // Sessions are created in the active workspace; say which one, so 新建 never lands somewhere unexpected.
   btnNew.title = activeWorkspace ? `在「${workspaceLabel(activeWorkspace)}」新建会话` : "请先选择工作区";
+  // Still disabled while stopping; only the fold/placeholder opens so it feels like wrapping up.
   inputEl.disabled = creatingSession || (running && !asking && !wakeHere);
   composerEl.classList.remove("is-locked");
   composerEl.classList.remove("has-draft");
   composerLockNote.hidden = true;
-  // Folded while the agent works; open again for ask_user, when a wake-up turn takes input, and when idle.
-  composerThinking = running && !asking && !wakeHere;
+  // Folded while the agent works; open again for ask_user, wake input, idle — and while stopping (收尾).
+  composerThinking = running && !asking && !wakeHere && !stopping;
   composerEl.classList.toggle("is-thinking", composerThinking);
   if (composerThinking) {
     thinkingHint.show(thinkingLabel(run?.liveStatus));
@@ -1633,11 +1794,15 @@ function updateChrome(): void {
       ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
       : "向CSQ-Agent发送消息...";
   }
-  if (running && run?.liveStatus) {
+  if (running && run?.liveStatus && !stopping) {
     setStatus(run.liveStatus, true, "run");
   }
   btnImage.disabled = !canCompose;
   btnVideo.disabled = !canCompose;
+  btnAudio.disabled = !canCompose;
+  btnMic.disabled = !canCompose || !hasAsrModel;
+  btnMic.classList.toggle("is-listening", micListening);
+  btnMic.setAttribute("aria-pressed", micListening ? "true" : "false");
   syncImageRemoveLock();
   syncLiveDock();
   syncTaskChrome();
@@ -1695,11 +1860,11 @@ function currentComposerKey(): string {
 function rememberComposer(): void {
   const key = currentComposerKey();
   const text = inputEl.value;
-  if (!text && pendingImages.length === 0 && pendingVideos.length === 0) {
+  if (!text && pendingImages.length === 0 && pendingVideos.length === 0 && pendingAudios.length === 0) {
     composerDrafts.delete(key);
     return;
   }
-  composerDrafts.set(key, { text, images: pendingImages, videos: pendingVideos });
+  composerDrafts.set(key, { text, images: pendingImages, videos: pendingVideos, audios: pendingAudios });
 }
 
 function restoreComposer(): void {
@@ -1707,6 +1872,7 @@ function restoreComposer(): void {
   inputEl.value = saved?.text ?? "";
   pendingImages = saved?.images ?? [];
   pendingVideos = saved?.videos ?? [];
+  pendingAudios = saved?.audios ?? [];
   renderPendingImages();
 }
 
@@ -1716,8 +1882,10 @@ function forgetComposer(workspace: string | null, sessionId: string | null): voi
   if (!draft) return;
   if (pendingImages === draft.images) pendingImages = [];
   if (pendingVideos === draft.videos) pendingVideos = [];
+  if (pendingAudios === draft.audios) pendingAudios = [];
   for (const image of draft.images) URL.revokeObjectURL(image.previewUrl);
   for (const video of draft.videos) URL.revokeObjectURL(video.previewUrl);
+  for (const audio of draft.audios ?? []) URL.revokeObjectURL(audio.previewUrl);
   composerDrafts.delete(key);
 }
 
@@ -2272,12 +2440,14 @@ async function refreshSessions(): Promise<void> {
   if (epoch !== sessionListEpoch) return;
   document.querySelectorAll(".session-menu-pop").forEach((el) => el.remove());
   treesEl.replaceChildren();
+  let workspaceRegistryErr: unknown = null;
   for (const item of listed) {
     const workspace = item.workspace;
     const listEl = mountWorkspaceTree(workspace, item.open);
     if (!item.open) continue;
     if (item.err) {
-      showStatusError(item.err);
+      if (isWorkspaceRegistryFailure(item.err)) workspaceRegistryErr = item.err;
+      else showStatusError(item.err);
       continue;
     }
     for (const s of item.sessions) {
@@ -2438,6 +2608,7 @@ async function refreshSessions(): Promise<void> {
       listEl.appendChild(li);
     }
   }
+  if (workspaceRegistryErr) showWorkspaceHint(workspaceRegistryErr);
 }
 
 async function showSession(workspace: string, sessionId: string, title: string): Promise<void> {
@@ -2578,11 +2749,25 @@ async function loadCurrent(): Promise<void> {
       renderEmptyState(paint(), "idle");
       return;
     }
-    let openQuestion: { body: HTMLElement; text: string; images: ReusedImage[]; videos: ReusedVideo[] } | null = null;
+    let openQuestion: {
+      body: HTMLElement;
+      text: string;
+      images: ReusedImage[];
+      videos: ReusedVideo[];
+      audios: ReusedAudio[];
+    } | null = null;
     const liveHere = Boolean(live?.gate.isRunning);
     const closeUnanswered = () => {
       if (!openQuestion) return;
-      ensureReask(openQuestion.body, openQuestion.text, openQuestion.images, false, openQuestion.videos);
+      ensureReask(
+        openQuestion.body,
+        openQuestion.text,
+        openQuestion.images,
+        false,
+        openQuestion.videos,
+        false,
+        openQuestion.audios,
+      );
       appendCancelledNotice(paint());
       openQuestion = null;
     };
@@ -2626,29 +2811,41 @@ async function loadCurrent(): Promise<void> {
       } else if (m.role === "assistant") {
         if (isCancelledNotice(m.content)) {
           if (openQuestion) {
-            ensureReask(openQuestion.body, openQuestion.text, openQuestion.images, false, openQuestion.videos);
+            ensureReask(
+              openQuestion.body,
+              openQuestion.text,
+              openQuestion.images,
+              false,
+              openQuestion.videos,
+              false,
+              openQuestion.audios,
+            );
             openQuestion = null;
           }
           const urls = await imageDataUrls(workspace, sessionId, m.images);
           const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
+          const audioUrls = await audioDataUrls(workspace, sessionId, m.audios);
           const body = appendMessage(into, "assistant", m.content, {
             rich: true,
             messageId: m.id,
             at: m.created_at,
             ...(urls.length ? { images: urls } : {}),
             ...(videoUrls.length ? { videos: videoUrls } : {}),
+            ...(audioUrls.length ? { audios: audioUrls } : {}),
           });
           body.closest(".msg")?.classList.add("is-cancelled");
         } else {
           openQuestion = null;
           const urls = await imageDataUrls(workspace, sessionId, m.images);
           const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
+          const audioUrls = await audioDataUrls(workspace, sessionId, m.audios);
           appendMessage(into, "assistant", m.content, {
             rich: true,
             messageId: m.id,
             at: m.created_at,
             ...(urls.length ? { images: urls } : {}),
             ...(videoUrls.length ? { videos: videoUrls } : {}),
+            ...(audioUrls.length ? { audios: audioUrls } : {}),
           });
         }
       } else if (m.role === "user" && m.name === "task-notification") {
@@ -2659,24 +2856,29 @@ async function loadCurrent(): Promise<void> {
         if (openQuestion) closeUnanswered();
         const urls = await imageDataUrls(workspace, sessionId, m.images);
         const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
+        const audioUrls = await audioDataUrls(workspace, sessionId, m.audios);
         openQuestion = {
           body: appendMessage(paint(), "user", m.content, {
             ...(urls.length ? { images: urls } : {}),
             ...(videoUrls.length ? { videos: videoUrls } : {}),
+            ...(audioUrls.length ? { audios: audioUrls } : {}),
             ...(m.id ? { messageId: m.id } : {}),
             ...(m.created_at ? { at: m.created_at } : {}),
           }),
           text: m.content,
           images: reusedImages(m.images),
           videos: reusedVideos(m.videos),
+          audios: reusedAudios(m.audios),
         };
       } else {
         openQuestion = null;
         const urls = await imageDataUrls(workspace, sessionId, m.images);
         const videoUrls = await videoDataUrls(workspace, sessionId, m.videos);
+        const audioUrls = await audioDataUrls(workspace, sessionId, m.audios);
         appendMessage(paint(), m.role, m.content, {
           ...(urls.length ? { images: urls } : {}),
           ...(videoUrls.length ? { videos: videoUrls } : {}),
+          ...(audioUrls.length ? { audios: audioUrls } : {}),
         });
       }
     }
@@ -2749,12 +2951,22 @@ btnNew.onclick = () => {
 };
 
 attachSkillLibrary(btnSkills, skillsPage, { onOpen: openSkillsPage, onClose: closeSkillsPage });
-attachMcpLibrary(btnMcp, mcpPage, { onOpen: openMcpPage, onClose: closeMcpPage });
+const mcpApi = attachMcpLibrary(btnMcp, mcpPage, { onOpen: openMcpPage, onClose: closeMcpPage });
 const modelsApi = attachModelsLibrary(btnConfig, modelsPage, composerModel, composerModelEmpty, {
   onOpen: openModelsPage,
   onClose: closeModelsPage,
 });
 attachSkillMenu(inputEl, skillMenu);
+
+function libraryFormOpen(): boolean {
+  return mcpApi.isFormOpen() || modelsApi.isFormOpen() || memoryPage.isFormOpen();
+}
+
+function cancelLibraryForm(): void {
+  if (mcpApi.isFormOpen()) mcpApi.cancelForm();
+  else if (modelsApi.isFormOpen()) modelsApi.cancelForm();
+  else if (memoryPage.isFormOpen()) memoryPage.cancelForm();
+}
 
 btnMemory.addEventListener("click", () => {
   if (memoryPageOpen) closeMemoryPage();
@@ -2805,9 +3017,32 @@ async function videoDataUrls(
   return urls;
 }
 
+async function audioDataUrls(
+  workspace: string | null,
+  sessionId: string,
+  audios: Array<{ path: string }> | undefined,
+): Promise<string[]> {
+  if (!audios?.length) return [];
+  const foreign = Boolean(workspace && !sameWorkspace(workspace, activeWorkspace));
+  const urls: string[] = [];
+  for (const audio of audios) {
+    try {
+      urls.push(
+        foreign
+          ? await window.agent.readWorkspaceAudio(workspace!, sessionId, audio.path)
+          : await window.agent.readSessionAudio(sessionId, audio.path),
+      );
+    } catch {
+      /* skip a missing file rather than failing the whole transcript */
+    }
+  }
+  return urls;
+}
+
 function renderPendingImages(): void {
   composerImages.innerHTML = "";
-  composerImages.hidden = pendingImages.length === 0 && pendingVideos.length === 0;
+  composerImages.hidden =
+    pendingImages.length === 0 && pendingVideos.length === 0 && pendingAudios.length === 0;
   composerCollapse?.refresh();
   pendingImages.forEach((image, index) => {
     const thumb = document.createElement("div");
@@ -2845,6 +3080,28 @@ function renderPendingImages(): void {
       if (inputEl.disabled) return;
       URL.revokeObjectURL(video.previewUrl);
       pendingVideos.splice(index, 1);
+      renderPendingImages();
+      rememberComposer();
+      updateChrome();
+    };
+    thumb.append(node, remove);
+    composerImages.append(thumb);
+  });
+  pendingAudios.forEach((audio, index) => {
+    const thumb = document.createElement("div");
+    thumb.className = "composer-thumb composer-thumb-audio";
+    const node = document.createElement("audio");
+    node.src = audio.previewUrl;
+    node.controls = true;
+    node.preload = "metadata";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "移除音频");
+    remove.onclick = () => {
+      if (inputEl.disabled) return;
+      URL.revokeObjectURL(audio.previewUrl);
+      pendingAudios.splice(index, 1);
       renderPendingImages();
       rememberComposer();
       updateChrome();
@@ -2903,13 +3160,14 @@ async function addImageFiles(files: File[]): Promise<void> {
     setStatus("只能上传 png、jpeg、webp 或 gif", true);
     return;
   }
-  const room = MAX_PENDING_IMAGES - pendingImages.length;
+  const maxImages = composerMediaCaps().images;
+  const room = maxImages - pendingImages.length;
   if (room <= 0) {
-    setStatus(`一次最多 ${MAX_PENDING_IMAGES} 张图片`, true);
+    setStatus(`一次最多 ${maxImages} 张图片`, true);
     return;
   }
   const batch = accepted.slice(0, room);
-  if (accepted.length > room) setStatus(`一次最多 ${MAX_PENDING_IMAGES} 张图片`, true);
+  if (accepted.length > room) setStatus(`一次最多 ${maxImages} 张图片`, true);
   for (const file of batch) {
     try {
       pendingImages.push(await fileToPendingImage(file));
@@ -2928,29 +3186,195 @@ async function addVideoFiles(files: File[]): Promise<void> {
     setStatus("只能上传 mp4、webm 或 mov", true);
     return;
   }
-  if (pendingVideos.length >= MAX_PENDING_VIDEOS) {
-    setStatus(`一次最多 ${MAX_PENDING_VIDEOS} 个视频`, true);
+  const maxVideos = composerMediaCaps().videos;
+  const room = maxVideos - pendingVideos.length;
+  if (room <= 0) {
+    setStatus(`一次最多 ${maxVideos} 个视频`, true);
     return;
   }
-  const file = accepted[0];
-  if (accepted.length > 1 || pendingVideos.length + accepted.length > MAX_PENDING_VIDEOS) {
-    setStatus(`一次最多 ${MAX_PENDING_VIDEOS} 个视频`, true);
-  }
-  if (file.size > MAX_VIDEO_BYTES) {
-    setStatus("视频不能超过 20 MiB", true);
-    return;
-  }
-  try {
-    pendingVideos.push({
-      previewUrl: URL.createObjectURL(file),
-      mime: file.type as PendingVideo["mime"],
-      base64: await blobToBase64(file),
-    });
-  } catch (err) {
-    showStatusError(err);
+  const batch = accepted.slice(0, room);
+  if (accepted.length > room) setStatus(`一次最多 ${maxVideos} 个视频`, true);
+  for (const file of batch) {
+    if (file.size > MAX_VIDEO_BYTES) {
+      setStatus("视频不能超过 20 MiB", true);
+      continue;
+    }
+    try {
+      pendingVideos.push({
+        previewUrl: URL.createObjectURL(file),
+        mime: file.type as PendingVideo["mime"],
+        base64: await blobToBase64(file),
+      });
+    } catch (err) {
+      showStatusError(err);
+    }
   }
   renderPendingImages();
   rememberComposer();
+  updateChrome();
+}
+
+function audioMimeOf(file: File): PendingAudio["mime"] | null {
+  // Openspeech ASR accepts mp3/wav/ogg (/pcm). webm/m4a are rejected upstream.
+  const type = (file.type || "").toLowerCase();
+  if (type === "audio/mpeg" || type === "audio/mp3") return "audio/mpeg";
+  if (type === "audio/wav" || type === "audio/wave" || type === "audio/x-wav") return "audio/wav";
+  if (type === "audio/ogg" || type === "audio/opus") return "audio/ogg";
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".mp3")) return "audio/mpeg";
+  if (name.endsWith(".wav")) return "audio/wav";
+  if (name.endsWith(".ogg") || name.endsWith(".opus")) return "audio/ogg";
+  return null;
+}
+
+async function addAudioFiles(files: File[]): Promise<void> {
+  const accepted = files.filter((file) => audioMimeOf(file));
+  if (!accepted.length) {
+    setStatus(
+      currentComposerModelKind() === "video"
+        ? "参考音频请上传 mp3、wav 或 ogg"
+        : "语音识别请上传 mp3、wav 或 ogg",
+      true,
+    );
+    return;
+  }
+  const maxAudios = composerMediaCaps().audios;
+  const room = maxAudios - pendingAudios.length;
+  if (room <= 0) {
+    setStatus(`一次最多 ${maxAudios} 段音频`, true);
+    return;
+  }
+  const batch = accepted.slice(0, room);
+  if (accepted.length > room) setStatus(`一次最多 ${maxAudios} 段音频`, true);
+  for (const file of batch) {
+    if (file.size > MAX_AUDIO_BYTES) {
+      setStatus("音频不能超过 25 MiB", true);
+      continue;
+    }
+    const mime = audioMimeOf(file);
+    if (!mime) continue;
+    try {
+      pendingAudios.push({
+        previewUrl: URL.createObjectURL(file),
+        mime,
+        base64: await blobToBase64(file),
+      });
+    } catch (err) {
+      showStatusError(err);
+    }
+  }
+  renderPendingImages();
+  rememberComposer();
+  updateChrome();
+}
+
+function floatTo16BitPcm(input: Float32Array): Int16Array {
+  const out = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]!));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
+async function stopMicDictation(): Promise<void> {
+  micListening = false;
+  try {
+    micProcessor?.disconnect();
+  } catch {
+    /* ignore */
+  }
+  micProcessor = null;
+  try {
+    await micAudioCtx?.close();
+  } catch {
+    /* ignore */
+  }
+  micAudioCtx = null;
+  for (const track of micStream?.getTracks() ?? []) track.stop();
+  micStream = null;
+  for (const off of unsubAsr) off();
+  unsubAsr = [];
+  try {
+    await window.agent.asrMicStop();
+  } catch {
+    /* ignore */
+  }
+  updateChrome();
+}
+
+async function startMicDictation(): Promise<void> {
+  if (micListening) {
+    await stopMicDictation();
+    return;
+  }
+  if (!hasAsrModel) {
+    setStatus("请先在「模型」页添加语音识别模型", true);
+    return;
+  }
+  try {
+    await window.agent.asrMicStart();
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    micAudioCtx = ctx;
+    const source = ctx.createMediaStreamSource(micStream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    micProcessor = processor;
+    micBaseText = inputEl.value;
+    if (micBaseText && !/\s$/.test(micBaseText)) micBaseText += " ";
+    unsubAsr = [
+      window.agent.onAsrPartial((text) => {
+        inputEl.value = micBaseText + text;
+        rememberComposer();
+        updateChrome();
+      }),
+      window.agent.onAsrFinal((text) => {
+        micBaseText = (micBaseText + text).replace(/\s+$/, "") + " ";
+        inputEl.value = micBaseText;
+        rememberComposer();
+        updateChrome();
+      }),
+      window.agent.onAsrError((message) => {
+        showStatusError(new Error(message));
+        void stopMicDictation();
+      }),
+      window.agent.onAsrClosed(() => {
+        void stopMicDictation();
+      }),
+    ];
+    processor.onaudioprocess = (ev) => {
+      const input = ev.inputBuffer.getChannelData(0);
+      const pcm = floatTo16BitPcm(input);
+      void window.agent.asrMicChunk(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
+    };
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    micListening = true;
+    setStatus("正在听写…", true);
+    updateChrome();
+  } catch (err) {
+    await stopMicDictation();
+    showStatusError(err);
+  }
+}
+
+async function refreshAsrAvailability(): Promise<void> {
+  try {
+    const cfg = (await window.agent.getConfig()) as {
+      models?: Array<{ kind?: string }>;
+    } | null;
+    hasAsrModel = Boolean(
+      cfg?.models?.some((entry) => entry.kind === "asr" || entry.kind === "audio"),
+    );
+  } catch {
+    hasAsrModel = false;
+  }
   updateChrome();
 }
 
@@ -2992,16 +3416,16 @@ async function acceptSkillTokens(text: string): Promise<boolean> {
     for (const name of tokens) {
       const skill = byName.get(name);
       if (!skill) {
-        showChatError(new Error(`未知技能 /${name}。如果这是路径，放进反引号里：\`/${name}\``));
+        showPreflightHint(new Error(`未知技能 /${name}。如果这是路径，放进反引号里：\`/${name}\``));
         return false;
       }
       if (!skill.enabled) {
-        showChatError(new Error(`技能 /${name} 已停用`));
+        showPreflightHint(new Error(`技能 /${name} 已停用`));
         return false;
       }
     }
   } catch (err) {
-    showChatError(err);
+    showPreflightHint(err);
     return false;
   }
   return true;
@@ -3012,16 +3436,43 @@ function isSkillSendFailure(err: unknown): boolean {
   return message.includes("未知技能 /") || message.includes("无法读取技能 /") || message.includes("已停用");
 }
 
-/** Send never reached the model: put the draft back and keep one clear error row. */
+/** Send never reached the model: restore the draft; toast only (no transcript / status / jsonl). */
 function isPreflightSendFailure(err: unknown): boolean {
   if (isSkillSendFailure(err)) return true;
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errText(err);
   return (
     message.includes("还没有配置模型") ||
     message.includes("还没有填写 API Key") ||
     message.includes("还没有填写 Base URL") ||
-    message.includes("还没有填写 Model")
+    message.includes("还没有填写 Model") ||
+    message.includes("生图请先输入提示词") ||
+    message.includes("生视频请先输入提示词") ||
+    message.includes("语音合成请先输入文本") ||
+    message.includes("语音识别请先添加一段音频") ||
+    message.includes("语音识别请恰好附一段音频")
   );
+}
+
+function currentComposerModelKind(): string {
+  const option = composerModel.selectedOptions[0];
+  const kind = option?.dataset.kind;
+  return kind || "text";
+}
+
+/** Composer attachment caps: 生视频 uses MiniMax reference limits so 参考素材 can attach multi media. */
+function composerMediaCaps(): { images: number; videos: number; audios: number } {
+  if (currentComposerModelKind() === "video") {
+    return {
+      images: MAX_PENDING_IMAGES_VIDEO_REF,
+      videos: MAX_PENDING_VIDEOS_VIDEO_REF,
+      audios: MAX_PENDING_AUDIOS_VIDEO_REF,
+    };
+  }
+  return {
+    images: MAX_PENDING_IMAGES,
+    videos: MAX_PENDING_VIDEOS,
+    audios: MAX_PENDING_AUDIOS,
+  };
 }
 
 function appendCancelledNotice(container: HTMLElement): void {
@@ -3031,6 +3482,7 @@ function appendCancelledNotice(container: HTMLElement): void {
 
 type ReusedImage = { id: string; mime: string; path: string };
 type ReusedVideo = { id: string; mime: string; path: string };
+type ReusedAudio = { id: string; mime: string; path: string };
 
 function reusedImages(raw: Array<{ id?: string; mime?: string; path: string }> | undefined): ReusedImage[] {
   if (!raw?.length) return [];
@@ -3052,6 +3504,16 @@ function reusedVideos(raw: Array<{ id?: string; mime?: string; path: string }> |
   return out;
 }
 
+function reusedAudios(raw: Array<{ id?: string; mime?: string; path: string }> | undefined): ReusedAudio[] {
+  if (!raw?.length) return [];
+  const out: ReusedAudio[] = [];
+  for (const audio of raw) {
+    if (!audio.id || !audio.mime || !audio.path) continue;
+    out.push({ id: audio.id, mime: audio.mime, path: audio.path });
+  }
+  return out;
+}
+
 function ensureReask(
   body: HTMLElement,
   text: string,
@@ -3059,19 +3521,38 @@ function ensureReask(
   picturesMissing = false,
   videos: ReusedVideo[] = [],
   videosMissing = false,
+  audios: ReusedAudio[] = [],
+  audiosMissing = false,
 ): void {
-  if (!text.trim() && images.length === 0 && !picturesMissing && videos.length === 0 && !videosMissing) return;
+  if (
+    !text.trim() &&
+    images.length === 0 &&
+    !picturesMissing &&
+    videos.length === 0 &&
+    !videosMissing &&
+    audios.length === 0 &&
+    !audiosMissing
+  ) {
+    return;
+  }
   const host = body.parentElement ?? body.closest(".msg");
   if (host?.querySelector(".reask")) return;
   appendReaskButton(body, () => {
-    void reask(text, images, picturesMissing, videos, videosMissing);
+    void reask(text, images, picturesMissing, videos, videosMissing, audios, audiosMissing);
   });
 }
 
-function appendUserQuestion(text: string, images: string[], messageId?: string, videos: string[] = []): HTMLElement {
+function appendUserQuestion(
+  text: string,
+  images: string[],
+  messageId?: string,
+  videos: string[] = [],
+  audios: string[] = [],
+): HTMLElement {
   const body = appendMessage(messagesEl, "user", text, {
     ...(images.length ? { images } : {}),
     ...(videos.length ? { videos } : {}),
+    ...(audios.length ? { audios } : {}),
     ...(messageId ? { messageId } : {}),
     at: new Date().toISOString(),
   });
@@ -3085,6 +3566,8 @@ async function reask(
   picturesMissing = false,
   videos: ReusedVideo[] = [],
   videosMissing = false,
+  audios: ReusedAudio[] = [],
+  audiosMissing = false,
 ): Promise<void> {
   const trimmed = text.trim();
   if (picturesMissing) {
@@ -3095,7 +3578,11 @@ async function reask(
     showChatError(new Error("原来的视频不在记录里，没有重新发送"));
     return;
   }
-  if (!trimmed && images.length === 0 && videos.length === 0) return;
+  if (audiosMissing) {
+    showChatError(new Error("原来的音频不在记录里，没有重新发送"));
+    return;
+  }
+  if (!trimmed && images.length === 0 && videos.length === 0 && audios.length === 0) return;
   const run = pageRun();
   if (creatingSession || run?.gate.isRunning || run?.pendingAsk) {
     setStatus("请先停止当前任务再重新问", true);
@@ -3108,17 +3595,19 @@ async function reask(
   if (!sessionId) return;
   const preview = await imageDataUrls(workspace, sessionId, images);
   const videoPreview = await videoDataUrls(workspace, sessionId, videos);
+  const audioPreview = await audioDataUrls(workspace, sessionId, audios);
   if (messagesEl.querySelector(".empty-state")) messagesEl.innerHTML = "";
   followTail = true;
   releasedRuns.delete(runKeyOf(workspace, sessionId));
   const next = ensureRun(workspace, sessionId);
   drawing = next;
   try {
-    appendUserQuestion(trimmed, preview, undefined, videoPreview);
+    appendUserQuestion(trimmed, preview, undefined, videoPreview, audioPreview);
     resetStreamTarget(appendMessage(messagesEl, "assistant", ""), next);
     clearOpenTools(next);
     next.generatedImages = undefined;
     next.generatedVideos = undefined;
+    next.generatedAudios = undefined;
     next.generatedMessageId = undefined;
     next.generatedFill = undefined;
     next.liveStatus = "运行中…";
@@ -3131,15 +3620,18 @@ async function reask(
   updateChrome();
   void refreshSessions();
   try {
-    await window.agent.replay(sessionId, trimmed, images, videos, workspace);
+    await window.agent.replay(sessionId, trimmed, images, videos, workspace, audios);
   } catch (err) {
     next.gate = idleGate();
     dropRun(workspace, sessionId);
     removeLastTranscriptNodes(messagesEl, 2);
     if (!messagesEl.querySelector(".msg")) renderEmptyState(messagesEl, "idle");
-    showChatError(err);
+    const workspaceGone = isWorkspaceRegistryFailure(err);
+    if (isPreflightSendFailure(err)) showPreflightHint(err);
+    else if (workspaceGone) showWorkspaceHint(err);
+    else showChatError(err);
     updateChrome();
-    void refreshSessions();
+    if (!workspaceGone) void refreshSessions();
   }
 }
 
@@ -3147,8 +3639,10 @@ async function bindReaskAfterCancel(run: RunPaint, body: HTMLElement): Promise<v
   const text = body.textContent ?? "";
   const showedPictures = Boolean(body.parentElement?.querySelector(".msg-images img"));
   const showedVideos = Boolean(body.parentElement?.querySelector(".msg-videos video"));
+  const showedAudios = Boolean(body.parentElement?.querySelector(".msg-audios audio"));
   let images: ReusedImage[] = [];
   let videos: ReusedVideo[] = [];
+  let audios: ReusedAudio[] = [];
   try {
     const msgs = sameWorkspace(run.workspace, activeWorkspace)
       ? await window.agent.loadMessages(run.sessionId)
@@ -3158,10 +3652,12 @@ async function bindReaskAfterCancel(run: RunPaint, body: HTMLElement): Promise<v
     if (last && last.content === text) {
       images = reusedImages(last.images);
       videos = reusedVideos(last.videos);
+      audios = reusedAudios(last.audios);
     }
   } catch {
     images = [];
     videos = [];
+    audios = [];
   }
   ensureReask(
     body,
@@ -3170,6 +3666,8 @@ async function bindReaskAfterCancel(run: RunPaint, body: HTMLElement): Promise<v
     showedPictures && images.length === 0,
     videos,
     showedVideos && videos.length === 0,
+    audios,
+    showedAudios && audios.length === 0,
   );
 }
 
@@ -3184,8 +3682,19 @@ async function sendMessage(): Promise<void> {
   const text = inputEl.value.trim();
   const images = pendingImages.slice();
   const videos = pendingVideos.slice();
-  if (!text && images.length === 0 && videos.length === 0) return;
+  const audios = pendingAudios.slice();
+  if (!text && images.length === 0 && videos.length === 0 && audios.length === 0) return;
+  const modelKind = currentComposerModelKind();
+  if (modelKind === "tts" && !text) {
+    showPreflightHint(new Error("语音合成请先输入文本（当前选的是语音合成，不是识别）"));
+    return;
+  }
+  if (modelKind === "asr" && audios.length === 0) {
+    showPreflightHint(new Error("语音识别请先添加一段音频"));
+    return;
+  }
   if (text && !(await acceptSkillTokens(text))) return;
+  if (micListening) await stopMicDictation();
   const draftKey = currentComposerKey();
   const workspace = viewWorkspace ?? activeWorkspace;
   if (!workspace) return;
@@ -3195,6 +3704,7 @@ async function sendMessage(): Promise<void> {
   composerDrafts.delete(currentComposerKey());
   pendingImages = [];
   pendingVideos = [];
+  pendingAudios = [];
   composerImages.innerHTML = "";
   composerImages.hidden = true;
   inputEl.value = "";
@@ -3206,12 +3716,19 @@ async function sendMessage(): Promise<void> {
   const joiningWake = run.gate.isRunning && run.wakeAcceptsInput;
   drawing = run;
   try {
-    appendUserQuestion(text, images.map((image) => image.previewUrl), undefined, videos.map((video) => video.previewUrl));
+    appendUserQuestion(
+      text,
+      images.map((image) => image.previewUrl),
+      undefined,
+      videos.map((video) => video.previewUrl),
+      audios.map((audio) => audio.previewUrl),
+    );
     if (!joiningWake) {
       resetStreamTarget(appendMessage(messagesEl, "assistant", ""), run);
       clearOpenTools(run);
       run.generatedImages = undefined;
       run.generatedVideos = undefined;
+      run.generatedAudios = undefined;
       run.generatedMessageId = undefined;
       run.generatedFill = undefined;
       run.liveStatus = "运行中…";
@@ -3235,24 +3752,33 @@ async function sendMessage(): Promise<void> {
         ? videos.map((video) => ({ mime: video.mime, base64: video.base64 }))
         : undefined,
       workspace,
+      audios.length
+        ? audios.map((audio) => ({ mime: audio.mime, base64: audio.base64 }))
+        : undefined,
     );
   } catch (err) {
     if (!joiningWake) {
       run.gate = idleGate();
       if (!alreadyHeld) dropRun(workspace, sessionId);
     }
-    if (isPreflightSendFailure(err)) {
+    const workspaceGone = isWorkspaceRegistryFailure(err);
+    if (isPreflightSendFailure(err) || workspaceGone) {
       inputEl.value = text;
       pendingImages = images;
       pendingVideos = videos;
+      pendingAudios = audios;
       renderPendingImages();
       rememberComposer();
       removeLastTranscriptNodes(messagesEl, 2);
       if (!messagesEl.querySelector(".msg")) renderEmptyState(messagesEl, "idle");
+      if (isPreflightSendFailure(err)) showPreflightHint(err);
+      else showWorkspaceHint(err);
+    } else {
+      showChatError(err);
     }
-    showChatError(err);
     updateChrome();
-    void refreshSessions();
+    // showWorkspaceHint already restoreWorkspace + refreshSessions.
+    if (!workspaceGone) void refreshSessions();
   }
 }
 
@@ -3260,15 +3786,16 @@ function requestStop(): void {
   const run = pageRun();
   if (!run?.gate.isRunning || run.stopRequested) return;
   run.stopRequested = true;
+  run.liveStatus = "";
   run.prompt = null;
   run.pendingAsk = null;
   permissionDock.innerHTML = "";
   permissionDock.hidden = true;
+  setStatus("", false);
   updateChrome();
   void (async () => {
     try {
       await window.agent.cancel(run.sessionId, run.workspace);
-      showRunStatus("已请求停止", run);
     } catch (err) {
       run.stopRequested = false;
       updateChrome();
@@ -3298,7 +3825,13 @@ btnSend.onclick = () => {
     return;
   }
   if (run?.gate.isRunning) {
-    if (run.wakeAcceptsInput && (inputEl.value.trim() || pendingImages.length > 0 || pendingVideos.length > 0)) {
+    if (
+      run.wakeAcceptsInput &&
+      (inputEl.value.trim() ||
+        pendingImages.length > 0 ||
+        pendingVideos.length > 0 ||
+        pendingAudios.length > 0)
+    ) {
       void sendMessage();
       return;
     }
@@ -3333,6 +3866,19 @@ videoInput.onchange = () => {
   if (btnVideo.disabled) return;
   void addVideoFiles(files);
 };
+btnAudio.onclick = () => audioInput.click();
+audioInput.onchange = () => {
+  const files = Array.from(audioInput.files ?? []);
+  audioInput.value = "";
+  if (btnAudio.disabled) return;
+  void addAudioFiles(files);
+};
+btnMic.onclick = () => {
+  void startMicDictation();
+};
+window.addEventListener("agent-models-changed", () => {
+  void refreshAsrAvailability();
+});
 inputEl.addEventListener("paste", (ev) => {
   const files = Array.from(ev.clipboardData?.files ?? []).filter((file) =>
     file.type.startsWith("image/"),
@@ -3463,6 +4009,8 @@ window.addEventListener("keydown", (ev) => {
     workbenchOpen: workbench.isOpen(),
     findOpen: !findBar.hidden || Boolean(explainApi && !explainApi.findBar.hidden),
     taskPanelOpen: taskPanelOpen && !taskPanelEl.hidden,
+    libraryFormOpen: libraryFormOpen(),
+    libraryOpen: libraryOpen(),
     viewingRun: Boolean(pageRun()?.gate.isRunning),
   });
   if (action === "none") return;
@@ -3474,6 +4022,15 @@ window.addEventListener("keydown", (ev) => {
   } else if (action === "close-tasks") {
     taskPanelOpen = false;
     syncTaskChrome();
+  } else if (action === "close-library-form") {
+    // Same as clicking 取消 on the in-page form.
+    cancelLibraryForm();
+  } else if (action === "close-library") {
+    // Same outcome as clicking the pale-green library button again.
+    if (skillsPageOpen) closeSkillsPage();
+    else if (mcpPageOpen) closeMcpPage();
+    else if (memoryPageOpen) closeMemoryPage();
+    else if (modelsPageOpen) closeModelsPage();
   } else {
     requestStop();
   }
@@ -3784,7 +4341,7 @@ function showGeneratingImagePlaceholder(run: RunPaint, host: HTMLElement): void 
   }
   const msg = run.streamingEl?.closest(".msg");
   msg?.classList.add("is-generating-image");
-  msg?.classList.remove("is-generating-video");
+  msg?.classList.remove("is-generating-video", "is-generating-speech");
   if (run.streamingEl) ensureMessageTime(run.streamingEl);
 }
 
@@ -3801,7 +4358,24 @@ function showGeneratingVideoPlaceholder(run: RunPaint, host: HTMLElement): void 
   }
   const msg = run.streamingEl?.closest(".msg");
   msg?.classList.add("is-generating-video");
-  msg?.classList.remove("is-generating-image");
+  msg?.classList.remove("is-generating-image", "is-generating-speech");
+  if (run.streamingEl) ensureMessageTime(run.streamingEl);
+}
+
+function showGeneratingSpeechPlaceholder(run: RunPaint, host: HTMLElement): void {
+  const place = (mutate: () => void) => {
+    if (host === messagesEl) keepTail(mutate);
+    else mutate();
+  };
+  if (!run.streamingEl) {
+    place(() => resetStreamTarget(appendMessage(host, "assistant", "正在合成语音"), run));
+  } else {
+    run.streamingEl.textContent = "正在合成语音";
+    delete run.streamingEl.dataset.rawMd;
+  }
+  const msg = run.streamingEl?.closest(".msg");
+  msg?.classList.add("is-generating-speech");
+  msg?.classList.remove("is-generating-image", "is-generating-video");
   if (run.streamingEl) ensureMessageTime(run.streamingEl);
 }
 
@@ -3810,12 +4384,14 @@ function discardImagePlaceholder(run: RunPaint): void {
   if (!body) return;
   const msg = body.closest(".msg");
   if (!(msg instanceof HTMLElement)) return;
-  if (msg.querySelector(".msg-images img, .msg-videos video")) {
-    msg.classList.remove("is-generating-image", "is-generating-video");
+  if (msg.querySelector(".msg-images img, .msg-videos video, .msg-audios audio")) {
+    msg.classList.remove("is-generating-image", "is-generating-video", "is-generating-speech");
     return;
   }
   const pending =
-    msg.classList.contains("is-generating-image") || msg.classList.contains("is-generating-video");
+    msg.classList.contains("is-generating-image") ||
+    msg.classList.contains("is-generating-video") ||
+    msg.classList.contains("is-generating-speech");
   if (pending || !run.streamBuffer.trim()) {
     const text = (body.textContent ?? "").trim();
     if (pending || !text) {
@@ -3850,7 +4426,7 @@ function fillGeneratedImages(run: RunPaint, host: HTMLElement): Promise<void> {
         messageId,
         at: new Date().toISOString(),
       });
-      body.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video");
+      body.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video", "is-generating-speech");
     });
   })();
   return run.generatedFill;
@@ -3881,13 +4457,48 @@ function fillGeneratedVideos(run: RunPaint, host: HTMLElement): Promise<void> {
         messageId,
         at: new Date().toISOString(),
       });
-      body.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video");
+      body.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video", "is-generating-speech");
+    });
+  })();
+  return run.generatedFill;
+}
+
+function fillGeneratedAudios(run: RunPaint, host: HTMLElement): Promise<void> {
+  if (run.generatedFill) return run.generatedFill;
+  const audios = run.generatedAudios;
+  const messageId = run.generatedMessageId;
+  if (!audios?.length) return Promise.resolve();
+  const existing = run.streamingEl;
+  run.generatedFill = (async () => {
+    const urls = await audioDataUrls(run.workspace, run.sessionId, audios);
+    const place = (mutate: () => void) => {
+      if (host === messagesEl) keepTail(mutate);
+      else mutate();
+    };
+    place(() => {
+      let body = existing && existing.isConnected ? existing : run.streamingEl;
+      if (!body) {
+        const pending = host.querySelector(".msg.assistant.is-generating-speech .msg-body");
+        body = pending instanceof HTMLElement ? pending : appendMessage(host, "assistant", "");
+      }
+      applyMessageMedia(body, {
+        audios: urls,
+        content: "",
+        rich: false,
+        messageId,
+        at: new Date().toISOString(),
+      });
+      body.closest(".msg")?.classList.remove("is-generating-image", "is-generating-video", "is-generating-speech");
     });
   })();
   return run.generatedFill;
 }
 
 async function fillGeneratedOnDone(run: RunPaint, host: HTMLElement): Promise<void> {
+  if (run.generatedAudios?.length) {
+    await fillGeneratedAudios(run, host);
+    return;
+  }
   if (run.generatedVideos?.length) {
     await fillGeneratedVideos(run, host);
     return;
@@ -3899,11 +4510,20 @@ async function fillGeneratedOnDone(run: RunPaint, host: HTMLElement): Promise<vo
   const msg = run.streamingEl?.closest(".msg");
   const pendingImage = Boolean(msg?.classList.contains("is-generating-image"));
   const pendingVideo = Boolean(msg?.classList.contains("is-generating-video"));
-  if (!pendingImage && !pendingVideo) return;
+  const pendingSpeech = Boolean(msg?.classList.contains("is-generating-speech"));
+  if (!pendingImage && !pendingVideo && !pendingSpeech) return;
   try {
     const msgs = sameWorkspace(run.workspace, activeWorkspace)
       ? await window.agent.loadMessages(run.sessionId)
       : await window.agent.loadWorkspaceMessages(run.workspace, run.sessionId);
+    if (pendingSpeech) {
+      const last = [...msgs].reverse().find((message) => message.role === "assistant" && message.audios?.length);
+      if (!last?.audios?.length) return;
+      run.generatedAudios = last.audios;
+      run.generatedMessageId = last.id;
+      await fillGeneratedAudios(run, host);
+      return;
+    }
     if (pendingVideo) {
       const last = [...msgs].reverse().find((message) => message.role === "assistant" && message.videos?.length);
       if (!last?.videos?.length) return;
@@ -4036,7 +4656,12 @@ function applyTranscript(host: HTMLElement, e: {
       syncTaskbarAttention();
     }
     discardImagePlaceholder(run);
-    place(() => appendMessage(host, "error", e.message ?? ""));
+    const errMsg = e.message ?? "";
+    if (isPreflightSendFailure(new Error(errMsg))) {
+      if (host === messagesEl) showPreflightHint(new Error(errMsg));
+    } else {
+      place(() => appendMessage(host, "error", errMsg));
+    }
     return true;
   }
   return false;
@@ -4075,8 +4700,12 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
   run.wakeAcceptsInput = false;
   run.stopRequested = false;
   run.slotHeld = true;
-  if (onScreen) setStatus(runStatusText(reason), reason !== "completed");
-  else if (statusIsRun && currentSessionId === run.sessionId && sameWorkspace(viewWorkspace, run.workspace)) {
+  if (onScreen) {
+    const endText = runStatusText(reason);
+    setStatus("", false);
+    // Terminal run notices are brief toasts — not the teal strip above the composer.
+    if (reason !== "completed") showToast(endText, 1000);
+  } else if (statusIsRun && currentSessionId === run.sessionId && sameWorkspace(viewWorkspace, run.workspace)) {
     setStatus("", false);
   }
   if (onScreen && currentSessionId) {
@@ -4103,7 +4732,7 @@ window.agent.onMemoryEvent((e) => {
   const container = onScreen ? messagesEl : key ? sessionViews.get(key)?.holder : undefined;
   if (!container) return;
   const turnRunning = Boolean(key && runs.get(key)?.gate.isRunning);
-  appendMemorySaved(container, e, { turnRunning, openMemory: openMemoryPage });
+  appendMemorySaved(container, e, { turnRunning, openMemory: () => openMemoryPage("memories") });
 });
 
 window.agent.onEvent((e) => {
@@ -4158,6 +4787,10 @@ window.agent.onEvent((e) => {
         const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
         showGeneratingVideoPlaceholder(run, host);
       }
+      if (e.phase === "generating_speech") {
+        const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
+        showGeneratingSpeechPlaceholder(run, host);
+      }
       showRunStatus(PHASE_LABEL[e.phase] ?? e.phase, run);
       return;
     }
@@ -4173,6 +4806,13 @@ window.agent.onEvent((e) => {
       if (typeof e.message_id === "string") run.generatedMessageId = e.message_id;
       const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
       void fillGeneratedVideos(run, host);
+      return;
+    }
+    if (e.type === "generated_audios" && Array.isArray(e.audios)) {
+      run.generatedAudios = e.audios;
+      if (typeof e.message_id === "string") run.generatedMessageId = e.message_id;
+      const host = onScreen ? messagesEl : ensureSessionView(runKeyOf(workspace, sessionId)).holder;
+      void fillGeneratedAudios(run, host);
       return;
     }
     if (e.type === "ask_user" || e.type === "permission_request") {
@@ -4225,6 +4865,7 @@ async function boot(): Promise<void> {
     workspaceLabels = restored?.labels ?? {};
     rememberWorkspaceFold(workspacePaths, restored?.collapsed ?? []);
     void modelsApi.reload();
+    void refreshAsrAvailability();
     if (restored?.active) await applyWorkspace(restored.active);
     else {
       await refreshSessions();
@@ -4283,7 +4924,11 @@ composerCollapse = attachComposerCollapse({
   composer: composerEl,
   input: inputEl,
   conversation: conversationEl,
-  hasDraft: () => inputEl.value.trim().length > 0 || pendingImages.length > 0 || pendingVideos.length > 0,
+  hasDraft: () =>
+    inputEl.value.trim().length > 0 ||
+    pendingImages.length > 0 ||
+    pendingVideos.length > 0 ||
+    pendingAudios.length > 0,
   held: () =>
     composerThinking || Boolean(pageRun()?.pendingAsk) || inputEl.disabled || composerEl.classList.contains("is-locked"),
 });

@@ -4,11 +4,15 @@ import { outboundTextChars, type SentImage } from "./images.js";
 import type { ToolCall } from "../types.js";
 import type { ToolDefinition } from "../tools/types.js";
 
-/** Text the model saw, plus image files that were inlined. No data URLs. */
+/** Text the model saw, plus image/audio files that were inlined. No data URLs. */
 export interface AuditMessage {
   role: string;
   text: string;
   images?: SentImage[];
+  /** Video gen / multimodal reference source files (path + byte length). */
+  videos?: { path: string; bytes: number }[];
+  /** ASR upload or video-reference audio source files (path + byte length). */
+  audios?: { path: string; bytes: number }[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];

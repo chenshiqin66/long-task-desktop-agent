@@ -1,4 +1,5 @@
 import type { ModelKind } from "./config/modelKind.js";
+import type { TtsModelOptions } from "./config/speechOptions.js";
 import type { VideoModelOptions } from "./config/videoOptions.js";
 
 export type Role = "system" | "user" | "assistant" | "tool";
@@ -36,6 +37,18 @@ export interface SubmittedVideo {
   base64: string;
 }
 
+export type AudioMime = "audio/mpeg" | "audio/wav" | "audio/webm" | "audio/mp4" | "audio/ogg";
+export interface AudioAttachment {
+  id: string;
+  mime: AudioMime;
+  /** Relative to the session directory, e.g. audios/aud_abc.mp3 */
+  path: string;
+}
+export interface SubmittedAudio {
+  mime: AudioMime;
+  base64: string;
+}
+
 export interface Message {
   id: string;
   session_id: string;
@@ -44,6 +57,7 @@ export interface Message {
   content: string;
   images?: ImageAttachment[];
   videos?: VideoAttachment[];
+  audios?: AudioAttachment[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
@@ -120,7 +134,9 @@ export type RuntimeEvent =
         | "awaiting_permission"
         | "awaiting_user"
         | "generating_image"
-        | "generating_video";
+        | "generating_video"
+        | "generating_speech"
+        | "transcribing";
     }
   | {
       type: "session_title";
@@ -135,7 +151,8 @@ export type RuntimeEvent =
   /** A message typed during a continuation was appended. The bubble is already on screen. */
   | { type: "held_user"; turn_id: string; session_id: string }
   | { type: "generated_images"; turn_id: string; message_id: string; images: ImageAttachment[] }
-  | { type: "generated_videos"; turn_id: string; message_id: string; videos: VideoAttachment[] };
+  | { type: "generated_videos"; turn_id: string; message_id: string; videos: VideoAttachment[] }
+  | { type: "generated_audios"; turn_id: string; message_id: string; audios: AudioAttachment[] };
 
 export interface TraceEvent {
   id: string;
@@ -172,6 +189,8 @@ export interface AgentConfig {
   searchApiKey?: string;
   /** From the current video model entry. Only set when kind is video. */
   video?: VideoModelOptions;
+  /** From the current TTS model entry. Only set when kind is tts. */
+  tts?: TtsModelOptions;
 }
 
 export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, "baseUrl" | "model" | "apiKey"> = {

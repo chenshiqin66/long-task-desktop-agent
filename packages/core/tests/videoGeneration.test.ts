@@ -132,6 +132,83 @@ describe("video generation helpers", () => {
     ).toThrow(/两张/);
   });
 
+  it("builds a reference body with image / video / audio roles", () => {
+    expect(
+      buildVideoGenerationBody({
+        model: "MiniMax-H3",
+        prompt: "<Picture 1> 按 <Video 1> 起舞",
+        mode: "reference",
+        images: [{ dataUrl: "data:image/png;base64,AAA" }],
+        videos: [{ dataUrl: "data:video/mp4;base64,BBB" }],
+        audios: [{ dataUrl: "data:audio/mpeg;base64,CCC" }],
+        resolution: "768P",
+        duration: 5,
+      }),
+    ).toEqual({
+      model: "MiniMax-H3",
+      content: [
+        { type: "text", text: "<Picture 1> 按 <Video 1> 起舞" },
+        {
+          type: "image_url",
+          image_url: { url: "data:image/png;base64,AAA" },
+          role: "reference_image",
+        },
+        {
+          type: "video_url",
+          video_url: { url: "data:video/mp4;base64,BBB" },
+          role: "reference_video",
+        },
+        {
+          type: "audio_url",
+          audio_url: { url: "data:audio/mpeg;base64,CCC" },
+          role: "reference_audio",
+        },
+      ],
+      resolution: "768P",
+      duration: 5,
+      ratio: "adaptive",
+    });
+  });
+
+  it("forces a fixed ratio for Lite reference mode", () => {
+    expect(
+      buildVideoGenerationBody({
+        model: "MiniMax-H3-Lite",
+        prompt: "走路",
+        mode: "reference",
+        images: [{ dataUrl: "data:image/png;base64,AAA" }],
+        ratio: "adaptive",
+      }).ratio,
+    ).toBe("16:9");
+    expect(
+      buildVideoGenerationBody({
+        model: "MiniMax-H3-Lite",
+        prompt: "走路",
+        mode: "reference",
+        images: [{ dataUrl: "data:image/png;base64,AAA" }],
+        ratio: "9:16",
+      }).ratio,
+    ).toBe("9:16");
+  });
+
+  it("rejects reference without picture/video and audio-only", () => {
+    expect(() =>
+      buildVideoGenerationBody({
+        model: "MiniMax-H3-Lite",
+        prompt: "x",
+        mode: "reference",
+      }),
+    ).toThrow(/至少附/);
+    expect(() =>
+      buildVideoGenerationBody({
+        model: "MiniMax-H3-Lite",
+        prompt: "x",
+        mode: "reference",
+        audios: [{ dataUrl: "data:audio/mpeg;base64,CCC" }],
+      }),
+    ).toThrow(/参考音频需同时/);
+  });
+
   it("reads task_id from the create response", () => {
     expect(parseVideoTaskId({ task_id: "427916141998479" })).toBe("427916141998479");
     expect(() => parseVideoTaskId({})).toThrow(/task_id/);

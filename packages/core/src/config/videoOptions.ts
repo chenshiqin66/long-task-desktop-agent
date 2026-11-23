@@ -366,6 +366,7 @@ export function readVideoModelOptions(
 export function effectiveVideoRatio(
   options: VideoModelOptions,
   hasFrameImage: boolean,
+  model?: string,
 ): VideoRatio {
   if (
     hasFrameImage ||
@@ -374,6 +375,11 @@ export function effectiveVideoRatio(
     options.mode === "first_last"
   ) {
     return "adaptive";
+  }
+  if (options.mode === "reference") {
+    const id = model ? normalizeVideoModelId(model) : "";
+    if (id === "MiniMax-H3-Lite" && options.ratio === "adaptive") return "16:9";
+    return options.ratio;
   }
   return options.ratio;
 }

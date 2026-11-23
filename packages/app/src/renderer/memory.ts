@@ -11,6 +11,7 @@ import {
   scopeTitle,
   sourceWorkspace,
   stampText,
+  typeTag,
   type InstructionFileView,
   type MemoryActionResult,
   type MemoryEntryView,
@@ -24,15 +25,23 @@ export interface MemoryPageDeps {
   workspace(): string | null;
   /** Workspaces in the sidebar. A source session elsewhere is shown as a path only. */
   knownWorkspaces(): readonly string[];
+  /** Sidebar label for a workspace path (custom name, else folder name). */
+  workspaceLabel(path: string): string;
   /** Closes the memory page and opens the session. Resolves to an error message, or null. */
   openSession(workspace: string, sessionId: string): Promise<string | null>;
 }
 
+export type MemoryTab = "instructions" | "memories";
+
 export interface MemoryPage {
   /** Drops any message and edit in progress, then reads the page again. */
-  open(): Promise<void>;
+  open(opts?: { tab?: MemoryTab }): Promise<void>;
   /** Reads the page again and keeps an edit in progress. */
   refresh(): Promise<void>;
+  /** True while a card is being edited (有「取消」). */
+  isFormOpen(): boolean;
+  /** Same as clicking 取消 on the memory editor. */
+  cancelForm(): void;
 }
 
 type Draft = { key: string; description: string; body: string };
@@ -55,6 +64,7 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
   let data: MemoryPageData | null = null;
   let draft: Draft | null = null;
   let busy = false;
+  let activeTab: MemoryTab = "instructions";
 
   function setNote(text: string): void {
     note.hidden = !text;
@@ -114,26 +124,40 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
     return row;
   }
 
-  function instructionSection(page: MemoryPageData): HTMLElement {
-    const { box } = section("指令文件");
-    const files = [page.instructions.user, page.instructions.project].filter(
-      (file): file is InstructionFileView => file !== null,
+  function instructionFileRow(page: MemoryPageData, file: InstructionFileView): HTMLElement {
+    const row = el("div", { class: "memory-file-row" });
+    const text = el("div", { class: "memory-file-text" });
+    // Project instructions lead with the sidebar workspace label, not the folder basename.
+    if (file.scope === "project" && page.workspace) {
+      text.append(el("span", { class: "memory-file-scope" }, deps.workspaceLabel(page.workspace)));
+    }
+    text.append(
+      el("span", { class: "memory-file-path", title: file.path }, file.path),
+      el("span", { class: "memory-muted" }, instructionStateText(file.state)),
     );
-    files.forEach((file) => {
-      const row = el("div", { class: "memory-file-row" });
-      const text = el("div", { class: "memory-file-text" });
-      text.append(
-        el("span", { class: "memory-file-scope" }, scopeTitle(file.scope)),
-        el("span", { class: "memory-file-path", title: file.path }, file.path),
-        el("span", { class: "memory-muted" }, instructionStateText(file.state)),
-      );
-      row.append(
-        text,
-        textButton("在文件夹中显示", () => void act(() => window.agent.memoryRevealInstructions(page.workspace, file.scope))),
-      );
-      box.append(row);
-    });
-    return box;
+    row.append(
+      text,
+      textButton("在文件夹中显示", () => void act(() => window.agent.memoryRevealInstructions(page.workspace, file.scope))),
+    );
+    return row;
+  }
+
+  function instructionTab(page: MemoryPageData): HTMLElement {
+    const panel = el("div", { class: "memory-tab-panel", role: "tabpanel", id: "memory-tab-instructions" });
+    panel.hidden = activeTab !== "instructions";
+
+    const user = section("用户级指令");
+    user.box.append(instructionFileRow(page, page.instructions.user));
+    panel.append(user.box);
+
+    const project = section("项目级指令");
+    if (page.instructions.project) {
+      project.box.append(instructionFileRow(page, page.instructions.project));
+    } else {
+      project.box.append(el("p", { class: "memory-empty" }, "侧栏没有选中工作区，这里没有项目级指令。"));
+    }
+    panel.append(project.box);
+    return panel;
   }
 
   function editor(page: MemoryPageData, entry: MemoryEntryView, current: Draft): HTMLElement {
@@ -181,9 +205,11 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
   function card(page: MemoryPageData, entry: MemoryEntryView): HTMLElement {
     const key = `${entry.scope}/${entry.name}`;
     const box = el("article", { class: "memory-card" });
+    box.title = entry.name;
     const head = el("div", { class: "memory-card-head" });
     head.append(
-      el("span", { class: "memory-card-name" }, entry.name),
+      el("span", { class: "memory-card-type" }, typeTag(entry.type)),
+      el("span", { class: "memory-card-title" }, entry.description),
       el("span", { class: "memory-muted" }, `${ageText(entry.modified, new Date())} · ${originText(entry.origin)}`),
     );
     box.append(head);
@@ -191,7 +217,7 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
       box.append(editor(page, entry, draft));
       return box;
     }
-    box.append(el("p", { class: "memory-card-desc" }, entry.description), el("p", { class: "memory-card-body" }, entry.body));
+    box.append(el("p", { class: "memory-card-body" }, entry.body));
     const actions = el("div", { class: "memory-card-actions" });
     const source = entry.source;
     if (source) {
@@ -220,23 +246,72 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
     return box;
   }
 
-  function scopeSection(page: MemoryPageData, scope: MemoryScope): HTMLElement {
-    const { box, head } = section(scopeTitle(scope));
-    if (scope === "project" && page.projectRoot) head.append(el("span", { class: "memory-muted" }, page.projectRoot));
+  function memoryScopeSection(page: MemoryPageData, scope: MemoryScope, title: string): HTMLElement {
+    const { box } = section(title);
     const dir = scope === "user" ? page.dirs.user : page.dirs.project;
-    if (dir) head.append(el("span", { class: "memory-file-path", title: dir }, dir));
-    const open = textButton("打开文件夹", () => void act(() => window.agent.memoryOpenDir(page.workspace, scope)));
-    if (dir) open.title = `只含本作用域的记忆文件：${dir}`;
-    head.append(open);
+    if (!dir) {
+      box.append(el("p", { class: "memory-empty" }, "侧栏没有选中工作区，这里没有项目级记忆。"));
+      return box;
+    }
+    const row = el("div", { class: "memory-file-row" });
+    const text = el("div", { class: "memory-file-text" });
+    text.append(el("span", { class: "memory-file-path", title: dir }, dir));
+    if (scope === "project" && page.projectRoot) {
+      text.append(el("span", { class: "memory-muted" }, `对应工作区：${page.projectRoot}`));
+    }
     const groups = groupByType(page.entries, scope);
     if (!groups.length) {
-      box.append(el("p", { class: "memory-empty" }, "还没有记忆。点「打开文件夹」，在打开的目录里新建一个 .md 文件即可。"));
+      text.append(
+        el("span", { class: "memory-muted" }, "还没有记忆。点「打开文件夹」，在打开的目录里新建一个 .md 文件即可。"),
+      );
     }
+    const open = textButton("打开文件夹", () => void act(() => window.agent.memoryOpenDir(page.workspace, scope)));
+    open.title = `只含本作用域的记忆文件：${dir}`;
+    row.append(text, open);
+    box.append(row);
+    // Keep type order from groupByType, but do not show 用户/反馈/项目/参考 headers —
+    // the parent section is already 用户级记忆 / 项目级记忆.
     groups.forEach((group) => {
-      box.append(el("h4", { class: "memory-type" }, group.label));
       group.entries.forEach((entry) => box.append(card(page, entry)));
     });
     return box;
+  }
+
+  function memoriesTab(page: MemoryPageData): HTMLElement {
+    const panel = el("div", { class: "memory-tab-panel", role: "tabpanel", id: "memory-tab-memories" });
+    panel.hidden = activeTab !== "memories";
+    panel.append(
+      memoryScopeSection(page, "user", "用户级记忆"),
+      memoryScopeSection(page, "project", "项目级记忆"),
+      journalSection(page),
+    );
+    if (page.unreadable.length) panel.append(unreadableSection(page));
+    return panel;
+  }
+
+  function tabsBar(): HTMLElement {
+    const bar = el("div", { class: "memory-tabs", role: "tablist", "aria-label": "记忆分类" });
+    const items: Array<{ id: MemoryTab; label: string; panel: string }> = [
+      { id: "instructions", label: "指令", panel: "memory-tab-instructions" },
+      { id: "memories", label: "记忆", panel: "memory-tab-memories" },
+    ];
+    for (const item of items) {
+      const btn = el("button", {
+        type: "button",
+        class: item.id === activeTab ? "memory-tab is-active" : "memory-tab",
+        role: "tab",
+        id: `memory-tab-btn-${item.id}`,
+        "aria-selected": item.id === activeTab ? "true" : "false",
+        "aria-controls": item.panel,
+      }, item.label);
+      btn.addEventListener("click", () => {
+        if (activeTab === item.id) return;
+        activeTab = item.id;
+        paint();
+      });
+      bar.append(btn);
+    }
+    return bar;
   }
 
   function journalSection(page: MemoryPageData): HTMLElement {
@@ -269,20 +344,29 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
     const page = data;
     view.replaceChildren();
     if (!page) return;
-    view.append(switchRow(page), instructionSection(page));
-    if (page.dirs.project) view.append(scopeSection(page, "project"));
-    else view.append(el("p", { class: "memory-empty" }, "侧栏没有选中工作区，这里只显示所有项目的记忆。"));
-    view.append(scopeSection(page, "user"), journalSection(page));
-    if (page.unreadable.length) view.append(unreadableSection(page));
+    // Same shell as the model page video options: tabs sit on the top strip and wrap the panel.
+    const shell = el("div", { class: "memory-tab-shell" });
+    shell.append(tabsBar(), instructionTab(page), memoriesTab(page));
+    // Auto-extract toggle stays above the shell: it belongs to the page, not one panel.
+    view.append(switchRow(page), shell);
   }
 
   return {
-    open: async () => {
+    open: async (opts) => {
       setNote("");
-      draft = null;
+      // Do not clear an in-progress edit here. Closing the page via the sidebar
+      // and reopening must look the same; only 取消 / Esc-cancel drops the draft.
+      if (opts?.tab) activeTab = opts.tab;
       await refresh();
     },
     refresh,
+    isFormOpen: () => draft !== null,
+    cancelForm: () => {
+      if (!draft) return;
+      draft = null;
+      setNote("");
+      paint();
+    },
   };
 }
 

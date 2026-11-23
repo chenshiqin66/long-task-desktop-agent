@@ -5,6 +5,9 @@ import type {
   LlmChatRequest,
   LlmProvider,
   LlmStreamChunk,
+  SpeechGenRequest,
+  SpeechGenResult,
+  TranscribeRequest,
   VideoGenRequest,
   VideoGenResult,
 } from "./types.js";
@@ -25,6 +28,7 @@ import {
   VIDEO_POLL_INTERVAL_MS,
   VIDEO_POLL_TIMEOUT_MS,
 } from "./videoGeneration.js";
+import { synthesizeSpeechHttp, transcribeAudioFile } from "./volcSpeech.js";
 
 function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -194,6 +198,32 @@ export class OpenAICompatibleProvider implements LlmProvider {
     }
     const mime = parseVideoMime(res.headers.get("content-type")) ?? inferVideoMimeFromUrl(videoUrl);
     return { mime, base64: Buffer.from(bytes).toString("base64") };
+  }
+
+  /** Volcengine openspeech HTTP TTS — ignores OpenAI-style baseUrl. */
+  async generateSpeech(req: SpeechGenRequest): Promise<SpeechGenResult> {
+    return synthesizeSpeechHttp(
+      {
+        apiKey: this.apiKey,
+        text: req.text,
+        speaker: req.speaker,
+        format: req.format,
+        sampleRate: req.sampleRate,
+        signal: req.signal,
+      },
+      this.fetchImpl,
+    );
+  }
+
+  /** Volcengine openspeech ASR nostream WebSocket — ignores OpenAI-style baseUrl. */
+  async transcribeAudio(req: TranscribeRequest): Promise<string> {
+    return transcribeAudioFile({
+      apiKey: this.apiKey,
+      audio: req.audio,
+      format: req.format,
+      sampleRate: req.sampleRate,
+      signal: req.signal,
+    });
   }
 
   private async *openStream(

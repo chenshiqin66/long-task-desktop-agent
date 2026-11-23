@@ -1,7 +1,16 @@
 import { mkdir, readFile, writeFile, readdir, appendFile, access, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { newId, nowIso } from "../ids.js";
-import type { ImageAttachment, ImageMime, Message, SessionMeta, VideoAttachment, VideoMime } from "../types.js";
+import type {
+  AudioAttachment,
+  AudioMime,
+  ImageAttachment,
+  ImageMime,
+  Message,
+  SessionMeta,
+  VideoAttachment,
+  VideoMime,
+} from "../types.js";
 
 /** Session ids must be a single path segment — no separators or traversal. */
 const SESSION_ID_RE = /^[A-Za-z0-9_-]+$/;
@@ -39,6 +48,35 @@ export const MAX_VIDEOS_PER_MESSAGE = 1;
 
 export function extForVideoMime(mime: string): "mp4" | "webm" | "mov" | null {
   return VIDEO_MIME_EXT[mime as VideoMime] ?? null;
+}
+
+const AUDIO_MIME_EXT: Record<AudioMime, "mp3" | "wav" | "webm" | "m4a" | "ogg"> = {
+  "audio/mpeg": "mp3",
+  "audio/wav": "wav",
+  "audio/webm": "webm",
+  "audio/mp4": "m4a",
+  "audio/ogg": "ogg",
+};
+
+const AUDIO_REL_RE = /^audios\/aud_[a-f0-9]+\.(mp3|wav|webm|m4a|ogg)$/;
+
+export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+export const MAX_GENERATED_AUDIO_BYTES = 40 * 1024 * 1024;
+export const MAX_AUDIOS_PER_MESSAGE = 1;
+
+export function extForAudioMime(mime: string): "mp3" | "wav" | "webm" | "m4a" | "ogg" | null {
+  return AUDIO_MIME_EXT[mime as AudioMime] ?? null;
+}
+
+export function parseAudioMime(raw: string | null | undefined): AudioMime | null {
+  if (!raw) return null;
+  const base = raw.split(";")[0]!.trim().toLowerCase();
+  if (base === "audio/mpeg" || base === "audio/mp3") return "audio/mpeg";
+  if (base === "audio/wav" || base === "audio/wave" || base === "audio/x-wav") return "audio/wav";
+  if (base === "audio/webm") return "audio/webm";
+  if (base === "audio/mp4" || base === "audio/m4a" || base === "audio/x-m4a") return "audio/mp4";
+  if (base === "audio/ogg" || base === "audio/opus") return "audio/ogg";
+  return null;
 }
 
 export function assertValidSessionId(sessionId: string): void {
@@ -193,6 +231,61 @@ export class SessionStore {
 
   async readVideoDataUrl(sessionId: string, relativePath: string): Promise<string> {
     return (await this.readVideoForSend(sessionId, relativePath)).dataUrl;
+  }
+
+  async saveAudio(
+    sessionId: string,
+    mime: AudioMime,
+    base64: string,
+    opts?: { maxBytes?: number },
+  ): Promise<AudioAttachment> {
+    const ext = extForAudioMime(mime);
+    if (!ext) throw new Error(`Unsupported audio type: ${mime}`);
+    const cleaned = base64.replace(/\s/g, "");
+    const bytes = Buffer.from(cleaned, "base64");
+    const limit = opts?.maxBytes ?? MAX_AUDIO_BYTES;
+    if (!bytes.length || bytes.length > limit) {
+      throw new Error(`Audio is empty or larger than ${limit} bytes`);
+    }
+    const id = newId("aud");
+    const fileName = `${id}.${ext}`;
+    const path = `audios/${fileName}`;
+    const dir = sessionDir(this.workspacePath, sessionId);
+    await mkdir(join(dir, "audios"), { recursive: true });
+    await writeFile(join(dir, "audios", fileName), bytes);
+    return { id, mime, path };
+  }
+
+  async readAudioForSend(
+    sessionId: string,
+    relativePath: string,
+  ): Promise<{ dataUrl: string; bytes: number; buffer: Buffer }> {
+    if (!AUDIO_REL_RE.test(relativePath)) throw new Error("Invalid audio path");
+    const dir = sessionDir(this.workspacePath, sessionId);
+    const audiosDir = resolve(dir, "audios") + sep;
+    const abs = resolve(dir, relativePath);
+    if (!abs.startsWith(audiosDir)) throw new Error("Invalid audio path");
+    const bytes = await readFile(abs);
+    const ext = relativePath.slice(relativePath.lastIndexOf(".") + 1);
+    const mime: AudioMime =
+      ext === "mp3"
+        ? "audio/mpeg"
+        : ext === "wav"
+          ? "audio/wav"
+          : ext === "webm"
+            ? "audio/webm"
+            : ext === "ogg"
+              ? "audio/ogg"
+              : "audio/mp4";
+    return {
+      dataUrl: `data:${mime};base64,${bytes.toString("base64")}`,
+      bytes: bytes.length,
+      buffer: bytes,
+    };
+  }
+
+  async readAudioDataUrl(sessionId: string, relativePath: string): Promise<string> {
+    return (await this.readAudioForSend(sessionId, relativePath)).dataUrl;
   }
 
   async deleteSession(sessionId: string): Promise<void> {

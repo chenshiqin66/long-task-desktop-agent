@@ -1,11 +1,14 @@
 import { newId, nowIso } from "../ids.js";
 import type {
   AgentConfig,
+  AudioAttachment,
+  AudioMime,
   ImageAttachment,
   ImageMime,
   Message,
   RuntimeEvent,
   SessionMeta,
+  SubmittedAudio,
   SubmittedImage,
   SubmittedVideo,
   ToolCall,
@@ -13,12 +16,23 @@ import type {
   VideoAttachment,
 } from "../types.js";
 import {
+  MAX_AUDIOS_PER_MESSAGE,
+  MAX_AUDIO_BYTES,
+  MAX_GENERATED_AUDIO_BYTES,
   MAX_GENERATED_IMAGE_BYTES,
   MAX_GENERATED_VIDEO_BYTES,
   MAX_IMAGES_PER_MESSAGE,
   MAX_VIDEOS_PER_MESSAGE,
   SessionStore,
 } from "../store/sessionStore.js";
+import {
+  assertVideoReferenceMedia,
+  referenceVideoRatio,
+  VIDEO_REF_MAX_AUDIOS,
+  VIDEO_REF_MAX_IMAGES,
+  VIDEO_REF_MAX_VIDEOS,
+} from "../provider/videoGeneration.js";
+import { asrFormatFromMime, ttsOptionsFromConfig } from "../provider/volcSpeech.js";
 import { ContextStore } from "../store/contextStore.js";
 import { TraceStore } from "../store/traceStore.js";
 import { TaskStore } from "../store/taskStore.js";
@@ -274,7 +288,12 @@ export class AgentRuntime {
   /** True only while the loop is leaving because the queue looked empty. */
   private exiting = false;
   private exitWake = false;
-  private heldSubmit: { text: string; images: SubmittedImage[]; videos: SubmittedVideo[] } | null = null;
+  private heldSubmit: {
+    text: string;
+    images: SubmittedImage[];
+    videos: SubmittedVideo[];
+    audios: SubmittedAudio[];
+  } | null = null;
   private readonly skillsRoot: string;
   /** Bodies pinned for the submit currently running. Cleared when it ends. */
   private skillBodies: SkillBodyAttachment[] = [];
@@ -637,13 +656,14 @@ export class AgentRuntime {
     text: string,
     images: SubmittedImage[],
     videos: SubmittedVideo[],
+    audios: SubmittedAudio[] = [],
     opts?: { allowHold?: boolean },
   ): Promise<boolean> {
     let held = false;
     await this.withInbox(async () => {
       if (this.running && this.turnKind === "wakeup" && this.activeSessionId === sessionId && !this.heldSubmit) {
         if (opts?.allowHold === false) throw new AgentError("A turn is already running", "busy");
-        this.heldSubmit = { text, images, videos };
+        this.heldSubmit = { text, images, videos, audios };
         if (this.exiting) this.exitWake = true;
         held = true;
         return;
@@ -779,6 +799,10 @@ export class AgentRuntime {
     for (const video of held.videos) {
       storedVideos.push(await this.store.saveVideo(sessionId, video.mime, video.base64));
     }
+    const storedAudios = [];
+    for (const audio of held.audios ?? []) {
+      storedAudios.push(await this.store.saveAudio(sessionId, audio.mime, audio.base64));
+    }
     const userMsgId = newId("msg");
     const userTraceId = newId("trace");
     const ok = await this.persistMessage(turnId, {
@@ -789,6 +813,7 @@ export class AgentRuntime {
       content: held.text,
       ...(storedImages.length ? { images: storedImages } : {}),
       ...(storedVideos.length ? { videos: storedVideos } : {}),
+      ...(storedAudios.length ? { audios: storedAudios } : {}),
       trace_id: userTraceId,
       created_at: nowIso(),
     });
@@ -805,7 +830,13 @@ export class AgentRuntime {
         turn_id: turnId,
         type: "user_message",
         message_id: userMsgId,
-        detail: { content_chars: held.text.length, image_count: storedImages.length, video_count: storedVideos.length, held: true },
+        detail: {
+          content_chars: held.text.length,
+          image_count: storedImages.length,
+          video_count: storedVideos.length,
+          audio_count: storedAudios.length,
+          held: true,
+        },
       }))
     ) {
       return "failed";
@@ -833,27 +864,35 @@ export class AgentRuntime {
     return this.store.readImageDataUrl(sessionId, relativePath);
   }
 
-  async submit(sessionId: string, text: string, images?: SubmittedImage[], videos?: SubmittedVideo[]): Promise<void> {
+  async submit(
+    sessionId: string,
+    text: string,
+    images?: SubmittedImage[],
+    videos?: SubmittedVideo[],
+    audios?: SubmittedAudio[],
+  ): Promise<void> {
     const trimmed = text.trim();
     const incoming = images ?? [];
     const incomingVideos = videos ?? [];
+    const incomingAudios = audios ?? [];
     if (this.config.kind === "image" && !trimmed) {
       throw new AgentError("生图请先输入提示词", "bad_request");
     }
     if (this.config.kind === "video" && !trimmed) {
       throw new AgentError("生视频请先输入提示词", "bad_request");
     }
-    if (!trimmed && incoming.length === 0 && incomingVideos.length === 0) {
+    if (this.config.kind === "tts" && !trimmed) {
+      throw new AgentError("语音合成请先输入文本", "bad_request");
+    }
+    if (this.config.kind === "asr" && incomingAudios.length === 0) {
+      throw new AgentError("语音识别请先添加一段音频", "bad_request");
+    }
+    if (!trimmed && incoming.length === 0 && incomingVideos.length === 0 && incomingAudios.length === 0) {
       throw new AgentError("Empty message", "empty");
     }
-    if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
-      throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
-    }
-    if (incomingVideos.length > MAX_VIDEOS_PER_MESSAGE) {
-      throw new AgentError(`At most ${MAX_VIDEOS_PER_MESSAGE} video`, "bad_video");
-    }
+    this.assertAttachmentCounts(incoming.length, incomingVideos.length, incomingAudios.length);
     await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
-    const held = await this.beginUserTurn(sessionId, trimmed, incoming, incomingVideos);
+    const held = await this.beginUserTurn(sessionId, trimmed, incoming, incomingVideos, incomingAudios);
     if (held) return;
     try {
       const storedImages = [];
@@ -864,7 +903,13 @@ export class AgentRuntime {
       for (const video of incomingVideos) {
         storedVideos.push(await this.store.saveVideo(sessionId, video.mime, video.base64));
       }
-      await this.executeUserTurn(sessionId, trimmed, storedImages, storedVideos);
+      const storedAudios = [];
+      for (const audio of incomingAudios) {
+        storedAudios.push(
+          await this.store.saveAudio(sessionId, audio.mime, audio.base64, { maxBytes: MAX_AUDIO_BYTES }),
+        );
+      }
+      await this.executeUserTurn(sessionId, trimmed, storedImages, storedVideos, storedAudios);
     } finally {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
@@ -875,32 +920,41 @@ export class AgentRuntime {
     }
   }
 
-  /** Send the original question again. `images` and `videos` must already live in this session. */
-  async replay(sessionId: string, text: string, images: ImageAttachment[] = [], videos: VideoAttachment[] = []): Promise<void> {
+  /** Send the original question again. Media must already live in this session. */
+  async replay(
+    sessionId: string,
+    text: string,
+    images: ImageAttachment[] = [],
+    videos: VideoAttachment[] = [],
+    audios: AudioAttachment[] = [],
+  ): Promise<void> {
     const trimmed = text.trim();
     const incoming = images ?? [];
     const incomingVideos = videos ?? [];
+    const incomingAudios = audios ?? [];
     if (this.config.kind === "image" && !trimmed) {
       throw new AgentError("生图请先输入提示词", "bad_request");
     }
     if (this.config.kind === "video" && !trimmed) {
       throw new AgentError("生视频请先输入提示词", "bad_request");
     }
-    if (!trimmed && incoming.length === 0 && incomingVideos.length === 0) {
+    if (this.config.kind === "tts" && !trimmed) {
+      throw new AgentError("语音合成请先输入文本", "bad_request");
+    }
+    if (this.config.kind === "asr" && incomingAudios.length === 0) {
+      throw new AgentError("语音识别请先添加一段音频", "bad_request");
+    }
+    if (!trimmed && incoming.length === 0 && incomingVideos.length === 0 && incomingAudios.length === 0) {
       throw new AgentError("Empty message", "empty");
     }
-    if (incoming.length > MAX_IMAGES_PER_MESSAGE) {
-      throw new AgentError(`At most ${MAX_IMAGES_PER_MESSAGE} images`, "bad_image");
-    }
-    if (incomingVideos.length > MAX_VIDEOS_PER_MESSAGE) {
-      throw new AgentError(`At most ${MAX_VIDEOS_PER_MESSAGE} video`, "bad_video");
-    }
+    this.assertAttachmentCounts(incoming.length, incomingVideos.length, incomingAudios.length);
     const storedImages = await this.reuseStoredImages(sessionId, incoming);
     const storedVideos = await this.reuseStoredVideos(sessionId, incomingVideos);
+    const storedAudios = await this.reuseStoredAudios(sessionId, incomingAudios);
     await releaseTasksInterruptedByRestart(this.workspacePath, sessionId);
-    await this.beginUserTurn(sessionId, trimmed, [], [], { allowHold: false });
+    await this.beginUserTurn(sessionId, trimmed, [], [], [], { allowHold: false });
     try {
-      await this.executeUserTurn(sessionId, trimmed, storedImages, storedVideos);
+      await this.executeUserTurn(sessionId, trimmed, storedImages, storedVideos, storedAudios);
     } finally {
       await this.settleAfterTurn(sessionId);
       this.abort = null;
@@ -961,7 +1015,48 @@ export class AgentRuntime {
     return stored;
   }
 
-  private async executeUserTurn(sessionId: string, trimmed: string, storedImages: ImageAttachment[], storedVideos: VideoAttachment[] = []): Promise<void> {
+  private async reuseStoredAudios(sessionId: string, audios: AudioAttachment[]): Promise<AudioAttachment[]> {
+    const stored: AudioAttachment[] = [];
+    for (const audio of audios) {
+      const mime = audio?.mime;
+      const id = audio?.id;
+      const path = audio?.path;
+      const allowed: AudioMime[] = ["audio/mpeg", "audio/wav", "audio/webm", "audio/mp4", "audio/ogg"];
+      if (!allowed.includes(mime as AudioMime)) {
+        throw new AgentError("Unsupported audio type", "bad_audio");
+      }
+      if (typeof id !== "string" || !/^aud_[a-f0-9]+$/.test(id)) {
+        throw new AgentError("Invalid audio", "bad_audio");
+      }
+      const ext =
+        mime === "audio/mpeg"
+          ? "mp3"
+          : mime === "audio/wav"
+            ? "wav"
+            : mime === "audio/webm"
+              ? "webm"
+              : mime === "audio/ogg"
+                ? "ogg"
+                : "m4a";
+      const expected = `audios/${id}.${ext}`;
+      if (path !== expected) throw new AgentError("Invalid audio path", "bad_audio");
+      try {
+        await this.store.readAudioForSend(sessionId, path);
+      } catch {
+        throw new AgentError("Audio file is missing", "bad_audio");
+      }
+      stored.push({ id, mime: mime as AudioMime, path });
+    }
+    return stored;
+  }
+
+  private async executeUserTurn(
+    sessionId: string,
+    trimmed: string,
+    storedImages: ImageAttachment[],
+    storedVideos: VideoAttachment[] = [],
+    storedAudios: AudioAttachment[] = [],
+  ): Promise<void> {
     this.turnWritesAllowed = false;
     this.batchOutputDirs = [];
     this.abort = new AbortController();
@@ -987,6 +1082,7 @@ export class AgentRuntime {
         content: trimmed,
         ...(storedImages.length ? { images: storedImages } : {}),
         ...(storedVideos.length ? { videos: storedVideos } : {}),
+        ...(storedAudios.length ? { audios: storedAudios } : {}),
         trace_id: userTraceId,
         created_at: nowIso(),
       };
@@ -998,7 +1094,12 @@ export class AgentRuntime {
           turn_id,
           type: "user_message",
           message_id: userMsgId,
-          detail: { content_chars: trimmed.length, image_count: storedImages.length, video_count: storedVideos.length },
+          detail: {
+            content_chars: trimmed.length,
+            image_count: storedImages.length,
+            video_count: storedVideos.length,
+            audio_count: storedAudios.length,
+          },
         }))
       ) {
         return;
@@ -2340,7 +2441,7 @@ export class AgentRuntime {
   /** Returns true when this turn was handled outside the text tool loop. */
   private async routeByKind(sessionId: string, turn_id: string): Promise<boolean> {
     const kind = this.config.kind;
-    if (kind !== "image" && kind !== "video" && kind !== "audio") return false;
+    if (kind !== "image" && kind !== "video" && kind !== "tts" && kind !== "asr") return false;
     if (this.abort?.signal.aborted) {
       await this.finishGenerateCancel(sessionId, turn_id);
       return true;
@@ -2350,43 +2451,17 @@ export class AgentRuntime {
     const prompt = last?.role === "user" ? last.content.trim() : "";
     const videos = last?.role === "user" ? (last.videos ?? []) : [];
     const images = last?.role === "user" ? (last.images ?? []) : [];
+    const audios = last?.role === "user" ? (last.audios ?? []) : [];
 
-    if (kind === "audio") {
-      const text = "这个类型第一版还不能用，请改选生文、生图或生视频";
-      this.emit({ type: "text", turn_id, delta: text });
-      const assistantMsgId = newId("msg");
-      const assistantTraceId = newId("trace");
-      if (
-        !(await this.persistMessage(turn_id, {
-          id: assistantMsgId,
-          session_id: sessionId,
-          turn_id,
-          role: "assistant",
-          content: text,
-          trace_id: assistantTraceId,
-          created_at: nowIso(),
-        }))
-      ) {
-        return true;
-      }
-      if (
-        !(await this.persistTrace(turn_id, {
-          id: assistantTraceId,
-          session_id: sessionId,
-          turn_id,
-          type: "llm_response",
-          message_id: assistantMsgId,
-          detail: { content: text },
-        }))
-      ) {
-        return true;
-      }
-      this.turnOutcome = "completed";
-      return true;
+    if (kind === "tts") {
+      return await this.generateSpeechTurn(sessionId, turn_id, prompt);
+    }
+    if (kind === "asr") {
+      return await this.transcribeAudioTurn(sessionId, turn_id, audios);
     }
 
     if (kind === "video") {
-      return await this.generateVideoTurn(sessionId, turn_id, prompt, images, videos);
+      return await this.generateVideoTurn(sessionId, turn_id, prompt, images, videos, audios);
     }
 
     if (!prompt) {
@@ -2512,69 +2587,96 @@ export class AgentRuntime {
     return true;
   }
 
+  private assertAttachmentCounts(images: number, videos: number, audios: number): void {
+    const videoRef = this.config.kind === "video" && (this.config.video?.mode ?? "text") === "reference";
+    const maxImages = videoRef ? VIDEO_REF_MAX_IMAGES : MAX_IMAGES_PER_MESSAGE;
+    const maxVideos = videoRef ? VIDEO_REF_MAX_VIDEOS : MAX_VIDEOS_PER_MESSAGE;
+    const maxAudios = videoRef ? VIDEO_REF_MAX_AUDIOS : MAX_AUDIOS_PER_MESSAGE;
+    if (images > maxImages) {
+      throw new AgentError(`At most ${maxImages} images`, "bad_image");
+    }
+    if (videos > maxVideos) {
+      throw new AgentError(`At most ${maxVideos} video`, "bad_video");
+    }
+    if (audios > maxAudios) {
+      throw new AgentError(`At most ${maxAudios} audio`, "bad_audio");
+    }
+  }
+
   private async generateVideoTurn(
     sessionId: string,
     turn_id: string,
     prompt: string,
     images: ImageAttachment[],
     videos: VideoAttachment[],
+    audios: AudioAttachment[],
   ): Promise<boolean> {
     if (!prompt) {
       this.emit({ type: "error", turn_id, message: "生视频请先输入提示词", code: "bad_request" });
       this.emit({ type: "done", turn_id, reason: "error" });
       return true;
     }
-    if (videos.length) {
-      this.emit({
-        type: "error",
-        turn_id,
-        message: "生视频暂不支持附带参考视频，请先去掉视频；可用图片作首帧/尾帧",
-        code: "bad_request",
-      });
-      this.emit({ type: "done", turn_id, reason: "error" });
-      return true;
-    }
 
     const mode = this.config.video?.mode ?? "text";
-    if (mode === "reference") {
-      this.emit({
-        type: "error",
-        turn_id,
-        message: "参考素材生视频尚未接通，请在模型设置里改为文生或首帧/尾帧/首尾帧",
-        code: "bad_request",
-      });
-      this.emit({ type: "done", turn_id, reason: "error" });
-      return true;
-    }
-    if (mode === "first_frame" && images.length !== 1) {
-      this.emit({ type: "error", turn_id, message: "首帧模式请恰好附一张图片", code: "bad_request" });
-      this.emit({ type: "done", turn_id, reason: "error" });
-      return true;
-    }
-    if (mode === "last_frame" && images.length !== 1) {
-      this.emit({ type: "error", turn_id, message: "尾帧模式请恰好附一张图片", code: "bad_request" });
-      this.emit({ type: "done", turn_id, reason: "error" });
-      return true;
-    }
-    if (mode === "first_last" && images.length !== 2) {
-      this.emit({
-        type: "error",
-        turn_id,
-        message: "首尾帧模式请按顺序附两张图：第一张首帧，第二张尾帧",
-        code: "bad_request",
-      });
-      this.emit({ type: "done", turn_id, reason: "error" });
-      return true;
-    }
-    if (mode === "text" && images.length > 1) {
-      this.emit({
-        type: "error",
-        turn_id,
-        message: "文生视频最多附一张图（将作为首帧）；两张图请改用「首尾帧」模式",
-        code: "bad_request",
-      });
-      this.emit({ type: "done", turn_id, reason: "error" });
-      return true;
+    if (mode !== "reference") {
+      if (videos.length) {
+        this.emit({
+          type: "error",
+          turn_id,
+          message: "当前素材模式不支持参考视频；请改用「参考素材生视频」，或去掉视频后用图片作首帧/尾帧",
+          code: "bad_request",
+        });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+      if (audios.length) {
+        this.emit({
+          type: "error",
+          turn_id,
+          message: "当前素材模式不支持参考音频；请改用「参考素材生视频」",
+          code: "bad_request",
+        });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+      if (mode === "first_frame" && images.length !== 1) {
+        this.emit({ type: "error", turn_id, message: "首帧模式请恰好附一张图片", code: "bad_request" });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+      if (mode === "last_frame" && images.length !== 1) {
+        this.emit({ type: "error", turn_id, message: "尾帧模式请恰好附一张图片", code: "bad_request" });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+      if (mode === "first_last" && images.length !== 2) {
+        this.emit({
+          type: "error",
+          turn_id,
+          message: "首尾帧模式请按顺序附两张图：第一张首帧，第二张尾帧",
+          code: "bad_request",
+        });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+      if (mode === "text" && images.length > 1) {
+        this.emit({
+          type: "error",
+          turn_id,
+          message: "文生视频最多附一张图（将作为首帧）；两张图请改用「首尾帧」模式",
+          code: "bad_request",
+        });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+    } else {
+      try {
+        assertVideoReferenceMedia(images.length, videos.length, audios.length);
+      } catch (err) {
+        this.emit({ type: "error", turn_id, message: String(err), code: "bad_request" });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
     }
 
     this.emit({ type: "status", turn_id, phase: "generating_video" });
@@ -2598,6 +2700,34 @@ export class AgentRuntime {
       }
     }
 
+    const refVideos: { dataUrl: string }[] = [];
+    const sentVideos: { path: string; bytes: number }[] = [];
+    for (const video of videos) {
+      try {
+        const loaded = await this.store.readVideoForSend(sessionId, video.path);
+        refVideos.push({ dataUrl: loaded.dataUrl });
+        sentVideos.push({ path: video.path, bytes: loaded.bytes });
+      } catch {
+        this.emit({ type: "error", turn_id, message: "Video file is missing", code: "bad_video" });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+    }
+
+    const refAudios: { dataUrl: string }[] = [];
+    const sentAudios: { path: string; bytes: number }[] = [];
+    for (const audio of audios) {
+      try {
+        const loaded = await this.store.readAudioForSend(sessionId, audio.path);
+        refAudios.push({ dataUrl: loaded.dataUrl });
+        sentAudios.push({ path: audio.path, bytes: loaded.bytes });
+      } catch {
+        this.emit({ type: "error", turn_id, message: "Audio file is missing", code: "bad_audio" });
+        this.emit({ type: "done", turn_id, reason: "error" });
+        return true;
+      }
+    }
+
     const videoRequestId = newId("trace");
     if (
       !(await this.persistContext(turn_id, {
@@ -2611,12 +2741,24 @@ export class AgentRuntime {
             role: "user",
             text: prompt,
             ...(sentImages.length ? { images: sentImages } : {}),
+            ...(sentVideos.length ? { videos: sentVideos } : {}),
+            ...(sentAudios.length ? { audios: sentAudios } : {}),
           },
         ],
       }))
     ) {
       return true;
     }
+
+    const hasFrames = mode !== "reference" && refImages.length > 0;
+    const ratio =
+      mode === "reference"
+        ? referenceVideoRatio(this.config.model, this.config.video?.ratio)
+        : hasFrames
+          ? "adaptive"
+          : this.config.video?.ratio === "adaptive"
+            ? "16:9"
+            : (this.config.video?.ratio ?? "16:9");
 
     let result;
     try {
@@ -2625,17 +2767,11 @@ export class AgentRuntime {
         prompt,
         mode,
         ...(refImages.length ? { images: refImages } : {}),
+        ...(refVideos.length ? { videos: refVideos } : {}),
+        ...(refAudios.length ? { audios: refAudios } : {}),
         ...(this.config.video?.resolution ? { resolution: this.config.video.resolution } : {}),
         ...(this.config.video?.duration != null ? { duration: this.config.video.duration } : {}),
-        ...(this.config.video
-          ? {
-              ratio: refImages.length
-                ? "adaptive"
-                : this.config.video.ratio === "adaptive"
-                  ? "16:9"
-                  : this.config.video.ratio,
-            }
-          : {}),
+        ratio,
         signal: this.abort?.signal,
       });
     } catch (err) {
@@ -2697,6 +2833,217 @@ export class AgentRuntime {
       message_id: assistantMsgId,
       videos: [saved],
     });
+    this.turnOutcome = "completed";
+    return true;
+  }
+
+  private async generateSpeechTurn(sessionId: string, turn_id: string, prompt: string): Promise<boolean> {
+    if (!prompt) {
+      this.emit({ type: "error", turn_id, message: "语音合成请先输入文本", code: "bad_request" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    this.emit({ type: "status", turn_id, phase: "generating_speech" });
+    if (!this.provider.generateSpeech) {
+      this.emit({ type: "error", turn_id, message: "Speech generation is not available", code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    const speechRequestId = newId("trace");
+    if (
+      !(await this.persistContext(turn_id, {
+        sessionId,
+        id: speechRequestId,
+        turnId: turn_id,
+        model: this.config.model,
+        kind: "tts",
+        messages: [{ role: "user", text: prompt }],
+      }))
+    ) {
+      return true;
+    }
+    const ttsOpts = ttsOptionsFromConfig(this.config.tts);
+    let result;
+    try {
+      result = await this.provider.generateSpeech({
+        text: prompt,
+        ...ttsOpts,
+        signal: this.abort?.signal,
+      });
+    } catch (err) {
+      if (this.abort?.signal.aborted || this.isAbortError(err)) {
+        await this.finishGenerateCancel(sessionId, turn_id);
+        return true;
+      }
+      this.emit({
+        type: "error",
+        turn_id,
+        message: err instanceof Error ? err.message : String(err),
+        code: "llm_error",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (this.abort?.signal.aborted) {
+      await this.finishGenerateCancel(sessionId, turn_id);
+      return true;
+    }
+    let saved;
+    try {
+      saved = await this.store.saveAudio(sessionId, result.mime, result.base64, {
+        maxBytes: MAX_GENERATED_AUDIO_BYTES,
+      });
+    } catch (err) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: err instanceof Error ? err.message : String(err),
+        code: "llm_error",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    const assistantMsgId = newId("msg");
+    const assistantTraceId = newId("trace");
+    if (
+      !(await this.persistMessage(turn_id, {
+        id: assistantMsgId,
+        session_id: sessionId,
+        turn_id,
+        role: "assistant",
+        content: "",
+        audios: [saved],
+        trace_id: assistantTraceId,
+        created_at: nowIso(),
+      }))
+    ) {
+      return true;
+    }
+    if (
+      !(await this.persistTrace(turn_id, {
+        id: assistantTraceId,
+        session_id: sessionId,
+        turn_id,
+        type: "llm_response",
+        message_id: assistantMsgId,
+        detail: { audio_count: 1 },
+      }))
+    ) {
+      return true;
+    }
+    this.emit({
+      type: "generated_audios",
+      turn_id,
+      message_id: assistantMsgId,
+      audios: [saved],
+    });
+    this.turnOutcome = "completed";
+    return true;
+  }
+
+  private async transcribeAudioTurn(
+    sessionId: string,
+    turn_id: string,
+    audios: AudioAttachment[],
+  ): Promise<boolean> {
+    if (audios.length !== 1) {
+      this.emit({
+        type: "error",
+        turn_id,
+        message: "语音识别请恰好附一段音频",
+        code: "bad_request",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    this.emit({ type: "status", turn_id, phase: "transcribing" });
+    if (!this.provider.transcribeAudio) {
+      this.emit({ type: "error", turn_id, message: "Audio transcription is not available", code: "llm_error" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    const audio = audios[0]!;
+    let loaded;
+    try {
+      loaded = await this.store.readAudioForSend(sessionId, audio.path);
+    } catch {
+      this.emit({ type: "error", turn_id, message: "Audio file is missing", code: "bad_audio" });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    const asrRequestId = newId("trace");
+    if (
+      !(await this.persistContext(turn_id, {
+        sessionId,
+        id: asrRequestId,
+        turnId: turn_id,
+        model: this.config.model,
+        kind: "asr",
+        messages: [
+          {
+            role: "user",
+            text: "",
+            audios: [{ path: audio.path, bytes: loaded.bytes }],
+          },
+        ],
+      }))
+    ) {
+      return true;
+    }
+    let text: string;
+    try {
+      text = await this.provider.transcribeAudio({
+        audio: loaded.buffer,
+        format: asrFormatFromMime(audio.mime),
+        signal: this.abort?.signal,
+      });
+    } catch (err) {
+      if (this.abort?.signal.aborted || this.isAbortError(err)) {
+        await this.finishGenerateCancel(sessionId, turn_id);
+        return true;
+      }
+      this.emit({
+        type: "error",
+        turn_id,
+        message: err instanceof Error ? err.message : String(err),
+        code: "llm_error",
+      });
+      this.emit({ type: "done", turn_id, reason: "error" });
+      return true;
+    }
+    if (this.abort?.signal.aborted) {
+      await this.finishGenerateCancel(sessionId, turn_id);
+      return true;
+    }
+    const content = text.trim() || "（未识别到语音内容）";
+    this.emit({ type: "text", turn_id, delta: content });
+    const assistantMsgId = newId("msg");
+    const assistantTraceId = newId("trace");
+    if (
+      !(await this.persistMessage(turn_id, {
+        id: assistantMsgId,
+        session_id: sessionId,
+        turn_id,
+        role: "assistant",
+        content,
+        trace_id: assistantTraceId,
+        created_at: nowIso(),
+      }))
+    ) {
+      return true;
+    }
+    if (
+      !(await this.persistTrace(turn_id, {
+        id: assistantTraceId,
+        session_id: sessionId,
+        turn_id,
+        type: "llm_response",
+        message_id: assistantMsgId,
+        detail: { content_chars: content.length, transcribed: true },
+      }))
+    ) {
+      return true;
+    }
     this.turnOutcome = "completed";
     return true;
   }

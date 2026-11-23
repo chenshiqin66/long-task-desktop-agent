@@ -40,16 +40,24 @@ export function fitComposerModelEmpty(btn: HTMLButtonElement): void {
 export function attachComposerModelSizing(select: HTMLSelectElement): void {
   const expand = (): void => {
     fitComposerModelSelect(select, true);
+    // Native popups snapshot width when they open; flush layout so hover/focus widen wins.
+    void select.offsetWidth;
   };
   const collapse = (): void => {
     fitComposerModelSelect(select, false);
   };
-  select.addEventListener("pointerdown", expand);
+  // Widen to the longest label before the menu opens (click alone is too late on Chromium/Win).
+  select.addEventListener("pointerenter", expand);
+  select.addEventListener("focus", expand);
+  select.addEventListener("pointerdown", expand, true);
   select.addEventListener("keydown", (event) => {
     if (shouldOpenComposerModelOnKey(event.key, event.altKey)) expand();
   });
   select.addEventListener("change", collapse);
   select.addEventListener("blur", collapse);
+  select.addEventListener("pointerleave", () => {
+    if (document.activeElement !== select) collapse();
+  });
 }
 
 function applyComposerModelWidth(el: HTMLElement, labels: string[]): void {

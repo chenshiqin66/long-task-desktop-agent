@@ -1,4 +1,5 @@
 import type { ModelKind } from "./modelKind.js";
+import type { TtsModelOptions } from "./speechOptions.js";
 import type { VideoModelOptions } from "./videoOptions.js";
 
 export interface StoredModel {
@@ -13,6 +14,8 @@ export interface StoredModel {
   video?: VideoModelOptions;
   /** Per MiniMax H3 preset options. Each tab keeps its own parameter set. */
   videoByModel?: Record<string, VideoModelOptions>;
+  /** Present when kind is tts. */
+  tts?: TtsModelOptions;
 }
 
 export interface StoredConfig {
@@ -31,6 +34,11 @@ export interface StoredConfig {
    * Missing or not a search model means the first search model.
    */
   currentSearchModelId?: string;
+  /**
+   * ASR model mic dictation points to. Used alongside the chat model (like search).
+   * Missing or not an ASR model means the first ASR model.
+   */
+  currentAsrModelId?: string;
   /** Directories shown in the sidebar. Adding one does not remove the others. */
   workspacePaths?: string[];
   /** Sidebar labels keyed by workspace path. Missing key means show the folder name. Does not rename the directory. */

@@ -315,7 +315,12 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 #btn-mcp.is-current,
 #btn-memory.is-current,
 #btn-config.is-current,
-#btn-workbench.is-current {
+#btn-workbench.is-current,
+#btn-skills.is-current:hover:not(:disabled),
+#btn-mcp.is-current:hover:not(:disabled),
+#btn-memory.is-current:hover:not(:disabled),
+#btn-config.is-current:hover:not(:disabled),
+#btn-workbench.is-current:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
   background: var(--teal-soft);
 }
@@ -863,6 +868,58 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   color: var(--ink);
 }
 
+/* Match .model-video-options: one bordered box, tabs on the top strip, panel inside. */
+.memory-tab-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.memory-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--line) 28%, #fff);
+}
+
+.memory-tab {
+  flex: 1 1 0;
+  margin: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.memory-tab.is-active {
+  background: #fff;
+  color: var(--accent-ink);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.memory-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 14px 12px 12px;
+}
+
+.memory-tab-panel[hidden] {
+  display: none;
+}
+
 .memory-section {
   display: flex;
   flex-direction: column;
@@ -931,8 +988,20 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 .memory-switch-title,
 .memory-file-scope,
-.memory-card-name {
+.memory-card-title {
   font-weight: 650;
+}
+
+.memory-card-type {
+  flex: none;
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.memory-card-title {
+  flex: 1 1 8rem;
+  min-width: 0;
 }
 
 .memory-file-path {
@@ -973,11 +1042,11 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .memory-card-head,
 .memory-journal-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 8px 10px;
 }
 
-.memory-card-desc,
 .memory-card-body {
   margin: 0;
 }
@@ -2085,6 +2154,30 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   font-weight: 500;
   line-height: 1.4;
   color: var(--teal);
+}
+
+/* Short-lived preflight hints (missing audio, empty prompt, …). Not part of the transcript. */
+.app-toast {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 6;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 50%;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.9);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: center;
+  overflow-wrap: anywhere;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .messages {
@@ -3261,6 +3354,35 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
     0 8px 24px rgba(26, 35, 50, 0.1);
 }
 
+@keyframes composer-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(5px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+:is(#composer, #explain-composer).is-shaking {
+  animation: composer-shake 0.38s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(#composer, #explain-composer).is-shaking {
+    animation: none;
+  }
+}
+
 .composer-input {
   grid-column: 1 / -1;
   position: relative;
@@ -3625,6 +3747,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .btn-image {
+  position: relative;
   width: 28px;
   height: 28px;
   padding: 0;
@@ -3642,6 +3765,36 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   height: 16px;
 }
 
+.btn-image[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 7px);
+  z-index: 5;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ink) 88%, #fff);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(3px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+
+.btn-image[data-tip]:hover::after,
+.btn-image[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .btn-image:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent-ink);
@@ -3652,8 +3805,29 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   cursor: default;
 }
 
+.btn-image.is-listening {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-image[data-tip]::after {
+    transition: none;
+  }
+}
+
+.composer-thumb-audio {
+  min-width: 180px;
+}
+
+.composer-thumb-audio audio {
+  width: 160px;
+  height: 32px;
+}
+
 .msg-images,
-.msg-videos {
+.msg-videos,
+.msg-audios {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -3661,7 +3835,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .msg.user .msg-images,
-.msg.user .msg-videos {
+.msg.user .msg-videos,
+.msg.user .msg-audios {
   justify-content: flex-end;
 }
 
@@ -3674,6 +3849,11 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   border-radius: 10px;
   border: 1px solid var(--line);
   background: #fff;
+}
+
+.msg-audios audio {
+  width: min(280px, 100%);
+  height: 36px;
 }
 
 .msg-image-btn {
