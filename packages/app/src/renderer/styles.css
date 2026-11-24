@@ -3597,7 +3597,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   padding: 10px;
   border-radius: 10px;
   border: 1px solid var(--line);
-  background: var(--panel);
+  background: #f0f4f2;
   box-shadow: 0 10px 28px rgb(15 23 42 / 12%);
   display: grid;
   gap: 8px;
