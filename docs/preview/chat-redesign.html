@@ -242,7 +242,7 @@
     padding:7px 12px;cursor:pointer;transition:.15s;white-space:nowrap;
   }
   .file-tab:hover{background:#25333d;color:#dbe4df}
-  .file-tab.active{border-color:transparent;background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#fff;font-weight:700;box-shadow:0 3px 10px rgba(20,184,166,.3)}
+  .file-tab.active{border-color:transparent;background:#14b8a6;color:#fff;font-weight:700;box-shadow:0 3px 10px rgba(20,184,166,.3)}
   .logs-hint{
     flex:1;min-width:0;text-align:right;color:#5f746c;font:11px var(--mono);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -266,8 +266,8 @@
     content:"›";color:#5f746c;font-size:15px;line-height:1;transition:transform .15s;
   }
   .entry[open] summary::before{transform:rotate(90deg)}
-  .entry.user{align-self:flex-end;width:auto;max-width:min(560px,100%);border-color:#1f5a50;background:#12312c}
-  .entry.user summary{color:#8ce0cf}
+  .entry.user{align-self:flex-end;width:auto;max-width:min(560px,100%)}
+  .entry.user summary{color:#b9c9c3}
   .entry.error summary{color:#e8a49c}
   .idx{color:#4d6159;min-width:26px;text-align:right}
   .tag{color:#6f8a80}
@@ -456,7 +456,7 @@
     document.getElementById('chatStage').classList.toggle('on',!logsOn);
     document.getElementById('logsStage').classList.toggle('on',logsOn);
     var b=document.getElementById('logsBtn');
-    b.style.background=logsOn?'linear-gradient(135deg,var(--accent),var(--accent-deep))':'';
+    b.style.background=logsOn?'#14b8a6':'';
     b.style.color=logsOn?'#fff':'';
     b.style.fontWeight=logsOn?'700':'';
     b.style.boxShadow=logsOn?'0 3px 10px rgba(20,184,166,.3)':'';

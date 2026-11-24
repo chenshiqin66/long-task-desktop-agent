@@ -1885,7 +1885,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .view-tabs.has-files .logs-tab.active,
 .view-tabs.has-files .logs-tab.active:hover {
   color: #fff;
-  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  background: #14b8a6;
   font-weight: 700;
   box-shadow: 0 3px 10px rgba(20, 184, 166, 0.3);
 }
@@ -1952,7 +1952,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .store-file-tabs .store-tab.active,
 .store-file-tabs .store-tab.active:hover {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  background: #14b8a6;
   color: #fff;
   font-weight: 700;
   box-shadow: 0 3px 10px rgba(20, 184, 166, 0.3);
@@ -2185,20 +2185,57 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   transform: rotate(90deg);
 }
 
-/* User messages read like chat bubbles: right-aligned, content-width teal cards. */
+.entry-index {
+  color: #5f746c;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-sep {
+  color: #3f5158;
+}
+
+/* Role marker: user / assistant / tool each get a small pill. */
+.entry-role {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid #2b3c44;
+  border-radius: 5px;
+  background: #16232b;
+  color: #8aa096;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.entry-rest {
+  min-width: 0;
+  color: #9fb0a9;
+}
+
+/* User messages read like chat bubbles: right-aligned, content-width cards. */
 .context-entry.is-user {
   align-self: flex-end;
   width: auto;
   max-width: min(560px, 100%);
-  border-color: #1f5a50;
-  background: #12312c;
 }
 
 .context-entry.is-user > summary {
-  color: #8ce0cf;
+  color: #b9c9c3;
+}
+
+.context-entry.is-user .entry-role {
+  border-color: #1f5a50;
+  background: #12312c;
+  color: #7fd1c4;
 }
 
 .context-entry.is-error > summary {
+  color: #e8a49c;
+}
+
+.context-entry.is-error .entry-role {
+  border-color: #5a2b28;
+  background: #2a1614;
   color: #e8a49c;
 }
 

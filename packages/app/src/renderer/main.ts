@@ -1056,10 +1056,13 @@ function paintStoreView(): void {
   paintStoreEntries(value as unknown[], file, render);
 }
 
+/** One log row: leading number, a role pill, then the human-readable remainder. */
+type StoreEntryParts = { index: number; role: string; rest: string; className: string };
+
 function paintStoreEntries(
   items: unknown[],
   fileLabel: string,
-  render: (item: unknown, index: number) => { summary: string; className: string },
+  render: (item: unknown, index: number) => StoreEntryParts,
 ): void {
   storeHint.textContent = `${items.length} 条 · ${fileLabel} · 默认折叠`;
   storeView.replaceChildren();
@@ -1067,19 +1070,43 @@ function paintStoreEntries(
   const list = document.createElement("div");
   list.className = "context-list";
   items.forEach((item, index) => {
-    const rendered = render(item, index);
+    const parts = render(item, index);
     const entry = document.createElement("details");
-    entry.className = rendered.className ? `context-entry ${rendered.className}` : "context-entry";
+    entry.className = parts.className ? `context-entry ${parts.className}` : "context-entry";
     const summary = document.createElement("summary");
-    summary.textContent = rendered.summary;
-    const highlightUser = rendered.className.includes("is-user") && fileLabel === "messages.jsonl";
+
+    const num = document.createElement("span");
+    num.className = "entry-index";
+    num.textContent = String(parts.index);
+    summary.append(num);
+
+    if (parts.role) {
+      const sep = document.createElement("span");
+      sep.className = "entry-sep";
+      sep.textContent = "·";
+      const pill = document.createElement("span");
+      pill.className = "entry-role";
+      pill.textContent = parts.role;
+      summary.append(sep, pill);
+    }
+    if (parts.rest) {
+      const sep = document.createElement("span");
+      sep.className = "entry-sep";
+      sep.textContent = "·";
+      const rest = document.createElement("span");
+      rest.className = "entry-rest";
+      rest.textContent = parts.rest;
+      summary.append(sep, rest);
+    }
+
+    const highlightUser = parts.className.includes("is-user") && fileLabel === "messages.jsonl";
     entry.append(summary, storeJsonPre(item, highlightUser));
     list.append(entry);
   });
   storeView.append(list);
 }
 
-function messageRecordSummary(row: Record<string, unknown>, index: number): string {
+function messageRecordParts(row: Record<string, unknown>, index: number): StoreEntryParts {
   const role = recordString(row, "role") || "未知";
   const name = recordString(row, "name");
   const who = name ? `${role} ${name}` : role;
@@ -1092,34 +1119,39 @@ function messageRecordSummary(row: Record<string, unknown>, index: number): stri
   const content = recordString(row, "content");
   const preview = oneLinePreview(content);
   const tail = [preview, calls.join(", ")].filter(Boolean).join(" · ");
-  return [`${index + 1} · ${who}`, flags.join(" · "), tail].filter(Boolean).join(" · ");
+  return {
+    index: index + 1,
+    role: who,
+    rest: [flags.join(" · "), tail].filter(Boolean).join(" · "),
+    className: "",
+  };
 }
 
-function renderMessageEntry(item: unknown, index: number): { summary: string; className: string } {
-  if (!isRecord(item)) return { summary: `${index + 1} · 无法解析`, className: "" };
+function renderMessageEntry(item: unknown, index: number): StoreEntryParts {
+  if (!isRecord(item)) return { index: index + 1, role: "", rest: "无法解析", className: "" };
   const className =
     item.name === "task-notification" ? "is-notice" : item.role === "user" ? "is-user" : item.is_error === true ? "is-error" : "";
-  return { summary: messageRecordSummary(item, index), className };
+  return { ...messageRecordParts(item, index), className };
 }
 
-function traceRecordSummary(row: Record<string, unknown>, index: number): string {
+function traceRecordParts(row: Record<string, unknown>, index: number): StoreEntryParts {
   const type = recordString(row, "type") || "未知";
   const detail = isRecord(row.detail) ? row.detail : {};
-  const bits = [`${index + 1}`, type];
+  const bits: string[] = [];
   if (type === "llm_request") {
     const id = recordString(detail, "context_id") || recordString(row, "id");
     if (id) bits.push(`context_id ${id}`);
     if (typeof detail.message_count === "number") bits.push(`${detail.message_count} 条消息`);
     const model = recordString(detail, "model");
     if (model) bits.push(model);
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
   if (type === "user_message") {
     if (typeof detail.content_chars === "number") bits.push(`${detail.content_chars} 字`);
     if (typeof detail.image_count === "number" && detail.image_count > 0) {
       bits.push(`${detail.image_count} 张图`);
     }
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
   if (type === "llm_response" || type === "max_steps") {
     if (detail.interrupted === true) bits.push("已中断");
@@ -1127,18 +1159,18 @@ function traceRecordSummary(row: Record<string, unknown>, index: number): string
     const preview = oneLinePreview(recordString(detail, "content"));
     const tail = [preview, calls.join(", ")].filter(Boolean).join(" · ");
     if (tail) bits.push(tail);
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
   if (type === "llm_error") {
     const preview = oneLinePreview(recordString(row, "error"));
     if (preview) bits.push(preview);
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
   if (type === "tool_call") {
     const tool = recordString(detail, "tool");
     if (tool) bits.push(tool);
     bits.push("开始");
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
   if (type === "tool_result") {
     const tool = recordString(detail, "tool");
@@ -1149,14 +1181,14 @@ function traceRecordSummary(row: Record<string, unknown>, index: number): string
     else if (detail.is_error === true) bits.push("错误");
     const preview = oneLinePreview(recordString(detail, "content"));
     if (preview) bits.push(preview);
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
   if (type === "cancel") bits.push("用户取消");
-  return bits.join(" · ");
+  return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
 }
 
-function renderTraceEntry(item: unknown, index: number): { summary: string; className: string } {
-  if (!isRecord(item)) return { summary: `${index + 1} · 无法解析`, className: "" };
+function renderTraceEntry(item: unknown, index: number): StoreEntryParts {
+  if (!isRecord(item)) return { index: index + 1, role: "", rest: "无法解析", className: "" };
   const detail = isRecord(item.detail) ? item.detail : {};
   const className =
     item.type === "user_message"
@@ -1164,17 +1196,17 @@ function renderTraceEntry(item: unknown, index: number): { summary: string; clas
       : item.type === "llm_error" || (item.type === "tool_result" && detail.is_error === true)
         ? "is-error"
         : "";
-  return { summary: traceRecordSummary(item, index), className };
+  return { ...traceRecordParts(item, index), className };
 }
 
-function contextRecordSummary(row: Record<string, unknown>, index: number): string {
+function contextRecordParts(row: Record<string, unknown>, index: number): StoreEntryParts {
   const type = recordString(row, "type") || "未知";
-  const bits = [`${index + 1}`, type];
+  const bits: string[] = [];
   if (type === "tools") {
     const sha = recordString(row, "sha256");
     if (sha) bits.push(sha.slice(0, 12));
     if (Array.isArray(row.tools)) bits.push(`${row.tools.length} 个工具`);
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
   if (type === "request") {
     const id = recordString(row, "id");
@@ -1182,14 +1214,14 @@ function contextRecordSummary(row: Record<string, unknown>, index: number): stri
     if (Array.isArray(row.messages)) bits.push(`${row.messages.length} 条消息`);
     const model = recordString(row, "model");
     if (model) bits.push(model);
-    return bits.join(" · ");
+    return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
   }
-  return bits.join(" · ");
+  return { index: index + 1, role: type, rest: bits.join(" · "), className: "" };
 }
 
-function renderContextEntry(item: unknown, index: number): { summary: string; className: string } {
-  if (!isRecord(item)) return { summary: `${index + 1} · 无法解析`, className: "" };
-  return { summary: contextRecordSummary(item, index), className: "" };
+function renderContextEntry(item: unknown, index: number): StoreEntryParts {
+  if (!isRecord(item)) return { index: index + 1, role: "", rest: "无法解析", className: "" };
+  return contextRecordParts(item, index);
 }
 
 function formatDuration(ms: number): string {
