@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   IMAGE_MODEL_PRESETS,
   defaultImageModelOptions,
+  imageBackgroundForTurn,
   imageOptionsSummary,
   inferImagePresetFromModel,
   mergeImageOptions,
@@ -43,6 +44,15 @@ assert.throws(
     }),
   /尺寸/,
 );
+
+const transparent = {
+  ...defaultImageModelOptions("Doubao-Seedream-5.0-pro"),
+  background: "transparent",
+  format: "png",
+};
+assert.equal(imageBackgroundForTurn(transparent, 1), "transparent");
+assert.equal(imageBackgroundForTurn(transparent, 0), "opaque");
+assert.equal(imageBackgroundForTurn(transparent, 2), "opaque");
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -22,7 +22,7 @@
 - **记忆。** 跨会话记住偏好、纠正和项目里看不出来的事实。一轮正常结束后在后台写入，下一轮自动带上。在首页侧栏点「记忆」查看和修改。
 - **模型。** 在侧栏「模型」里添加多条模型，每条有类型，缺省为生文。可以复制一条。在输入框旁选择当前要用的那一条，发送时按它的类型处理，不会根据你的话猜测。
   - **生文**：走对话补全，可以附带最多 4 张图片和 1 个视频。
-  - **生图**：请求 `${baseUrl}/images/generations`。模型页按 Doubao-Seedream-5.0-pro / 5.5 / 5.0-flash 三个型号 Tab 保存各自的尺寸档位（1K / 1.5K / 2K 与自动 / 1:1 / 4:3 / 3:4 / 16:9 / 9:16）、输出格式（png / jpeg）、背景（opaque / transparent，5.5 另有 auto）、水印和提示词优化（仅 5.0-pro 有 fast）；Model 可填官方 ID 或 `ep-...` Endpoint ID。生成时先按模型默认发，再合并生图标签摘要芯片里的本轮覆盖；透明背景强制 PNG。生成的图出现在助手气泡里。
+  - **生图**：请求 `${baseUrl}/images/generations`。模型页按 Doubao-Seedream-5.0-pro / 5.5 / 5.0-flash 三个型号 Tab 保存各自的尺寸档位（1K / 1.5K / 2K 与自动 / 1:1 / 4:3 / 3:4 / 16:9 / 9:16）、输出格式（png / jpeg）、背景（opaque / transparent，5.5 另有 auto）、水印和提示词优化（仅 5.0-pro 有 fast）；Model 可填官方 ID 或 `ep-...` Endpoint ID。生成时先按模型默认发，再合并生图标签摘要芯片里的本轮覆盖；透明背景强制 PNG，且只在恰好附 1 张参考图时发送，不满足时回退到该型号的非透明默认背景。生成的图出现在助手气泡里。
   - **生视频**：走派欧云 MiniMax H3 异步协议（创建任务再查询）。Base URL 填 `https://api.ppio.com`（勿带 `/v1`）。型号为 Lite / Highspeed / Max / H3 四档，各自保存素材模式、分辨率、可生成时长范围和画幅；默认时长取范围下限。生成的视频写入会话的 `videos/`，出现在助手气泡里。**参考素材**模式可附图片（≤9）/ 视频（≤3）/ 音频（≤3），请求体带 `reference_image` / `reference_video` / `reference_audio`；不能只附音频。对话内本轮覆盖时长/分辨率/模式仍未做。
   - **语音合成（TTS）**：走火山豆包 openspeech HTTP（`seed-tts-2.0`）。输入文本后，音频写入会话 `audios/`，在助手气泡里播放。方舟 Agent Plan 的 Base URL 只作开通/计费占位，运行时忽略并改打 openspeech；请用豆包语音专属 Key（`X-Api-Key`）。
   - **语音识别（ASR）**：上传一段音频可转写为文本；输入框旁麦克风听写写入草稿（不自动发送），使用旁路「当前听写」模型（`currentAsrModelId`）。WebSocket 端点为 nostream（上传）/ async（麦克风）。

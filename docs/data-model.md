@@ -135,7 +135,7 @@ flowchart TB
 
 agent home 下 `config.json` 的字段见 [README 的配置表](../README.md#配置)。
 
-`kind` 为 `image` 的模型条目还保存 `imagePreset`、`image` 和 `imageByModel`。每组参数有 `sizes` / `size`、`ratios` / `ratio`、`formats` / `format`、`backgrounds` / `background`、`watermark`、`promptModes` / `promptMode`。默认尺寸 2K、画幅自动；默认格式和背景随型号（5.0-pro 为 jpeg / opaque，5.5 为 png / auto，5.0-flash 为 jpeg / opaque）。启用透明背景时格式必须包含 `png`。
+`kind` 为 `image` 的模型条目还保存 `imagePreset`、`image` 和 `imageByModel`。每组参数有 `sizes` / `size`、`ratios` / `ratio`、`formats` / `format`、`backgrounds` / `background`、`watermark`、`promptModes` / `promptMode`。默认尺寸 2K、画幅自动；默认格式和背景随型号（5.0-pro 为 jpeg / opaque，5.5 为 png / auto，5.0-flash 为 jpeg / opaque）。启用透明背景时格式必须包含 `png`；透明背景只在恰好 1 张参考图时发送，否则回退到该型号的非透明默认背景。
 
 - 保存时先读回磁盘上的配置再合并，所以手改的限额不会被界面的保存冲掉；但写入是整份重写。
 - 目录 chmod 0700，失败会被忽略；文件以 0600 创建，之后再 chmod 一次。Windows 上 chmod 基本不起作用，文件靠用户目录本身的权限保护。

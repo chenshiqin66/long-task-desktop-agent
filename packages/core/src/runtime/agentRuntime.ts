@@ -27,6 +27,7 @@ import {
   IMAGE_RATIOS,
   IMAGE_SIZE_TIERS,
   defaultImageModelOptions,
+  imageBackgroundForTurn,
   inferImagePresetFromModel,
   mergeImageOptions,
 } from "../config/imageOptions.js";
@@ -2559,7 +2560,7 @@ export class AgentRuntime {
         ...(refImages.length ? { images: refImages } : {}),
         size: resolveImageSize(imageOpts),
         outputFormat: imageOpts.format,
-        background: imageOpts.background,
+        background: imageBackgroundForTurn(imageOpts, refImages.length),
         watermark: imageOpts.watermark,
         ...(imageOpts.promptModes.includes("fast") ? { promptMode: imageOpts.promptMode } : {}),
         signal: this.abort?.signal,

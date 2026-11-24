@@ -39,6 +39,7 @@ import {
 import {
   DEFAULT_IMAGE_PRESET,
   defaultImageModelOptions,
+  imageBackgroundForTurn,
   imageOptionsSummary,
   inferImagePresetFromModel,
   mergeImageOptions,
@@ -3334,7 +3335,8 @@ async function activeImageModelOptions(): Promise<ImageModelOptions | null> {
 }
 
 function effectiveImageTurn(base: ImageModelOptions): ImageModelOptions {
-  return mergeImageOptions(base, imageTurnOverride);
+  const eff = mergeImageOptions(base, imageTurnOverride);
+  return { ...eff, background: imageBackgroundForTurn(eff, pendingImages.length) };
 }
 
 async function syncComposerImageChip(): Promise<void> {
@@ -3389,7 +3391,9 @@ function paintImagePop(base: ImageModelOptions): void {
     composerImagePop,
     "背景",
     eff.background,
-    base.backgrounds,
+    base.backgrounds.filter(
+      (value) => value !== "transparent" || pendingImages.length === 1,
+    ),
     (v) => {
       imageTurnOverride = { ...imageTurnOverride, background: v as ImageModelOptions["background"] };
       if (v === "transparent") imageTurnOverride = { ...imageTurnOverride, format: "png" };
@@ -3525,6 +3529,7 @@ function renderPendingImages(): void {
     pendingImages.length === 0 && pendingVideos.length === 0 && pendingAudios.length === 0;
   composerCollapse?.refresh();
   void syncComposerVideoChip();
+  void syncComposerImageChip();
   pendingImages.forEach((image, index) => {
     const thumb = document.createElement("div");
     thumb.className = "composer-thumb";

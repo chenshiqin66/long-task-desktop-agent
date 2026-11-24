@@ -35,7 +35,7 @@
 - `background` 可选值：5.0-pro / 5.0-flash 为 `opaque`、`transparent`；5.5 另有 `auto`。默认：5.5 `auto`，另外两个 `opaque`。
 - `optimize_prompt_options.mode`：5.0-pro 支持 `standard` / `fast`；5.5 和 5.0-flash 仅 `standard`。
 - `watermark` 默认 `true`。
-- 透明背景要求 `png`；`jpeg` 与 `transparent` 同时使用会报错。只要启用 `transparent`，就必须同时启用 `png`，否则 composer 切到透明背景时没有合法的格式可选。
+- 透明背景要求 `png`；`jpeg` 与 `transparent` 同时使用会报错。只要启用 `transparent`，就必须同时启用 `png`，否则 composer 切到透明背景时没有合法的格式可选。方舟还要求透明背景恰好附 1 张参考图；0 张或多张时回退到该型号的非透明默认背景。
 - 官方模型 ID（2026-11-24）：
   - `doubao-seedream-5-0-pro-260628`
   - `doubao-seedream-5-5-261028`
@@ -173,7 +173,7 @@ Model  [doubao-seedream-5-0-pro-260628]   ← 切 Tab 自动填，可改
 - Tab 从 `imagePreset` 决定；没有时按 Model 名推断；再没有用 5.0-pro。
 - 切换 Tab：先暂存当前 Tab 的参数组和 Model 输入值，再画新 Tab 的说明和参数，并把 Model 输入换成该 Tab 记住的值（默认官方 ID）。当前会话内切回来时保留用户改过的 Model 值；未激活 Tab 的值只在本次表单会话内存里保留。
 - 每组参数仍用「方框启用、圆点设默认」；提示词优化只在 5.0-pro 显示两组，5.5 / 5.0-flash 显示一行「该型号固定 standard」。
-- 透明背景与格式联动：背景组只要启用了 `transparent`，格式组就必须启用 `png`；保存时若不满足，拒绝并提示「透明背景需要同时启用 PNG 格式」。默认背景为 `transparent` 时，默认格式必须是 `png`，否则保存时拒绝。composer 选透明背景时自动把格式切到 `png`。
+- 透明背景与格式联动：背景组只要启用了 `transparent`，格式组就必须启用 `png`；保存时若不满足，拒绝并提示「透明背景需要同时启用 PNG 格式」。默认背景为 `transparent` 时，默认格式必须是 `png`，否则保存时拒绝。composer 选透明背景时自动把格式切到 `png`；透明背景只在当前轮恰好 1 张参考图时生效，否则 composer 和运行时都回退到非透明背景。
 - 每组参数至少保留一项：生图的启用组（尺寸、画幅、格式、背景、提示词优化）在用户尝试取消最后一项时不生效，保持勾选并提示「至少保留一项」。这样切走的 Tab 也不会留下空组；手改配置里的空组由归一化回退到默认值。
 - 保存时：`model` 取当前 Model 输入；`imagePreset` 取当前 Tab；`image` 取当前 Tab 归一化后的参数；`imageByModel` 取三组参数。`kind` 仍为 `image`。
 - 校验：至少启用一个尺寸、一个画幅、一种格式、一种背景；Model 和 Base URL 不能为空（沿用现有规则）。
@@ -201,7 +201,7 @@ Model  [doubao-seedream-5-0-pro-260628]   ← 切 Tab 自动填，可改
 - 摘要取生效值，顺序为尺寸、画幅、格式、水印；背景不是默认值时追加。
 - 弹层选项只列模型页启用过的值。提示词优化只有 `base.promptModes` 多于一项时才显示。
 - 选择只写本轮覆盖 `imageTurnOverride`，不改配置；值必须落在该模型启用集合里，否则忽略并回到默认。
-- 选择 `transparent` 时，格式自动切到 `png`，格式下拉只留 `png`，直到背景改回非透明。模型页保证启用透明背景时 `png` 一定在格式启用集合里，所以这个覆盖值不会越界。
+- 选择 `transparent` 时，格式自动切到 `png`，格式下拉只留 `png`，直到背景改回非透明。模型页保证启用透明背景时 `png` 一定在格式启用集合里，所以这个覆盖值不会越界。背景只在当前轮恰好 1 张参考图时提供 `transparent`；否则不列出，已选的 `transparent` 在摘要里显示为回退后的非透明背景。
 - 「恢复模型默认」清空本轮覆盖。
 - 离开生图标签、新建会话时清空本轮覆盖并关闭弹层；同一标签内连续发送保留上次选择（和生视频一致）。
 - 发送时把生效参数放进 `options.image`，随 `submit` 传给主进程。
@@ -209,7 +209,7 @@ Model  [doubao-seedream-5-0-pro-260628]   ← 切 Tab 自动填，可改
 
 ## 运行时
 
-`normalizeTurnOptions` 解析 `options.image`，和 `video` 一起返回；`effectiveImageOptions()` 用模型配置做底，合并本轮覆盖，并逐项校验是否在启用集合里。若合并后 `background === "transparent"`，强制 `format = "png"`，作为手改配置的兜底。
+`normalizeTurnOptions` 解析 `options.image`，和 `video` 一起返回；`effectiveImageOptions()` 用模型配置做底，合并本轮覆盖，并逐项校验是否在启用集合里。若合并后 `background === "transparent"`，强制 `format = "png"`，作为手改配置的兜底；若这一轮不是恰好 1 张参考图，把背景回退到该型号的非透明默认值。
 
 生图分流在调用 `provider.generateImage` 时传：
 

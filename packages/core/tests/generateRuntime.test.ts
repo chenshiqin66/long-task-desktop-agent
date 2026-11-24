@@ -21,6 +21,8 @@ import { rmWorkspace } from "./rmWorkspace.js";
 
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const PNG_ALT =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 const VIDEO = Buffer.from("fake-mp4").toString("base64");
 const AUDIO = Buffer.from("fake-mp3").toString("base64");
 
@@ -578,7 +580,7 @@ describe("runtime routing by model kind", () => {
     };
     const rt = makeRuntime(workspace, "image", provider, undefined, image);
     const meta = await rt.createSession();
-    await rt.submit(meta.session_id, "一只猫");
+    await rt.submit(meta.session_id, "一只猫", [{ mime: "image/png", base64: PNG }]);
 
     expect(generateCalls[0]).toMatchObject({
       size: "1920x1080",
@@ -593,7 +595,7 @@ describe("runtime routing by model kind", () => {
     const { provider, generateCalls } = imageProvider();
     const rt = makeRuntime(workspace, "image", provider);
     const meta = await rt.createSession();
-    await rt.submit(meta.session_id, "一只猫", undefined, undefined, undefined, {
+    await rt.submit(meta.session_id, "一只猫", [{ mime: "image/png", base64: PNG }], undefined, undefined, {
       image: {
         size: "1.5K",
         ratio: "9:16",
@@ -633,7 +635,7 @@ describe("runtime routing by model kind", () => {
     };
     const rt = makeRuntime(workspace, "image", provider, undefined, image);
     const meta = await rt.createSession();
-    await rt.submit(meta.session_id, "一只猫");
+    await rt.submit(meta.session_id, "一只猫", [{ mime: "image/png", base64: PNG }]);
 
     expect(generateCalls[0]).toMatchObject({ background: "transparent", outputFormat: "png" });
   });
@@ -651,5 +653,28 @@ describe("runtime routing by model kind", () => {
     await rt.submit(meta.session_id, "一只猫");
 
     expect(generateCalls[0]?.promptMode).toBeUndefined();
+  });
+
+  it("only sends transparent background with exactly one reference image", async () => {
+    const { provider, generateCalls } = imageProvider();
+    const image = {
+      ...defaultImageModelOptions("Doubao-Seedream-5.0-pro"),
+      background: "transparent" as const,
+      format: "png" as const,
+    };
+    const rt = makeRuntime(workspace, "image", provider, undefined, image);
+    const meta = await rt.createSession();
+
+    await rt.submit(meta.session_id, "无参考图");
+    expect(generateCalls[0]?.background).toBe("opaque");
+
+    await rt.submit(meta.session_id, "一张参考图", [{ mime: "image/png", base64: PNG }]);
+    expect(generateCalls[1]?.background).toBe("transparent");
+
+    await rt.submit(meta.session_id, "两张参考图", [
+      { mime: "image/png", base64: PNG },
+      { mime: "image/png", base64: PNG_ALT },
+    ]);
+    expect(generateCalls[2]?.background).toBe("opaque");
   });
 });

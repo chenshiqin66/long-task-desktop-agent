@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   defaultImageByModel,
   defaultImageModelOptions,
+  imageBackgroundForTurn,
   imageOptionsSummary,
   inferImagePresetFromModel,
   mergeImageOptions,
@@ -141,5 +142,23 @@ describe("image model options", () => {
       "Doubao-Seedream-5.0-flash",
     );
     expect(inferImagePresetFromModel("ep-20240101")).toBeUndefined();
+  });
+
+  it("only keeps transparent with exactly one reference image", () => {
+    const pro = {
+      ...defaultImageModelOptions("Doubao-Seedream-5.0-pro"),
+      background: "transparent" as const,
+      format: "png" as const,
+    };
+    expect(imageBackgroundForTurn(pro, 1)).toBe("transparent");
+    expect(imageBackgroundForTurn(pro, 0)).toBe("opaque");
+    expect(imageBackgroundForTurn(pro, 2)).toBe("opaque");
+
+    const five = {
+      ...defaultImageModelOptions("Doubao-Seedream-5.5"),
+      background: "transparent" as const,
+      format: "png" as const,
+    };
+    expect(imageBackgroundForTurn(five, 0)).toBe("auto");
   });
 });

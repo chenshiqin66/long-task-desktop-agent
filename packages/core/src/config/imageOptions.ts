@@ -344,6 +344,16 @@ export function mergeImageOptions(
   return { ...base, size, ratio, format, background, watermark, promptMode };
 }
 
+/** Seedream only accepts transparent with exactly one reference image. */
+export function imageBackgroundForTurn(
+  options: ImageModelOptions,
+  referenceImages: number,
+): ImageBackground {
+  if (options.background !== "transparent") return options.background;
+  if (referenceImages === 1) return "transparent";
+  return options.backgrounds.find((value) => value !== "transparent") ?? "opaque";
+}
+
 const RATIO_LABELS: Record<ImageRatio, string> = {
   auto: "自动",
   "1:1": "1:1",
