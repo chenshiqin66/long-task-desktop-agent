@@ -255,7 +255,8 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .sidebar-actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   gap: 8px;
 }
 
@@ -263,6 +264,29 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   flex: 1;
   min-width: 0;
   width: auto;
+}
+
+/* 加号占自然宽度，与「新建会话」等高；悬停提示走 title。 */
+.sidebar-actions #btn-workspace {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid #15c1ae;
+  background: var(--paper-elev);
+  padding: 0 10px;
+  line-height: 0;
+}
+
+.sidebar-actions #btn-workspace .workspace-add-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  color: #15c1ae;
 }
 
 .workspace-group {
@@ -299,6 +323,25 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   justify-self: stretch;
   text-align: center;
   box-sizing: border-box;
+}
+
+#btn-workbench {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.workbench-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+
+#btn-workbench.is-current .workbench-icon,
+#btn-workbench[aria-pressed="true"] .workbench-icon {
+  color: #15c1ae;
 }
 
 #btn-workbench.is-pinned {
@@ -1200,38 +1243,6 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   background: var(--teal-soft);
 }
 
-.workspace-block {
-  /* ~60% of prior vertical footprint */
-  padding: 6px 8px 7px;
-  border: 1px dashed var(--line);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.35);
-}
-
-.workspace-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.workspace-block .eyebrow {
-  margin: 0;
-  font-size: var(--text-sm);
-  letter-spacing: 0.08em;
-}
-
-.workspace-add.btn-add-icon {
-  width: 22px;
-  height: 22px;
-  min-width: 22px;
-}
-
-.workspace-add.btn-add-icon svg {
-  width: 22px;
-  height: 22px;
-}
-
 .workspace-trees {
   flex: 1;
   min-height: 0;
@@ -1270,6 +1281,9 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .workspace-path {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   padding: 4px 4px;
   border: none;
   background: transparent;
@@ -1280,6 +1294,23 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   color: var(--ink);
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.workspace-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+
+.workspace-path-row.is-active .workspace-icon {
+  color: #15c1ae;
+}
+
+.workspace-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1409,6 +1440,9 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .session-label {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   text-align: left;
   border: none;
   background: transparent;
@@ -1418,6 +1452,23 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   color: inherit;
   cursor: pointer;
   padding: 4px 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.session-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+
+.session-list li.session-item.active .session-icon {
+  color: #15c1ae;
+}
+
+.session-label-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4033,12 +4084,13 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   height: 16px;
 }
 
-.btn-image[data-tip]::after {
+.btn-image[data-tip]::after,
+.app-tip {
   content: attr(data-tip);
   position: absolute;
   left: 50%;
   bottom: calc(100% + 7px);
-  z-index: 5;
+  z-index: 300;
   padding: 4px 8px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--ink) 88%, #fff);
@@ -4055,6 +4107,19 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   transition:
     opacity 0.12s ease,
     transform 0.12s ease;
+}
+
+/* The shared JS tooltip is positioned in viewport coordinates. */
+.app-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: auto;
+  transform: none;
+}
+
+.app-tip:not([hidden]) {
+  opacity: 1;
 }
 
 .btn-image[data-tip]:hover::after,
@@ -4079,7 +4144,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .btn-image[data-tip]::after {
+  .btn-image[data-tip]::after,
+  .app-tip {
     transition: none;
   }
 }
@@ -5498,13 +5564,16 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   overflow-wrap: normal;
 }
 
-/* The summary wraps freely so the stored parameters stay readable; long URLs
-   break mid-token instead of pushing the row wider. */
+/* Keep the card one line tall. A zero-basis + anywhere wrap squeezes long URLs
+   into one character per column in a narrow window, blowing up the row height.
+   Truncate with an ellipsis instead; the full value stays in title on hover. */
 #models-page .models-list .mcp-summary {
   flex: 1 1 0;
   min-width: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
 }
 
 #models-page .models-list .mcp-actions {

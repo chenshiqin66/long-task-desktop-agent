@@ -67,6 +67,7 @@ import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { paintSendButton } from "./sendButton.js";
 import { createThinkingHint, thinkingLabel } from "./thinkingHint.js";
 import { paintAddButtons } from "./addButton.js";
+import { installTooltips } from "./tooltip.js";
 import { attachComposerResize } from "./composerResize.js";
 import { attachComposerCollapse, type ComposerCollapse } from "./composerCollapse.js";
 import {
@@ -459,6 +460,7 @@ mountMenuToggle(
 let browserExplain: BrowserExplain | null = null;
 
 paintAddButtons();
+installTooltips();
 attachComposerResize(
   composerEl,
   inputEl,
@@ -2302,6 +2304,24 @@ const MENU_PENCIL =
 const MENU_TRASH =
   '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.6h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M6.2 4.5V3h3.6v1.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M4.3 4.6l.6 8.2h6.2l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
 
+// Workspace marker: a redrawn stack of items. Colored via currentColor so the
+// active row paints it teal and the rest stay gray.
+const WORKSPACE_ICON =
+  '<svg class="workspace-icon" viewBox="0 0 1024 1024" aria-hidden="true">' +
+  '<path d="M588.285495 14.94673C548.461674-5.118743 483.248887-5.118743 443.425066 14.94673L29.984186 221.692763c-39.875009 19.911911-39.875009 52.467117 0 72.379028l405.66039 202.855788c39.823821 19.911911 105.036608 19.911911 144.86043 0l413.440879-206.746033c39.875009-19.911911 39.875009-52.467117 0-72.379027zM1019.795538 731.417201a38.339386 38.339386 0 0 0-51.494556-17.14779L523.379833 936.729986a25.286591 25.286591 0 0 1-22.829594 0l-444.92115-222.460575A38.390573 38.390573 0 1 0 21.33351 783.167693l468.262618 233.977747a39.926196 39.926196 0 0 0 44.737815 0L1002.596561 783.167693a38.390573 38.390573 0 0 0 17.198977-51.750492z" fill="currentColor"/>' +
+  '<path d="M1019.795538 475.480046a38.339386 38.339386 0 0 0-51.494556-17.147789L523.379833 680.792831a25.286591 25.286591 0 0 1-22.829594 0L55.629089 458.332257A38.390573 38.390573 0 1 0 21.33351 527.230539l468.262618 233.977746a39.926196 39.926196 0 0 0 44.737815 0L1002.596561 527.230539a38.390573 38.390573 0 0 0 17.198977-51.750493z" fill="currentColor"/>' +
+  '</svg>';
+
+// Session marker: a redrawn list/chat glyph. currentColor lets the active
+// session paint it teal and the rest stay gray.
+const SESSION_ICON =
+  '<svg class="session-icon" viewBox="0 0 1024 1024" aria-hidden="true">' +
+  '<path d="M950.8864 268.8c-10.6496-18.4832-26.0608-33.8432-44.4928-44.4928l-0.2048-0.1536L572.3136 37.376c-18.3808-10.5472-39.3216-16.128-60.5696-16.128-21.1968 0-42.1376 5.5808-60.5696 16.128L117.6064 224.0512l-0.4608 0.256c-18.4832 10.6496-33.8432 26.0608-44.4928 44.4928C61.952 287.2832 56.32 308.3264 56.32 329.6256v373.6064c0 21.2992 5.632 42.3424 16.2816 60.8256 10.6496 18.4832 26.0608 33.8432 44.4928 44.4928l0.2048 0.1536 333.824 186.8288c18.3808 10.5472 39.3216 16.1792 60.5696 16.1792 21.2992 0 42.3424-5.632 60.8256-16.2816l115.456-66.6624c18.3808-10.5984 24.6784-34.0992 14.08-52.48-10.5984-18.3808-34.0992-24.6784-52.48-14.08l-115.456 66.6624c-13.824 7.9872-30.976 7.9872-44.8 0l-0.2048-0.1536-333.7728-186.7776c-13.7216-7.9872-22.2208-22.8352-22.2208-38.7072V329.6256c0-15.872 8.4992-30.72 22.2208-38.7072l333.5168-186.6752 0.4608-0.256c13.824-7.9872 30.976-7.9872 44.8 0l0.2048 0.1536 333.7728 186.7776c13.7216 7.9872 22.2208 22.8352 22.2208 38.7072v373.6064c0 15.9744-8.6016 30.8224-22.4256 38.8096l-28.4672 16.4352c-18.3808 10.5984-24.6784 34.0992-14.08 52.48 10.5984 18.3808 34.0992 24.6784 52.48 14.08l28.4672-16.4352c18.4832-10.6496 33.8432-26.0608 44.4928-44.4928 10.6496-18.4832 16.2816-39.4752 16.2816-60.8256V329.6256c0.1024-21.2992-5.5296-42.3424-16.1792-60.8256z" fill="currentColor"/>' +
+  '<path d="M237.292824 558.61463a52.4288 52.4288 0 1 0 74.144226-74.146814 52.4288 52.4288 0 1 0-74.144226 74.146814Z" fill="currentColor"/>' +
+  '<path d="M474.651664 558.609226a52.4288 52.4288 0 1 0 74.144226-74.146815 52.4288 52.4288 0 1 0-74.144226 74.146815Z" fill="currentColor"/>' +
+  '<path d="M712.010142 558.603971a52.4288 52.4288 0 1 0 74.144226-74.146814 52.4288 52.4288 0 1 0-74.144226 74.146814Z" fill="currentColor"/>' +
+  '</svg>';
+
 function folderName(path: string): string {
   const parts = path.replace(/[/\\]+$/, "").split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -2364,7 +2384,7 @@ async function openWorkspaceMenu(
     ev.stopPropagation();
     closeSessionMenus();
     if (!canRemove) {
-      setStatus(removeItem.title, true);
+      setStatus(removeItem.getAttribute("data-tip") ?? "", true);
       return;
     }
     void removeWorkspaceFromList(path);
@@ -2475,8 +2495,12 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   pathBtn.type = "button";
   pathBtn.className = "workspace-path";
   const label = workspaceLabel(path);
-  pathBtn.textContent = label;
-  pathBtn.title = path;
+  pathBtn.innerHTML = WORKSPACE_ICON;
+  const labelText = document.createElement("span");
+  labelText.className = "workspace-label";
+  labelText.textContent = label;
+  pathBtn.append(labelText);
+  pathBtn.title = `工作区：${path}`;
   pathBtn.setAttribute("aria-expanded", open ? "true" : "false");
   pathBtn.setAttribute("aria-label", open ? `折叠 ${label}` : `展开 ${label}`);
   pathBtn.onclick = (ev) => {
@@ -2554,7 +2578,7 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   ul.hidden = !open;
   const runningHere = workspaceHasRun(path);
   if (runningHere && !open) row.append(sessionSpinner());
-  row.append(pathBtn, chevron, more);
+  row.append(pathBtn, more, chevron);
   block.append(row, ul);
   treesEl.appendChild(block);
   return ul;
@@ -2683,7 +2707,11 @@ async function refreshSessions(): Promise<void> {
       const label = document.createElement("button");
       label.type = "button";
       label.className = "session-label";
-      label.textContent = s.title || s.session_id;
+      label.innerHTML = SESSION_ICON;
+      const sessionText = document.createElement("span");
+      sessionText.className = "session-label-text";
+      sessionText.textContent = s.title || s.session_id;
+      label.append(sessionText);
       label.onclick = () => {
         void showSession(workspace, s.session_id, s.title || "会话");
       };

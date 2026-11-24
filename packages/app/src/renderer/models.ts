@@ -304,7 +304,7 @@ export function attachModelsLibrary(
   const apiKeyInput = form.querySelector("#model-apiKey") as HTMLInputElement;
   const apiKeyToggle = form.querySelector("#model-apiKey-toggle") as HTMLButtonElement | null;
   if (apiKeyToggle) attachSecretReveal(apiKeyInput, apiKeyToggle);
-  const cancelBtn = page.querySelector("#models-cancel") as HTMLButtonElement;
+  const cancelBtn = form.querySelector("#models-cancel") as HTMLButtonElement;
   const kindHint = form.querySelector("#model-kind-hint") as HTMLElement | null;
   const videoBaseUrlHint = form.querySelector("#model-video-baseurl-hint") as HTMLElement | null;
   const speechBaseUrlHint = form.querySelector("#model-speech-baseurl-hint") as HTMLElement | null;
@@ -943,6 +943,8 @@ export function attachModelsLibrary(
     const speechHost =
       kind === "tts" || kind === "asr" ? "openspeech.bytedance.com" : entry.baseUrl || "未填写 Base URL";
     summary.textContent = [speechHost, videoLine, imageLine, ttsLine].filter(Boolean).join(" · ");
+    // The row elides long URLs on narrow windows; keep the full value on hover.
+    summary.title = summary.textContent;
     if (isAsrSide && asrCurrent) {
       const badge = document.createElement("span");
       badge.className = "mcp-state is-ok";
