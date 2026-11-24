@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import {
+  PANEL_MEDIA_SELECTOR,
   ZOOM_MAX,
   ZOOM_MIN,
   clampPan,
   clampZoom,
   fitContain,
+  isCopyImageShortcut,
   neighborIndex,
   panAfterZoom,
+  shouldHandleCopyImageShortcut,
   stepZoom,
+  typingTargetBlocksViewerKeys,
 } from "../dist/src/renderer/imageViewer.js";
 
 assert.equal(clampZoom(0), ZOOM_MIN);
@@ -20,12 +24,91 @@ assert.equal(stepZoom(ZOOM_MAX, 1), ZOOM_MAX);
 assert.equal(stepZoom(ZOOM_MIN, -1), ZOOM_MIN);
 assert.equal(stepZoom(stepZoom(1, 1), -1), 1);
 
-assert.equal(neighborIndex(0, -1, 3), null);
-assert.equal(neighborIndex(2, 1, 3), null);
+assert.equal(PANEL_MEDIA_SELECTOR, ".msg-images img, .msg-videos video");
+
+assert.equal(neighborIndex(0, -1, 3), 2);
+assert.equal(neighborIndex(2, 1, 3), 0);
 assert.equal(neighborIndex(1, -1, 3), 0);
 assert.equal(neighborIndex(1, 1, 3), 2);
 assert.equal(neighborIndex(0, 1, 1), null);
+assert.equal(neighborIndex(0, -1, 1), null);
 assert.equal(neighborIndex(0, 1, 0), null);
+assert.equal(neighborIndex(0, 2, 4), 2);
+assert.equal(neighborIndex(1, -2, 4), 3);
+
+assert.equal(typingTargetBlocksViewerKeys("TEXTAREA"), true);
+assert.equal(typingTargetBlocksViewerKeys("INPUT"), true);
+assert.equal(typingTargetBlocksViewerKeys("INPUT", { type: "text" }), true);
+assert.equal(typingTargetBlocksViewerKeys("INPUT", { type: "search" }), true);
+assert.equal(typingTargetBlocksViewerKeys("INPUT", { type: "button" }), false);
+assert.equal(typingTargetBlocksViewerKeys("BUTTON"), false);
+assert.equal(typingTargetBlocksViewerKeys("DIV"), false);
+assert.equal(typingTargetBlocksViewerKeys("DIV", { contentEditable: true }), true);
+assert.equal(typingTargetBlocksViewerKeys("SELECT"), true);
+
+
+assert.equal(isCopyImageShortcut({ key: "c", ctrlKey: true, metaKey: false }), true);
+assert.equal(isCopyImageShortcut({ key: "C", ctrlKey: false, metaKey: true }), true);
+assert.equal(isCopyImageShortcut({ key: "c", ctrlKey: true, metaKey: false, shiftKey: true }), false);
+assert.equal(isCopyImageShortcut({ key: "c", ctrlKey: true, metaKey: false, altKey: true }), false);
+assert.equal(isCopyImageShortcut({ key: "c", ctrlKey: true, metaKey: false, isComposing: true }), false);
+assert.equal(isCopyImageShortcut({ key: "v", ctrlKey: true, metaKey: false }), false);
+assert.equal(isCopyImageShortcut({ key: "c", ctrlKey: false, metaKey: false }), false);
+
+assert.equal(
+  shouldHandleCopyImageShortcut({
+    viewerOpen: true,
+    inEditable: false,
+    hasTextSelection: true,
+    currentIsImage: true,
+  }),
+  true,
+);
+assert.equal(
+  shouldHandleCopyImageShortcut({
+    viewerOpen: true,
+    inEditable: true,
+    hasTextSelection: false,
+    currentIsImage: true,
+  }),
+  false,
+);
+assert.equal(
+  shouldHandleCopyImageShortcut({
+    viewerOpen: true,
+    inEditable: false,
+    hasTextSelection: false,
+    currentIsImage: false,
+  }),
+  false,
+);
+assert.equal(
+  shouldHandleCopyImageShortcut({
+    viewerOpen: false,
+    inEditable: false,
+    hasTextSelection: false,
+    currentIsImage: true,
+  }),
+  true,
+);
+assert.equal(
+  shouldHandleCopyImageShortcut({
+    viewerOpen: false,
+    inEditable: false,
+    hasTextSelection: true,
+    currentIsImage: true,
+  }),
+  false,
+);
+assert.equal(
+  shouldHandleCopyImageShortcut({
+    viewerOpen: false,
+    inEditable: true,
+    hasTextSelection: false,
+    currentIsImage: true,
+  }),
+  false,
+);
 
 const still = panAfterZoom(10, -4, 1, 2, 10, -4);
 assert.equal(still.x, 10);

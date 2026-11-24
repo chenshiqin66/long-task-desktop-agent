@@ -13,6 +13,7 @@ const scripts = [
   ["test-stream-paint.mjs"],
   ["test-escape-key.mjs"],
   ["test-image-viewer.mjs"],
+  ["test-media-export.mjs"],
   ["test-send-button.mjs"],
   ["test-thinking-hint.mjs"],
   ["test-error-summary.mjs"],

@@ -2529,6 +2529,11 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  max-height: none;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  -webkit-box-orient: unset;
+  cursor: default;
 }
 
 .turn > .msg.user.is-stuck:has(.msg-body:not(:empty)) .msg-images,
@@ -2679,6 +2684,30 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   font-size: var(--text);
   line-height: 1.45;
   letter-spacing: 0.005em;
+}
+
+.msg.user .msg-body.is-long,
+.msg.assistant .msg-body.is-long {
+  cursor: pointer;
+}
+
+.msg.user .msg-body.is-collapsed,
+.msg.assistant .msg-body.is-collapsed {
+  max-height: var(--msg-clamp-height);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.msg.user .msg-body.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  max-width: 100%;
+}
+
+.msg.assistant .msg-body.is-collapsed {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 0.9em), transparent);
 }
 
 .msg.assistant .msg-body .md-p {
@@ -3361,17 +3390,18 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   grid-template-rows: minmax(0, auto);
   gap: 0;
   padding: 0;
-  overflow: hidden;
+  /* Keep overflow visible so the skill slash menu and video pop can sit above the card. */
+  overflow: visible;
   align-items: stretch;
 }
 
 #composer .composer-body {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
   min-width: 0;
+  min-height: 0;
   padding: 6px 10px 8px;
 }
 
@@ -3499,6 +3529,12 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   min-width: 0;
 }
 
+/* When the kind rail stretches the card taller than the input stack, keep the toolbar on the bottom edge. */
+#composer .composer-actions {
+  margin-top: auto;
+  flex: none;
+}
+
 #composer .composer-kind {
   display: flex;
   flex-direction: column;
@@ -3507,6 +3543,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   width: 44px;
   min-width: 44px;
   min-height: 0;
+  overflow: hidden;
+  border-radius: 13px 0 0 13px;
   border-right: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
   background: color-mix(in srgb, var(--panel) 88%, #e8eef2);
 }
@@ -3733,6 +3771,16 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   background: var(--warn-soft);
 }
 
+.btn-tasks.is-complete {
+  color: var(--accent-ink);
+  background: var(--teal-soft);
+}
+
+.btn-tasks.is-complete:hover,
+.btn-tasks.is-complete[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
 .task-count {
   font-variant-numeric: tabular-nums;
 }
@@ -3755,9 +3803,75 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   padding: 10px 12px 8px;
+}
+
+.task-batch-tabs {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.task-batch {
+  height: 24px;
+  padding: 0 8px 0 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.task-batch.is-selected {
+  border-color: color-mix(in srgb, var(--ink) 28%, var(--line));
+  background: color-mix(in srgb, var(--ink) 5%, #fff);
+}
+
+.task-batch.is-attention {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--warn-soft);
+}
+
+.task-batch.is-complete {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--teal-soft);
+}
+
+.task-batch.is-selected.is-attention {
+  border-color: color-mix(in srgb, var(--warn) 70%, var(--line));
+}
+
+.task-batch.is-selected.is-complete {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--line));
+}
+
+.task-batch-index {
+  flex: none;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 /* The list scrolls with the wheel or trackpad, but the bar stays hidden. */
@@ -3780,6 +3894,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .task-panel-close {
+  flex: none;
+  margin-left: auto;
   width: 24px;
   height: 24px;
   padding: 0;
@@ -4084,6 +4200,10 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   box-shadow: 0 8px 24px rgba(26, 35, 50, 0.28);
 }
 
+.image-viewer-video {
+  background: #000;
+}
+
 .image-viewer-toolbar {
   flex-shrink: 0;
   display: flex;
@@ -4252,6 +4372,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 #composer:is(.is-compact, .is-thinking, .is-collapsed) .composer-body {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 6px;
   flex: 1 1 auto;
@@ -4302,6 +4423,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   grid-column: auto;
   gap: 2px;
   justify-content: flex-end;
+  margin-top: 0;
 }
 
 :is(#composer, #explain-composer):is(.is-compact, .is-thinking, .is-collapsed) .composer-model,
@@ -4364,6 +4486,46 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .field textarea:focus {
   outline: none;
   border-color: var(--teal);
+}
+
+.field-secret {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.field-secret input {
+  padding-right: 36px;
+}
+
+.field-secret-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.field-secret-toggle:hover,
+.field-secret-toggle:focus-visible {
+  color: var(--ink);
+  background: var(--teal-soft);
+}
+
+.field-secret-toggle svg {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .config-actions {
@@ -4847,6 +5009,62 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   background: #fff;
 }
 
+/* Model add/edit lives in a native modal dialog, not in the library page flow. */
+.models-modal {
+  width: min(640px, calc(100vw - 48px));
+  max-width: none;
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  overflow: visible;
+}
+
+.models-modal::backdrop {
+  background: color-mix(in srgb, var(--ink) 48%, transparent);
+}
+
+.models-modal .models-form {
+  max-width: none;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.models-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.models-modal-title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.models-modal-close {
+  appearance: none;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 1.25rem;
+  line-height: 1.25;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.models-modal-close:hover,
+.models-modal-close:focus-visible {
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+  color: var(--ink);
+}
+
 .model-video-options {
   display: flex;
   flex-direction: column;
@@ -5172,11 +5390,169 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   align-items: flex-start;
 }
 
+.models-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  align-self: stretch;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 3px;
+  height: auto;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--line) 28%, #fff);
+}
+
+.models-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin: 0;
+  padding: 4px 6px;
+  min-height: 0;
+  height: auto;
+  line-height: 1.2;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.models-tab:hover {
+  color: var(--ink);
+}
+
+.models-tab.is-active {
+  background: #fff;
+  color: var(--accent-ink);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.models-tab:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+}
+
+.models-tab-count {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--ink-muted);
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 45%, #fff);
+  line-height: 1.2;
+}
+
+.models-tab.is-active .models-tab-count {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--teal) 14%, #fff);
+}
+
 .mcp-list,
 .models-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Model cards are compact rows; the summary may wrap to two lines. Keep this
+   scoped so MCP connection cards (which may wrap a URL and a tools list) stay
+   as they are. */
+#models-page .models-list {
+  flex: 0 0 auto;
+}
+
+#models-page .models-list .mcp-row {
+  position: relative;
+  flex: 0 0 auto;
+  height: auto;
+  gap: 0;
+}
+
+#models-page .models-list .mcp-row-main {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+#models-page .models-list .mcp-row-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+#models-page .models-list .mcp-label,
+#models-page .models-list .mcp-id,
+#models-page .models-list .mcp-state {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+/* The summary wraps freely so the stored parameters stay readable; long URLs
+   break mid-token instead of pushing the row wider. */
+#models-page .models-list .mcp-summary {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#models-page .models-list .mcp-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+#models-page .mcp-btn,
+#models-page .btn-add-icon {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/* Revealed hover actions join the row's flex line: the nowrap rules above keep
+   「使用」 beside them and the summary re-elides instead of being covered by an
+   overlay. Hidden they collapse to zero width (but stay focusable, so keyboard
+   focus can still reveal them) and reserve no layout space. */
+#models-page .models-list .mcp-actions-hover {
+  flex: 0 0 auto;
+  width: 0;
+  padding: 2px;
+  overflow: hidden;
+  box-shadow: none;
+  border-radius: 10px;
+  background: #fff;
+}
+
+#models-page .models-list .mcp-row:hover .mcp-actions-hover,
+#models-page .models-list .mcp-row:focus-within .mcp-actions-hover {
+  width: auto;
+  overflow: visible;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+#models-page .models-list .mcp-actions .mcp-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Current cards have no 「使用」: keep their actions cluster in flow as well so
+   the revealed group sits on the right edge instead of overlaying the summary. */
+#models-page .models-list .mcp-row.is-current-model .mcp-actions {
+  position: static;
+  top: auto;
+  right: auto;
+  transform: none;
+  margin-left: auto;
 }
 
 .mcp-row.is-current-model {
@@ -5301,6 +5677,27 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .mcp-row:focus-within .mcp-actions-hover {
   opacity: 1;
   pointer-events: auto;
+}
+/* Current cards have no visible 「使用」 button. An in-flow actions column — even
+   one whose only child is the hidden hover group — can wrap onto its own flex
+   line (margin-left: auto + flex-wrap) and leave a blank band under the title.
+   Take the whole actions cluster out of flow and overlay it on the row instead. */
+.mcp-row.is-current-model {
+  position: relative;
+}
+.mcp-row.is-current-model .mcp-actions {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 0;
+  z-index: 1;
+}
+.mcp-row.is-current-model .mcp-actions-hover {
+  padding: 2px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .mcp-actions .skill-switch {

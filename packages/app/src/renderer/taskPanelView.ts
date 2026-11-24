@@ -15,11 +15,33 @@ export interface TaskPanelRow {
   blockers: TaskPanelBlocker[];
 }
 
+export interface TaskPanelBatch {
+  index: number;
+  progressLabel: string;
+  tabLabel: string;
+  attention: number;
+  allComplete: boolean;
+  rowIds: string[];
+}
+
 export interface TaskPanelView {
   rows: TaskPanelRow[];
   unreadable: string[];
   attention: number;
+  /** Suffix after 任务 on the composer button: completed/total, or "11 √" when that batch is done. */
+  progressLabel: string;
+  batches: TaskPanelBatch[];
+  focusBatchIndex: number;
 }
+
+export const EMPTY_TASK_PANEL: TaskPanelView = {
+  rows: [],
+  unreadable: [],
+  attention: 0,
+  progressLabel: "",
+  batches: [],
+  focusBatchIndex: 0,
+};
 
 const GROUP_LABEL: Record<Exclude<TaskPanelGroup, "completed">, string> = {
   in_progress: "进行中",
@@ -78,7 +100,7 @@ function groupList(rows: TaskPanelRow[], openDescriptions: ReadonlySet<string>):
 }
 
 /** Rebuild the panel. Keeps the completed section and any open 说明 in their previous state. */
-export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
+export function renderTaskPanel(host: HTMLElement, view: TaskPanelView, selectedIndex = 0): void {
   const completedWasOpen = host.querySelector(".task-completed") instanceof HTMLDetailsElement
     ? (host.querySelector(".task-completed") as HTMLDetailsElement).open
     : false;
@@ -92,6 +114,35 @@ export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
   host.replaceChildren();
   const head = el("div", "task-panel-head");
   head.append(el("h2", "task-panel-title", "任务清单"));
+
+  const selected =
+    view.batches.length === 0
+      ? 0
+      : Math.min(Math.max(selectedIndex, 0), view.batches.length - 1);
+  if (view.batches.length) {
+    const tabs = el("div", "task-batch-tabs");
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-label", "任务批次");
+    for (const [i, batch] of view.batches.entries()) {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "task-batch";
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", i === selected ? "true" : "false");
+      tab.setAttribute("aria-label", batch.tabLabel);
+      tab.dataset.batchIndex = String(i);
+      if (i === selected) tab.classList.add("is-selected");
+      if (batch.allComplete) tab.classList.add("is-complete");
+      else if (batch.attention > 0) tab.classList.add("is-attention");
+      if (view.batches.length > 1) {
+        tab.append(el("span", "task-batch-index", String(batch.index)));
+      }
+      tab.append(el("span", "task-batch-progress", batch.progressLabel));
+      tabs.append(tab);
+    }
+    head.append(tabs);
+  }
+
   const close = document.createElement("button");
   close.type = "button";
   close.className = "task-panel-close";
@@ -108,9 +159,12 @@ export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
     body.append(el("p", "task-unreadable", `${view.unreadable.length} 个任务文件读不出来`));
   }
 
+  const selectedIds = new Set(view.batches[selected]?.rowIds ?? view.rows.map((row) => row.id));
+  const visible = view.batches.length ? view.rows.filter((row) => selectedIds.has(row.id)) : view.rows;
+
   const active: Exclude<TaskPanelGroup, "completed">[] = ["in_progress", "blocked", "pending"];
   for (const group of active) {
-    const rows = view.rows.filter((row) => row.group === group);
+    const rows = visible.filter((row) => row.group === group);
     if (!rows.length) continue;
     const section = el("section", "task-group");
     section.append(el("h3", "task-group-title", GROUP_LABEL[group]));
@@ -118,7 +172,7 @@ export function renderTaskPanel(host: HTMLElement, view: TaskPanelView): void {
     body.append(section);
   }
 
-  const done = view.rows.filter((row) => row.group === "completed");
+  const done = visible.filter((row) => row.group === "completed");
   if (done.length) {
     const details = document.createElement("details");
     details.className = "task-completed";

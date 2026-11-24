@@ -73,6 +73,7 @@ import {
 } from "./browserExplain.js";
 import { createMemoryExtractor, registerMemoryHandlers, runtimeMemory } from "./memoryIpc.js";
 import { registerSpeechHandlers } from "./speechIpc.js";
+import { registerClipboardMediaHandlers } from "./clipboardMedia.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -644,6 +645,11 @@ app.whenReady().then(async () => {
     const stored = await loadStoredConfig();
     return stored ? normalizeStoredConfig(stored) : null;
   });
+  registerClipboardMediaHandlers(ipcMain, {
+    getWin: () => win,
+    getWorkspace: () => workspacePath,
+    assertKnownWorkspace,
+  });
   mcpPool.onStatus((snapshot) => {
     if (!win?.isDestroyed()) win?.webContents.send("agent:mcpStatus", snapshot);
   });
@@ -910,7 +916,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("agent:loadTasks", async (_e, sessionId: string) => {
     assertValidSessionId(sessionId);
-    if (!workspacePath) return { rows: [], unreadable: [], attention: 0 };
+    if (!workspacePath) return { rows: [], unreadable: [], attention: 0, progressLabel: "", batches: [], focusBatchIndex: 0 };
     return readTaskPanel(workspacePath, sessionId);
   });
   ipcMain.handle("agent:loadWorkspaceTasks", async (_e, raw: string, sessionId: string) => {

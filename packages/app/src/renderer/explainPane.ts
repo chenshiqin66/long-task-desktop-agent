@@ -462,18 +462,28 @@ export function mountExplainPane(): ExplainPane {
         });
         if (message.content === "任务已终止") body.closest(".msg")?.classList.add("is-cancelled");
       } else if (message.role === "user") {
-        const urls: string[] = [];
+        const urls: Array<{ src: string; path: string; sessionId: string; workspace: string }> = [];
         for (const image of message.images ?? []) {
           try {
-            urls.push(await window.agent.explainReadImage(slot.workspace, slot.sessionId, image.path));
+            urls.push({
+              src: await window.agent.explainReadImage(slot.workspace, slot.sessionId, image.path),
+              path: image.path,
+              sessionId: slot.sessionId,
+              workspace: slot.workspace,
+            });
           } catch {
             /* missing file */
           }
         }
-        const videoUrls: string[] = [];
+        const videoUrls: Array<{ src: string; path: string; sessionId: string; workspace: string }> = [];
         for (const video of message.videos ?? []) {
           try {
-            videoUrls.push(await window.agent.explainReadVideo(slot.workspace, slot.sessionId, video.path));
+            videoUrls.push({
+              src: await window.agent.explainReadVideo(slot.workspace, slot.sessionId, video.path),
+              path: video.path,
+              sessionId: slot.sessionId,
+              workspace: slot.workspace,
+            });
           } catch {
             /* missing file */
           }

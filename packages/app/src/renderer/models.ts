@@ -54,6 +54,31 @@ type ComposerKind = "text" | "image" | "tts" | "video";
 const MODEL_KINDS: readonly ModelKind[] = ["text", "image", "video", "tts", "asr", "search"];
 const COMPOSER_KINDS: readonly ComposerKind[] = ["text", "image", "tts", "video"];
 
+/** Library page tabs, grouped by what the model generates. */
+export type ModelsTab = "text" | "image" | "speech" | "video" | "other";
+
+export const MODELS_TABS: readonly { id: ModelsTab; label: string; kinds: readonly ModelKind[] }[] = [
+  { id: "text", label: "生文", kinds: ["text"] },
+  { id: "image", label: "生图", kinds: ["image"] },
+  { id: "speech", label: "语音", kinds: ["tts", "asr"] },
+  { id: "video", label: "生视频", kinds: ["video"] },
+  // Non-generation helpers live here: search today, embedding etc. later.
+  { id: "other", label: "其他", kinds: ["search"] },
+];
+
+export function modelsTabOfKind(kind: ModelKind): ModelsTab {
+  return MODELS_TABS.find((row) => row.kinds.includes(kind))?.id ?? "other";
+}
+
+/** Models listed under one library tab. */
+export function modelsForTab<T extends KindedModel>(
+  models: readonly T[] | undefined,
+  tab: ModelsTab,
+): T[] {
+  const kinds = MODELS_TABS.find((row) => row.id === tab)?.kinds ?? [];
+  return (models ?? []).filter((entry) => kinds.includes(parseModelKind(entry.kind)));
+}
+
 type TtsModelOptions = {
   speaker: string;
   format: "mp3" | "wav";
@@ -223,6 +248,29 @@ function duplicateModel(stored: StoredConfig, modelId: string): StoredConfig {
   };
 }
 
+/** Keep a password field masked unless the eye toggle is on. */
+export function paintSecretReveal(
+  input: HTMLInputElement,
+  toggle: HTMLButtonElement,
+  revealed: boolean,
+): void {
+  input.type = revealed ? "text" : "password";
+  toggle.setAttribute("aria-label", revealed ? "隐藏 API Key" : "显示 API Key");
+  toggle.setAttribute("aria-pressed", revealed ? "true" : "false");
+  const showIcon = toggle.querySelector(".icon-eye");
+  const hideIcon = toggle.querySelector(".icon-eye-off");
+  if (showIcon instanceof SVGElement) showIcon.toggleAttribute("hidden", revealed);
+  if (hideIcon instanceof SVGElement) hideIcon.toggleAttribute("hidden", !revealed);
+}
+
+export function attachSecretReveal(input: HTMLInputElement, toggle: HTMLButtonElement): void {
+  paintSecretReveal(input, toggle, false);
+  toggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    paintSecretReveal(input, toggle, input.type === "password");
+  });
+}
+
 export function attachModelsLibrary(
   button: HTMLButtonElement,
   page: HTMLElement,
@@ -239,48 +287,59 @@ export function attachModelsLibrary(
   loadConfig(): Promise<StoredConfig | null>;
 } {
   const list = page.querySelector("#models-list") as HTMLElement;
+  const tabsHost = page.querySelector("#models-tabs") as HTMLElement;
   const note = page.querySelector("#models-note") as HTMLElement;
   const count = page.querySelector("#models-count") as HTMLElement;
   const addBtn = page.querySelector("#models-add") as HTMLButtonElement;
-  const form = page.querySelector("#models-form") as HTMLFormElement;
-  const nameInput = page.querySelector("#model-name") as HTMLInputElement;
-  const kindSelect = page.querySelector("#model-kind") as HTMLSelectElement;
-  const baseUrlInput = page.querySelector("#model-baseUrl") as HTMLInputElement;
-  const modelField = page.querySelector("#model-model-field") as HTMLElement;
-  const modelInput = page.querySelector("#model-model") as HTMLInputElement;
-  const apiKeyInput = page.querySelector("#model-apiKey") as HTMLInputElement;
+  const modal = document.querySelector("#models-modal") as HTMLDialogElement;
+  const form = modal.querySelector("#models-form") as HTMLFormElement;
+  const modalTitle = modal.querySelector("#models-modal-title") as HTMLElement;
+  const modalClose = modal.querySelector("#models-modal-close") as HTMLButtonElement;
+  const formError = modal.querySelector("#models-form-error") as HTMLElement;
+  const nameInput = form.querySelector("#model-name") as HTMLInputElement;
+  const kindSelect = form.querySelector("#model-kind") as HTMLSelectElement;
+  const baseUrlInput = form.querySelector("#model-baseUrl") as HTMLInputElement;
+  const modelField = form.querySelector("#model-model-field") as HTMLElement;
+  const modelInput = form.querySelector("#model-model") as HTMLInputElement;
+  const apiKeyInput = form.querySelector("#model-apiKey") as HTMLInputElement;
+  const apiKeyToggle = form.querySelector("#model-apiKey-toggle") as HTMLButtonElement | null;
+  if (apiKeyToggle) attachSecretReveal(apiKeyInput, apiKeyToggle);
   const cancelBtn = page.querySelector("#models-cancel") as HTMLButtonElement;
-  const kindHint = page.querySelector("#model-kind-hint") as HTMLElement | null;
-  const videoBaseUrlHint = page.querySelector("#model-video-baseurl-hint") as HTMLElement | null;
-  const speechBaseUrlHint = page.querySelector("#model-speech-baseurl-hint") as HTMLElement | null;
-  const ttsOptions = page.querySelector("#model-tts-options") as HTMLElement | null;
-  const ttsSpeaker = page.querySelector("#model-tts-speaker") as HTMLInputElement | null;
-  const ttsFormat = page.querySelector("#model-tts-format") as HTMLSelectElement | null;
-  const ttsSampleRate = page.querySelector("#model-tts-sample-rate") as HTMLInputElement | null;
-  const videoOptions = page.querySelector("#model-video-options") as HTMLElement;
-  const videoTabsHost = page.querySelector("#model-video-tabs") as HTMLElement;
-  const videoModesHost = page.querySelector("#model-video-modes") as HTMLElement;
-  const videoResolutionsHost = page.querySelector("#model-video-resolutions") as HTMLElement;
-  const videoDurationInput = page.querySelector("#model-video-duration") as HTMLInputElement;
-  const videoDurationMinLabel = page.querySelector("#model-video-duration-min") as HTMLElement;
-  const videoDurationValue = page.querySelector("#model-video-duration-value") as HTMLElement;
-  const videoBlurb = page.querySelector("#model-video-blurb") as HTMLElement;
-  const videoRatiosHost = page.querySelector("#model-video-ratios") as HTMLElement;
-  const imageOptions = page.querySelector("#model-image-options") as HTMLElement;
-  const imageTabsHost = page.querySelector("#model-image-tabs") as HTMLElement;
-  const imageBlurb = page.querySelector("#model-image-blurb") as HTMLElement;
-  const imageSizesHost = page.querySelector("#model-image-sizes") as HTMLElement;
-  const imageRatiosHost = page.querySelector("#model-image-ratios") as HTMLElement;
-  const imageFormatsHost = page.querySelector("#model-image-formats") as HTMLElement;
-  const imageBackgroundsHost = page.querySelector("#model-image-backgrounds") as HTMLElement;
-  const imageWatermark = page.querySelector("#model-image-watermark") as HTMLInputElement;
-  const imagePromptModesHost = page.querySelector("#model-image-prompt-modes") as HTMLElement;
-  const imagePromptGroup = page.querySelector("#model-image-prompt-group") as HTMLElement;
-  const imagePromptNote = page.querySelector("#model-image-prompt-note") as HTMLElement;
-  const imageBaseUrlHint = page.querySelector("#model-image-baseurl-hint") as HTMLElement | null;
+  const kindHint = form.querySelector("#model-kind-hint") as HTMLElement | null;
+  const videoBaseUrlHint = form.querySelector("#model-video-baseurl-hint") as HTMLElement | null;
+  const speechBaseUrlHint = form.querySelector("#model-speech-baseurl-hint") as HTMLElement | null;
+  const ttsOptions = form.querySelector("#model-tts-options") as HTMLElement | null;
+  const ttsSpeaker = form.querySelector("#model-tts-speaker") as HTMLInputElement | null;
+  const ttsFormat = form.querySelector("#model-tts-format") as HTMLSelectElement | null;
+  const ttsSampleRate = form.querySelector("#model-tts-sample-rate") as HTMLInputElement | null;
+  const videoOptions = form.querySelector("#model-video-options") as HTMLElement;
+  const videoTabsHost = form.querySelector("#model-video-tabs") as HTMLElement;
+  const videoModesHost = form.querySelector("#model-video-modes") as HTMLElement;
+  const videoResolutionsHost = form.querySelector("#model-video-resolutions") as HTMLElement;
+  const videoDurationInput = form.querySelector("#model-video-duration") as HTMLInputElement;
+  const videoDurationMinLabel = form.querySelector("#model-video-duration-min") as HTMLElement;
+  const videoDurationValue = form.querySelector("#model-video-duration-value") as HTMLElement;
+  const videoBlurb = form.querySelector("#model-video-blurb") as HTMLElement;
+  const videoRatiosHost = form.querySelector("#model-video-ratios") as HTMLElement;
+  const imageOptions = form.querySelector("#model-image-options") as HTMLElement;
+  const imageTabsHost = form.querySelector("#model-image-tabs") as HTMLElement;
+  const imageBlurb = form.querySelector("#model-image-blurb") as HTMLElement;
+  const imageSizesHost = form.querySelector("#model-image-sizes") as HTMLElement;
+  const imageRatiosHost = form.querySelector("#model-image-ratios") as HTMLElement;
+  const imageFormatsHost = form.querySelector("#model-image-formats") as HTMLElement;
+  const imageBackgroundsHost = form.querySelector("#model-image-backgrounds") as HTMLElement;
+  const imageWatermark = form.querySelector("#model-image-watermark") as HTMLInputElement;
+  const imagePromptModesHost = form.querySelector("#model-image-prompt-modes") as HTMLElement;
+  const imagePromptGroup = form.querySelector("#model-image-prompt-group") as HTMLElement;
+  const imagePromptNote = form.querySelector("#model-image-prompt-note") as HTMLElement;
+  const imageBaseUrlHint = form.querySelector("#model-image-baseurl-hint") as HTMLElement | null;
 
   let editing: string | null = null;
   let painting = false;
+  /** Library tab shown in the list; kept across reloads once the user picks one. */
+  let activeTab: ModelsTab = "text";
+  let tabChosen = false;
+  let lastCfg: StoredConfig | null = null;
   let activeVideoModel = "MiniMax-H3-Lite";
   let videoDraftByModel: VideoByModel = defaultVideoByModel();
   let activeImagePreset: ImagePresetId = DEFAULT_IMAGE_PRESET;
@@ -664,16 +723,27 @@ export function attachModelsLibrary(
     note.textContent = err instanceof Error ? err.message : String(err);
   };
 
-  function closeForm(): void {
+  let formReturnFocus: HTMLElement | null = null;
+
+  function resetForm(): void {
     editing = null;
-    form.hidden = true;
     form.reset();
     lastKind = "text";
     modelBeforeImage = "";
+    formError.hidden = true;
+    if (apiKeyToggle) paintSecretReveal(apiKeyInput, apiKeyToggle, false);
     syncKindFields();
+    if (formReturnFocus?.isConnected) formReturnFocus.focus();
+    formReturnFocus = null;
+  }
+
+  function closeForm(): void {
+    if (modal.open) modal.close();
+    else resetForm();
   }
 
   function openForm(entry?: StoredModel): void {
+    formReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     editing = entry?.id ?? null;
     nameInput.value = entry?.name ?? "";
     kindSelect.value = modelKindOf(entry);
@@ -686,6 +756,7 @@ export function attachModelsLibrary(
     baseUrlInput.value = entry?.baseUrl ?? "";
     modelInput.value = entry?.model ?? "";
     apiKeyInput.value = entry?.apiKey ?? "";
+    if (apiKeyToggle) paintSecretReveal(apiKeyInput, apiKeyToggle, false);
     if (modelKindOf(entry) === "video") {
       loadVideoDraft(entry);
     }
@@ -697,7 +768,9 @@ export function attachModelsLibrary(
     } else {
       paintTtsFields();
     }
-    form.hidden = false;
+    formError.hidden = true;
+    modalTitle.textContent = editing ? "编辑模型" : "添加模型";
+    if (!modal.open) modal.showModal();
     nameInput.focus();
   }
 
@@ -743,11 +816,37 @@ export function attachModelsLibrary(
     return ((await window.agent.getConfig()) as StoredConfig | null) ?? null;
   }
 
-  async function reload(): Promise<void> {
-    const cfg = await loadConfig();
+  function paintTabs(): void {
+    const models = lastCfg?.models ?? [];
+    tabsHost.replaceChildren();
+    for (const tab of MODELS_TABS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = tab.id === activeTab ? "models-tab is-active" : "models-tab";
+      btn.role = "tab";
+      btn.dataset.modelsTab = tab.id;
+      btn.setAttribute("aria-selected", tab.id === activeTab ? "true" : "false");
+      const label = document.createElement("span");
+      label.textContent = tab.label;
+      const badge = document.createElement("span");
+      badge.className = "models-tab-count";
+      badge.textContent = String(modelsForTab(models, tab.id).length);
+      btn.append(label, badge);
+      btn.addEventListener("click", () => {
+        if (tab.id === activeTab) return;
+        activeTab = tab.id;
+        tabChosen = true;
+        // Filtering only: no config write, no picker repaint, no model switch.
+        paintTabs();
+        paintList();
+      });
+      tabsHost.append(btn);
+    }
+  }
+
+  function paintList(): void {
+    const cfg = lastCfg;
     const models = cfg?.models ?? [];
-    count.textContent = `已配置(${models.length})`;
-    paintPicker(cfg);
     list.replaceChildren();
     if (!models.length) {
       const empty = document.createElement("p");
@@ -756,7 +855,34 @@ export function attachModelsLibrary(
       list.append(empty);
       return;
     }
-    for (const entry of models) list.append(modelRow(entry, cfg!));
+    const shown = modelsForTab(models, activeTab);
+    if (!shown.length) {
+      const empty = document.createElement("p");
+      empty.className = "skill-empty";
+      const label = MODELS_TABS.find((row) => row.id === activeTab)?.label ?? "";
+      empty.textContent =
+        activeTab === "other"
+          ? "还没有网搜等辅助模型。点右上角 + 添加。"
+          : `还没有「${label}」模型。点右上角 + 添加。`;
+      list.append(empty);
+      return;
+    }
+    for (const entry of shown) list.append(modelRow(entry, cfg!));
+  }
+
+  async function reload(): Promise<void> {
+    const cfg = await loadConfig();
+    lastCfg = cfg;
+    const models = cfg?.models ?? [];
+    count.textContent = `已配置(${models.length})`;
+    paintPicker(cfg);
+    if (!tabChosen) {
+      // First open: land on the tab matching the composer's current category.
+      const kind = composerKindOf(cfg);
+      activeTab = kind === "tts" ? "speech" : kind;
+    }
+    paintTabs();
+    paintList();
   }
 
   function modelRow(entry: StoredModel, cfg: StoredConfig): HTMLElement {
@@ -965,6 +1091,17 @@ export function attachModelsLibrary(
     }
   }
 
+  // Form errors must show inside the modal: the page note sits behind the backdrop.
+  async function runForm(action: () => Promise<unknown>): Promise<void> {
+    try {
+      await action();
+      formError.hidden = true;
+    } catch (err) {
+      formError.hidden = false;
+      formError.textContent = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   button.onclick = () => {
     if (!page.hidden) {
       // Keep an open add/edit form as-is. Closing it here would surprise the user
@@ -987,11 +1124,21 @@ export function attachModelsLibrary(
   };
 
   cancelBtn.onclick = () => closeForm();
+  modalClose.addEventListener("click", () => closeForm());
+  modal.addEventListener("click", (ev) => {
+    if (ev.target === modal) closeForm();
+  });
+  // Esc fires cancel on a native dialog. Clean up before it closes so focus can
+  // return to the button behind the modal.
+  modal.addEventListener("cancel", (ev) => {
+    ev.preventDefault();
+    closeForm();
+  });
   kindSelect.addEventListener("change", syncKindFields);
 
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
-    void run(async () => {
+    void runForm(async () => {
       const name = nameInput.value.trim();
       const baseUrl = baseUrlInput.value.trim();
       const kind = parseModelKind(kindSelect.value);
@@ -1054,6 +1201,9 @@ export function attachModelsLibrary(
       // A new chat model becomes current when none is. A search model never takes over as the chat model.
       const chat = chatModelsOf(models);
       const chosen = chat.find((item) => item.id === cur.currentModelId) ?? (kind === "search" ? chat[0] : entry);
+      // Show the saved entry: jump the library list to its tab.
+      activeTab = modelsTabOfKind(kind);
+      tabChosen = true;
       await persist({
         ...cur,
         models,
@@ -1090,9 +1240,9 @@ export function attachModelsLibrary(
 
   return {
     reload: () => reload().catch(showNote),
-    isFormOpen: () => !form.hidden,
+    isFormOpen: () => modal.open,
     cancelForm: () => {
-      if (!form.hidden) closeForm();
+      if (modal.open) closeForm();
     },
     setComposerKind,
     resetComposerKindToChat,

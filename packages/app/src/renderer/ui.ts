@@ -1,8 +1,36 @@
 import { formatMarkdown, linkifyPlainText } from "./markdown.js";
 import { errorSummary } from "./errorSummary.js";
 import { shouldReleaseStuck } from "./stickyTurns.js";
+import { bindMessageCollapse, refreshMessageCollapse } from "./messageCollapse.js";
 
 export { escapeHtml, formatMarkdown, looksOpenable, linkifyPlainText } from "./markdown.js";
+
+/** A displayed image or video: a URL, optionally with the session file it came from. */
+export type MediaSrc = string | {
+  src: string;
+  path?: string;
+  sessionId?: string;
+  workspace?: string | null;
+};
+
+export function mediaSrcOf(item: MediaSrc): string {
+  return typeof item === "string" ? item : item.src;
+}
+
+function applyMediaMeta(node: HTMLElement, item: MediaSrc): void {
+  if (typeof item === "string") {
+    delete node.dataset.mediaPath;
+    delete node.dataset.mediaSession;
+    delete node.dataset.mediaWorkspace;
+    return;
+  }
+  if (item.path) node.dataset.mediaPath = item.path;
+  else delete node.dataset.mediaPath;
+  if (item.sessionId) node.dataset.mediaSession = item.sessionId;
+  else delete node.dataset.mediaSession;
+  if (item.workspace) node.dataset.mediaWorkspace = item.workspace;
+  else delete node.dataset.mediaWorkspace;
+}
 
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -32,6 +60,7 @@ export function setRichText(node: HTMLElement, text: string, rich: boolean): voi
     delete node.dataset.rawMd;
     node.textContent = text;
   }
+  refreshMessageCollapse(node);
 }
 
 /** Re-apply Markdown to every assistant bubble that still has raw source. */
@@ -174,8 +203,8 @@ function stampVisibleBubble(
   role: string,
   content: string,
   at: string | undefined,
-  images?: string[],
-  videos?: string[],
+  images?: MediaSrc[],
+  videos?: MediaSrc[],
   audios?: string[],
 ): void {
   if (role !== "user" && role !== "assistant") return;
@@ -198,7 +227,7 @@ export function ensureMessageTime(body: HTMLElement, at: string | Date = new Dat
 }
 
 /** Returns the `.msg-body` element (streaming appends here). */
-function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[], audios?: string[]): void {
+function appendMediaRows(msg: HTMLElement, images?: MediaSrc[], videos?: MediaSrc[], audios?: string[]): void {
   msg.querySelector(":scope > .msg-images")?.remove();
   msg.querySelector(":scope > .msg-videos")?.remove();
   msg.querySelector(":scope > .msg-audios")?.remove();
@@ -209,18 +238,21 @@ function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[],
   };
   if (images?.length) {
     const row = el("div", { class: "msg-images" });
-    for (const src of images) {
+    for (const item of images) {
       const btn = el("button", { type: "button", class: "msg-image-btn", "aria-label": "查看图片" });
-      btn.append(el("img", { src, alt: "附件图片" }));
+      const img = el("img", { src: mediaSrcOf(item), alt: "附件图片" });
+      applyMediaMeta(img, item);
+      btn.append(img);
       row.append(btn);
     }
     place(row);
   }
   if (videos?.length) {
     const row = el("div", { class: "msg-videos" });
-    for (const src of videos) {
-      const video = el("video", { src, controls: "" });
+    for (const item of videos) {
+      const video = el("video", { src: mediaSrcOf(item), controls: "" });
       video.controls = true;
+      applyMediaMeta(video, item);
       row.append(video);
     }
     place(row);
@@ -239,8 +271,8 @@ function appendMediaRows(msg: HTMLElement, images?: string[], videos?: string[],
 export function applyMessageMedia(
   body: HTMLElement,
   opts: {
-    images?: string[];
-    videos?: string[];
+    images?: MediaSrc[];
+    videos?: MediaSrc[];
     audios?: string[];
     content?: string;
     rich?: boolean;
@@ -265,6 +297,7 @@ export function applyMessageMedia(
   const audios = opts.audios ?? Array.from(msg.querySelectorAll(":scope > .msg-audios audio")).map((node) => (node as HTMLAudioElement).src);
   stampVisibleBubble(msg, msg.classList.contains("user") ? "user" : "assistant", content, opts.at, images, videos, audios);
   if (!opts.at && (content.trim() || images.length || videos.length || audios.length)) ensureMessageTime(body);
+  bindMessageCollapse(body);
 }
 
 export function removeTranscriptMessage(body: HTMLElement): void {
@@ -291,8 +324,8 @@ export function appendMessage(
   content: string,
   opts?: {
     rich?: boolean;
-    images?: string[];
-    videos?: string[];
+    images?: MediaSrc[];
+    videos?: MediaSrc[];
     audios?: string[];
     messageId?: string;
     at?: string;
@@ -320,6 +353,7 @@ export function appendMessage(
   }
   placeTranscript(container, div, role === "user");
   stampVisibleBubble(div, role, content, opts?.at, opts?.images, opts?.videos, opts?.audios);
+  bindMessageCollapse(body);
   return body;
 }
 

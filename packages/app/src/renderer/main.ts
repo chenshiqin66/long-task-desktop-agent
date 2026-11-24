@@ -18,7 +18,9 @@ import {
   refreshStickyTurns,
   setRichText,
   setToolDetailContent,
+  type MediaSrc,
 } from "./ui.js";
+import { defaultMediaFileName, parseDataUrl } from "../mediaExport.js";
 import { beginRun, decideEvent, idleGate, type RunGate } from "./runEventGate.js";
 import {
   discardStreamPaint,
@@ -26,7 +28,7 @@ import {
   resetStreamTarget as resetStreamPaintTarget,
   type StreamPaintEnv,
 } from "./streamPaint.js";
-import { renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
+import { EMPTY_TASK_PANEL, renderTaskPanel, type TaskPanelView } from "./taskPanelView.js";
 import { attachSkillLibrary, attachSkillMenu, onSkillMenuKey } from "./skills.js";
 import { attachMcpLibrary } from "./mcp.js";
 import { attachModelsLibrary, composerKindOf, parseComposerKind } from "./models.js";
@@ -332,6 +334,21 @@ declare global {
       setAutoMemory(on: boolean): Promise<void>;
       popupAppMenu(index: number, x: number, y: number): Promise<void>;
       setTaskbarPrompt(open: boolean, inView: boolean): Promise<void>;
+      copyImage(payload: {
+        dataUrl?: string;
+        relativePath?: string;
+        sessionId?: string;
+        workspace?: string | null;
+      }): Promise<{ ok: true }>;
+      saveMedia(payload: {
+        kind: "image" | "video";
+        defaultName?: string;
+        mime?: string;
+        dataUrl?: string;
+        relativePath?: string;
+        sessionId?: string;
+        workspace?: string | null;
+      }): Promise<{ saved: boolean }>;
       onEvent(cb: (e: any) => void): () => void;
       onSkillsChanged(cb: () => void): () => void;
       onMemoryEvent(cb: (e: MemorySavedEvent) => void): () => void;
@@ -481,12 +498,18 @@ async function openMemorySource(workspace: string, sessionId: string): Promise<s
 const skillMenu = document.getElementById("skill-menu") as HTMLElement;
 const pageCtxMenu = document.getElementById("page-ctx-menu")!;
 const pageCtxCopy = pageCtxMenu.querySelector('[data-ctx="copy"]') as HTMLButtonElement;
+const pageCtxSave = pageCtxMenu.querySelector('[data-ctx="save"]') as HTMLButtonElement;
 const pageCtxExplain = pageCtxMenu.querySelector('[data-ctx="explain"]') as HTMLButtonElement;
 let explainApi: ExplainPane | null = null;
 let ctxSource: "main" | "explain" | "file" = "main";
+type CtxMedia =
+  | { kind: "image"; img: HTMLImageElement }
+  | { kind: "video"; video: HTMLVideoElement };
+let ctxMedia: CtxMedia | null = null;
 
 let currentSessionId: string | null = null;
-let taskPanel: TaskPanelView = { rows: [], unreadable: [], attention: 0 };
+let taskPanel: TaskPanelView = { ...EMPTY_TASK_PANEL };
+let selectedTaskBatch: number | null = null;
 let taskPanelOpen = false;
 let taskLoad = 0;
 let currentSessionTitle = "";
@@ -1349,7 +1372,139 @@ function selectedMessageIds(root: HTMLElement): string[] {
   return ids;
 }
 
+function conversationMediaFromTarget(target: EventTarget | null): CtxMedia | null {
+  if (!(target instanceof Element)) return null;
+  const imageBtn = target.closest(".msg-image-btn");
+  if (imageBtn instanceof HTMLElement && imageBtn.closest(".msg-images")) {
+    const img = imageBtn.querySelector("img");
+    if (img instanceof HTMLImageElement) return { kind: "image", img };
+  }
+  const img = target.closest(".msg-images img");
+  if (img instanceof HTMLImageElement) return { kind: "image", img };
+  const video = target.closest(".msg-videos video");
+  if (video instanceof HTMLVideoElement) return { kind: "video", video };
+  return null;
+}
+
+function mediaElementOf(media: CtxMedia): HTMLImageElement | HTMLVideoElement {
+  return media.kind === "image" ? media.img : media.video;
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string | null> {
+  return await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function rasterizeImage(img: HTMLImageElement): string | null {
+  if (!img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  try {
+    ctx.drawImage(img, 0, 0);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
+async function resolveMediaDataUrl(el: HTMLImageElement | HTMLVideoElement): Promise<string | null> {
+  const src = el.currentSrc || el.src;
+  if (!src) return null;
+  if (src.startsWith("data:")) return src;
+  try {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error("fetch failed");
+    return await blobToDataUrl(await res.blob());
+  } catch {
+    return el instanceof HTMLImageElement ? rasterizeImage(el) : null;
+  }
+}
+
+function flashCopied(): void {
+  setStatus("已复制", true);
+  window.setTimeout(() => {
+    if (statusEl.textContent === "已复制") setStatus("", false);
+  }, 1200);
+}
+
+function flashSaved(): void {
+  setStatus("已保存", true);
+  window.setTimeout(() => {
+    if (statusEl.textContent === "已保存") setStatus("", false);
+  }, 1200);
+}
+
+async function copyConversationImage(img: HTMLImageElement): Promise<void> {
+  if (!window.agent?.copyImage) {
+    setStatus("没有可复制的内容", true);
+    return;
+  }
+  const relativePath = img.dataset.mediaPath;
+  const sessionId = img.dataset.mediaSession;
+  const workspace = img.dataset.mediaWorkspace || null;
+  const dataUrl = relativePath && sessionId ? undefined : await resolveMediaDataUrl(img);
+  if (!((relativePath && sessionId) || dataUrl)) {
+    setStatus("没有可复制的内容", true);
+    return;
+  }
+  await window.agent.copyImage({
+    dataUrl: dataUrl ?? undefined,
+    relativePath,
+    sessionId,
+    workspace,
+  });
+  flashCopied();
+}
+
+async function saveConversationMedia(media: CtxMedia): Promise<void> {
+  if (!window.agent?.saveMedia) {
+    setStatus(media.kind === "video" ? "没有可保存的视频" : "没有可保存的图片", true);
+    return;
+  }
+  const el = mediaElementOf(media);
+  const relativePath = el.dataset.mediaPath;
+  const sessionId = el.dataset.mediaSession;
+  const workspace = el.dataset.mediaWorkspace || null;
+  let dataUrl: string | undefined;
+  if (!(relativePath && sessionId)) {
+    dataUrl = (await resolveMediaDataUrl(el)) ?? undefined;
+    if (!dataUrl) {
+      setStatus(media.kind === "video" ? "没有可保存的视频" : "没有可保存的图片", true);
+      return;
+    }
+  }
+  const result = await window.agent.saveMedia({
+    kind: media.kind,
+    relativePath,
+    sessionId,
+    workspace,
+    dataUrl,
+    mime: dataUrl ? parseDataUrl(dataUrl)?.mime : undefined,
+    defaultName: defaultMediaFileName({
+      relativePath,
+      mime: dataUrl ? parseDataUrl(dataUrl)?.mime : undefined,
+      kind: media.kind,
+    }),
+  });
+  if (result?.saved) flashSaved();
+}
+
 async function copyPageContent(): Promise<void> {
+  if (ctxMedia?.kind === "image") {
+    try {
+      await copyConversationImage(ctxMedia.img);
+    } catch (err) {
+      showStatusError(err);
+    }
+    return;
+  }
   const text = pageCopyText();
   if (!text) {
     setStatus("没有可复制的内容", true);
@@ -1357,10 +1512,7 @@ async function copyPageContent(): Promise<void> {
   }
   try {
     await navigator.clipboard.writeText(text);
-    setStatus("已复制", true);
-    window.setTimeout(() => {
-      if (statusEl.textContent === "已复制") setStatus("", false);
-    }, 1200);
+    flashCopied();
   } catch (err) {
     showStatusError(err);
   }
@@ -1388,6 +1540,7 @@ function onPageContextMenu(ev: MouseEvent): void {
     ctxSource = "file";
   }
   ev.preventDefault();
+  ctxMedia = conversationMediaFromTarget(ev.target);
   const root =
     ctxSource === "explain" && explainApi?.searchRoot()
       ? explainApi.searchRoot()!
@@ -1396,6 +1549,7 @@ function onPageContextMenu(ev: MouseEvent): void {
         : storeView;
   const selected = selectionTextIn(root).trim();
   const showExplain = ctxSource === "main" || ctxSource === "explain";
+  pageCtxSave.hidden = !ctxMedia;
   pageCtxExplain.hidden = !showExplain;
   pageCtxExplain.disabled = !selected;
   showPageCtxMenu(ev.clientX, ev.clientY);
@@ -1423,6 +1577,13 @@ pageCtxCopy.addEventListener("click", (ev) => {
   ev.preventDefault();
   hidePageCtxMenu();
   void copyPageContent();
+});
+pageCtxSave.addEventListener("click", (ev) => {
+  ev.preventDefault();
+  const media = ctxMedia;
+  hidePageCtxMenu();
+  if (!media) return;
+  void saveConversationMedia(media).catch(showStatusError);
 });
 pageCtxExplain.addEventListener("click", (ev) => {
   ev.preventDefault();
@@ -1848,6 +2009,16 @@ function updateChrome(): void {
   composerCollapse?.refresh();
 }
 
+
+function selectedBatchIndex(view: TaskPanelView): number {
+  if (selectedTaskBatch != null && view.batches[selectedTaskBatch]) return selectedTaskBatch;
+  return view.focusBatchIndex;
+}
+
+function paintTaskPanel(): void {
+  renderTaskPanel(taskPanelEl, taskPanel, selectedBatchIndex(taskPanel));
+}
+
 function syncTaskChrome(): void {
   const chat = !composerDock.hidden && !libraryOpen();
   const hasTasks = taskPanel.rows.length > 0 || taskPanel.unreadable.length > 0;
@@ -1855,15 +2026,19 @@ function syncTaskChrome(): void {
   const open = chat && taskPanelOpen && hasTasks;
   taskPanelEl.hidden = !open;
   btnTasks.setAttribute("aria-expanded", open ? "true" : "false");
+  const allComplete =
+    taskPanel.rows.length > 0 && taskPanel.rows.every((row) => row.group === "completed");
   btnTasks.classList.toggle("is-attention", taskPanel.attention > 0);
-  taskCountEl.textContent = hasTasks ? String(taskPanel.rows.length) : "";
+  btnTasks.classList.toggle("is-complete", allComplete);
+  taskCountEl.textContent = hasTasks ? taskPanel.progressLabel : "";
 }
 
 async function refreshTasks(): Promise<void> {
   const token = ++taskLoad;
   const sessionId = currentSessionId;
   if (!sessionId) {
-    taskPanel = { rows: [], unreadable: [], attention: 0 };
+    taskPanel = { ...EMPTY_TASK_PANEL };
+    selectedTaskBatch = null;
     taskPanelOpen = false;
     syncTaskChrome();
     return;
@@ -1876,7 +2051,11 @@ async function refreshTasks(): Promise<void> {
     if (token !== taskLoad || sessionId !== currentSessionId) return;
     taskPanel = next;
     if (!next.rows.length && !next.unreadable.length) taskPanelOpen = false;
-    if (taskPanelOpen) renderTaskPanel(taskPanelEl, taskPanel);
+    if (taskPanelOpen) {
+    // Reload from disk so a completion that arrived while the panel was closed is visible.
+    paintTaskPanel();
+    void refreshTasks();
+  }
     syncTaskChrome();
   } catch (err) {
     if (token !== taskLoad) return;
@@ -3461,17 +3640,16 @@ async function imageDataUrls(
   workspace: string | null,
   sessionId: string,
   images: Array<{ path: string }> | undefined,
-): Promise<string[]> {
+): Promise<MediaSrc[]> {
   if (!images?.length) return [];
   const foreign = Boolean(workspace && !sameWorkspace(workspace, activeWorkspace));
-  const urls: string[] = [];
+  const urls: MediaSrc[] = [];
   for (const image of images) {
     try {
-      urls.push(
-        foreign
-          ? await window.agent.readWorkspaceImage(workspace!, sessionId, image.path)
-          : await window.agent.readSessionImage(sessionId, image.path),
-      );
+      const src = foreign
+        ? await window.agent.readWorkspaceImage(workspace!, sessionId, image.path)
+        : await window.agent.readSessionImage(sessionId, image.path);
+      urls.push({ src, path: image.path, sessionId, workspace });
     } catch {
       /* skip a missing file rather than failing the whole transcript */
     }
@@ -3483,17 +3661,16 @@ async function videoDataUrls(
   workspace: string | null,
   sessionId: string,
   videos: Array<{ path: string }> | undefined,
-): Promise<string[]> {
+): Promise<MediaSrc[]> {
   if (!videos?.length) return [];
   const foreign = Boolean(workspace && !sameWorkspace(workspace, activeWorkspace));
-  const urls: string[] = [];
+  const urls: MediaSrc[] = [];
   for (const video of videos) {
     try {
-      urls.push(
-        foreign
-          ? await window.agent.readWorkspaceVideo(workspace!, sessionId, video.path)
-          : await window.agent.readSessionVideo(sessionId, video.path),
-      );
+      const src = foreign
+        ? await window.agent.readWorkspaceVideo(workspace!, sessionId, video.path)
+        : await window.agent.readSessionVideo(sessionId, video.path);
+      urls.push({ src, path: video.path, sessionId, workspace });
     } catch {
       /* skip a missing file rather than failing the whole transcript */
     }
@@ -4031,9 +4208,9 @@ function ensureReask(
 
 function appendUserQuestion(
   text: string,
-  images: string[],
+  images: MediaSrc[],
   messageId?: string,
-  videos: string[] = [],
+  videos: MediaSrc[] = [],
   audios: string[] = [],
 ): HTMLElement {
   const body = appendMessage(messagesEl, "user", text, {
@@ -4320,13 +4497,21 @@ function requestStop(): void {
 btnTasks.onclick = () => {
   if (btnTasks.hidden) return;
   taskPanelOpen = !taskPanelOpen;
-  if (taskPanelOpen) renderTaskPanel(taskPanelEl, taskPanel);
+  if (taskPanelOpen) paintTaskPanel();
   syncTaskChrome();
 };
 
 taskPanelEl.addEventListener("click", (ev) => {
   const target = ev.target;
-  if (!(target instanceof Element) || !target.closest(".task-panel-close")) return;
+  if (!(target instanceof Element)) return;
+  const tab = target.closest(".task-batch");
+  if (tab instanceof HTMLElement && tab.dataset.batchIndex != null) {
+    selectedTaskBatch = Number(tab.dataset.batchIndex);
+    paintTaskPanel();
+    ev.preventDefault();
+    return;
+  }
+  if (!target.closest(".task-panel-close")) return;
   taskPanelOpen = false;
   syncTaskChrome();
 });
@@ -5497,6 +5682,17 @@ window.addEventListener("resize", () => {
 });
 
 mountQuestionNav(document.getElementById("question-nav")!, messagesEl);
-installImageViewer();
+installImageViewer({
+  onSave: (media) => {
+    const payload =
+      media instanceof HTMLVideoElement
+        ? { kind: "video" as const, video: media }
+        : { kind: "image" as const, img: media };
+    void saveConversationMedia(payload).catch(showStatusError);
+  },
+  onCopy: (img) => {
+    void copyConversationImage(img).catch(showStatusError);
+  },
+});
 
 void boot();

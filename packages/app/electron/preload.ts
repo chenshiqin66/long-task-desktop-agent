@@ -207,6 +207,8 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.invoke("agent:popupAppMenu", index, x, y),
   setTaskbarPrompt: (open: boolean, inView: boolean) =>
     ipcRenderer.invoke("agent:setTaskbarPrompt", open, inView),
+  copyImage: (payload: unknown) => ipcRenderer.invoke("agent:copyImage", payload),
+  saveMedia: (payload: unknown) => ipcRenderer.invoke("agent:saveMedia", payload),
   onEvent: (cb: (e: RuntimeEvent) => void) => {
     const listener = (_: unknown, e: RuntimeEvent) => cb(e);
     ipcRenderer.on("agent:event", listener);
