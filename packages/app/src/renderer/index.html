@@ -43,6 +43,7 @@
 
       <main id="main">
         <header id="main-bar" class="main-bar">
+          <div id="library-head" class="library-head" hidden></div>
           <div id="view-tabs" class="view-tabs" role="tablist">
             <div class="session-title">
               <button type="button" id="main-title" class="view-tab active" role="tab" data-view="chat" aria-selected="true">
@@ -123,7 +124,7 @@
             <header class="skills-page-head">
               <h2>技能</h2>
               <span id="skills-count" class="skills-count">已安装(0)</span>
-              <button type="button" id="skills-add" class="skills-add btn-add-icon" aria-label="添加技能"></button>
+              <button type="button" id="skills-add" class="skills-add library-add" aria-label="添加技能"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             </header>
             <p id="skills-note" class="skills-note" hidden></p>
             <div id="skills-list" class="skills-grid"></div>
@@ -133,7 +134,7 @@
             <header class="skills-page-head">
               <h2>连接</h2>
               <span id="mcp-count" class="skills-count">已配置(0)</span>
-              <button type="button" id="mcp-add" class="skills-add btn-add-icon" aria-label="添加"></button>
+              <button type="button" id="mcp-add" class="skills-add library-add" aria-label="添加"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             </header>
             <p id="mcp-note" class="skills-note" hidden></p>
             <dialog id="mcp-modal" class="models-modal" aria-labelledby="mcp-modal-title">
@@ -205,7 +206,7 @@
             <header class="skills-page-head">
               <h2>模型</h2>
               <span id="models-count" class="skills-count">已配置(0)</span>
-              <button type="button" id="models-add" class="skills-add btn-add-icon" aria-label="添加"></button>
+              <button type="button" id="models-add" class="skills-add library-add" aria-label="添加"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             </header>
             <p class="models-intro">密钥仅保存在本机用户目录，不会写入会话记录。</p>
             <div id="models-tabs" class="models-tabs" role="tablist" aria-label="模型分类"></div>
@@ -540,6 +541,11 @@
     <div id="workbench-sheet" class="workbench-sheet" hidden role="dialog" aria-modal="true" aria-label="我的工作台">
       <div class="workbench-card">
       <aside class="workbench-menu">
+        <nav class="app-menu workbench-app-menu" aria-label="应用菜单">
+          <button type="button" data-app-menu="0">视图</button>
+          <button type="button" data-app-menu="1">帮助</button>
+          <button type="button" data-settings>设置</button>
+        </nav>
         <nav id="workbench-nav" class="workbench-nav" aria-label="工作台菜单">
           <button type="button" id="workbench-folders" data-page="folders" aria-current="page">常用文件夹</button>
           <button type="button" id="workbench-browser" data-page="browser">浏览器</button>
@@ -549,7 +555,7 @@
       <section id="workbench-stage" class="workbench-stage" aria-label="工作台内容">
         <header class="workbench-bar">
           <h2 id="workbench-title" class="workbench-title">常用文件夹</h2>
-          <button type="button" id="folder-add" class="workbench-plus btn-add-icon" aria-label="添加文件夹" data-workbench-page="folders"></button>
+          <button type="button" id="folder-add" class="workbench-plus library-add" aria-label="添加文件夹" data-workbench-page="folders"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         </header>
         <div class="workbench-page" data-workbench-page="folders">
           <p id="folder-note" class="skills-note" hidden></p>
@@ -559,16 +565,7 @@
           <div class="browser-main">
             <div class="browser-top">
               <!-- Hides and shows the workbench menu on the left. The arrow points the way the menu goes, and is turned around when it is hidden. -->
-              <button type="button" id="browser-menu-toggle" class="browser-nav browser-menu-toggle" aria-label="隐藏菜单" title="隐藏菜单" aria-expanded="true">
-                <svg viewBox="0 0 128 128" aria-hidden="true">
-                  <path d="M104.5 51V8.5H8.5v111h96V78M122 65.5H16M50 43 16 65.5 50 88" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
-                </svg>
-              </button>
-              <div class="browser-navs">
-                <button type="button" id="browser-back" class="browser-nav" aria-label="后退" disabled>←</button>
-                <button type="button" id="browser-forward" class="browser-nav" aria-label="前进" disabled>→</button>
-                <button type="button" id="browser-reload" class="browser-nav" aria-label="刷新" disabled>↻</button>
-              </div>
+              <button type="button" id="browser-menu-toggle" class="browser-nav browser-menu-toggle" aria-label="隐藏菜单" title="隐藏菜单" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><rect x="2.6" y="3.2" width="18.8" height="2.5" rx="1.25"/><rect x="2.6" y="8.95" width="9.6" height="2.5" rx="1.25"/><rect x="2.6" y="14.7" width="9.6" height="2.5" rx="1.25"/><rect x="2.6" y="20.45" width="18.8" height="2.5" rx="1.25"/><path d="M20.7 8.6 13.5 12.6 20.7 16.6z"/></svg></button><div class="browser-navs"><button type="button" id="browser-back" class="browser-nav" aria-label="后退" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM17.4 6.4 7 12 17.4 17.6 14.2 15.8 9.8 12 14.2 8.2z"/></svg></button><button type="button" id="browser-forward" class="browser-nav" aria-label="前进" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM6.6 6.4 17 12 6.6 17.6 9.8 15.8 14.2 12 9.8 8.2z"/></svg></button><button type="button" id="browser-reload" class="browser-nav" aria-label="刷新" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M20.19 17.74A10 10 0 1 1 20.19 6.26L17.49 8.16A6.7 6.7 0 1 0 17.49 15.84Z"/><path d="M22.5 9.5 18.06 7.75 22.32 4.77z"/></svg></button></div>
               <div id="browser-tabs" class="browser-tabs" role="tablist" aria-label="标签页"></div>
               <!-- The explain pane's own expand button is moved in here while this page is open. -->
               <div id="browser-explain-expand-slot" class="browser-expand-slot"></div>

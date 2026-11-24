@@ -407,6 +407,7 @@ const memoryPageEl = document.getElementById("memory-page") as HTMLElement;
 const btnMemory = document.getElementById("btn-memory") as HTMLButtonElement;
 const modelsPage = document.getElementById("models-page") as HTMLElement;
 const btnConfig = document.getElementById("btn-config") as HTMLButtonElement;
+const libraryHeadSlot = document.getElementById("library-head") as HTMLElement;
 const composerModel = document.getElementById("composer-model") as HTMLSelectElement;
 const composerModelEmpty = document.getElementById("composer-model-empty") as HTMLButtonElement;
 const favoriteFolders = mountFavoriteFolders(
@@ -927,6 +928,32 @@ function libraryOpen(): boolean {
   return skillsPageOpen || mcpPageOpen || memoryPageOpen || modelsPageOpen;
 }
 
+/* Library pages (技能 / 连接 / 记忆 / 模型) lift their title row into the main bar
+   while open, and put it back into the page on close. */
+let libraryHeadHome: { el: HTMLElement; parent: Node; next: Node | null } | null = null;
+
+function mountLibraryHead(page: HTMLElement): void {
+  const head = page.querySelector<HTMLElement>(":scope > .skills-page-head");
+  if (!head) return;
+  if (libraryHeadHome?.el === head) {
+    libraryHeadSlot.hidden = false;
+    return;
+  }
+  unmountLibraryHead();
+  libraryHeadHome = { el: head, parent: head.parentNode as Node, next: head.nextSibling };
+  libraryHeadSlot.append(head);
+  libraryHeadSlot.hidden = false;
+}
+
+function unmountLibraryHead(): void {
+  const home = libraryHeadHome;
+  libraryHeadHome = null;
+  libraryHeadSlot.hidden = true;
+  if (!home) return;
+  if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(home.el, home.next);
+  else home.parent.appendChild(home.el);
+}
+
 function clearMcpChrome(): void {
   mcpPageOpen = false;
   mcpPage.hidden = true;
@@ -956,6 +983,7 @@ function clearModelsChrome(): void {
 }
 
 function leaveSkillsPage(): void {
+  unmountLibraryHead();
   const open = libraryOpen();
   clearSkillsChrome();
   clearMcpChrome();
@@ -963,6 +991,7 @@ function leaveSkillsPage(): void {
   clearModelsChrome();
   if (!open) return;
   mainBar.classList.remove("is-covered");
+  syncHomeBar();
 }
 
 function closeSkillsPage(): void {
@@ -978,6 +1007,7 @@ function markLibraryButton(button: HTMLButtonElement): void {
   mainTitle.setAttribute("aria-selected", "false");
   clearLogsSelection();
   coverStageWithSkills();
+  syncHomeBar();
   syncQuestionsToggle();
 }
 
@@ -987,6 +1017,7 @@ function openSkillsPage(): void {
   clearModelsChrome();
   skillsPageOpen = true;
   skillsPage.hidden = false;
+  mountLibraryHead(skillsPage);
   markLibraryButton(btnSkills);
 }
 
@@ -1002,6 +1033,7 @@ function openMcpPage(): void {
   clearModelsChrome();
   mcpPageOpen = true;
   mcpPage.hidden = false;
+  mountLibraryHead(mcpPage);
   markLibraryButton(btnMcp);
 }
 
@@ -1018,6 +1050,7 @@ function openMemoryPage(tab?: MemoryTab): void {
   clearModelsChrome();
   memoryPageOpen = true;
   memoryPageEl.hidden = false;
+  mountLibraryHead(memoryPageEl);
   markLibraryButton(btnMemory);
   void memoryPage.open(tab ? { tab } : undefined);
 }
@@ -1034,6 +1067,7 @@ function openModelsPage(): void {
   clearMemoryChrome();
   modelsPageOpen = true;
   modelsPage.hidden = false;
+  mountLibraryHead(modelsPage);
   markLibraryButton(btnConfig);
 }
 
@@ -1081,22 +1115,16 @@ function paintStoreEntries(
     summary.append(num);
 
     if (parts.role) {
-      const sep = document.createElement("span");
-      sep.className = "entry-sep";
-      sep.textContent = "·";
       const pill = document.createElement("span");
       pill.className = "entry-role";
       pill.textContent = parts.role;
-      summary.append(sep, pill);
+      summary.append(pill);
     }
     if (parts.rest) {
-      const sep = document.createElement("span");
-      sep.className = "entry-sep";
-      sep.textContent = "·";
       const rest = document.createElement("span");
       rest.className = "entry-rest";
       rest.textContent = parts.rest;
-      summary.append(sep, rest);
+      summary.append(rest);
     }
 
     const highlightUser = parts.className.includes("is-user") && fileLabel === "messages.jsonl";
@@ -1368,6 +1396,129 @@ for (const btn of storeTabButtons()) {
     setMainView(btn.dataset.storeTab);
   });
 }
+
+/* ← / → follow the row the user is looking at, and each row cycles inside its own
+   group only: the four log pages, the four library pages, the model categories,
+   or the composer kinds. No group hands off to another one. */
+const VIEW_CYCLE: MainView[] = [...FILE_TABS];
+const LIBRARY_CYCLE: { isOpen: () => boolean; button: HTMLButtonElement }[] = [
+  { isOpen: () => mcpPageOpen, button: btnMcp },
+  { isOpen: () => skillsPageOpen, button: btnSkills },
+  { isOpen: () => memoryPageOpen, button: btnMemory },
+  { isOpen: () => modelsPageOpen, button: btnConfig },
+];
+/** Last slot reached with ↑ / ↓ in the workspace tree. */
+let sessionNavIndex = -1;
+/** Workspace under the keyboard cursor, so Enter can fold / unfold it. */
+let sessionNavPath: string | null = null;
+/** The tree only answers ↑ / ↓ after the user clicked into it. */
+let treeKeysActive = false;
+document.addEventListener("keydown", (ev) => {
+  if (ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+  if (ev.key === "Enter") {
+    // Enter on the folder under the keyboard cursor folds / unfolds it.
+    const focus = document.activeElement;
+    if (focus instanceof HTMLElement && focus !== document.body && !treesEl.contains(focus)) return;
+    if (libraryOpen() || !findBar.hidden) return;
+    if (document.querySelector("dialog[open], .image-viewer:not([hidden])")) return;
+    const focusedRow = focus instanceof HTMLElement ? focus.closest<HTMLElement>(".workspace-path-row") : null;
+    const path = focusedRow?.dataset.workspace ?? sessionNavPath;
+    if (!path) return;
+    ev.preventDefault();
+    toggleWorkspaceList(path, workspaceExpanded.get(path) !== false);
+    return;
+  }
+  const horizontal = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+  const vertical = ev.key === "ArrowDown" ? 1 : ev.key === "ArrowUp" ? -1 : 0;
+  if (!horizontal && !vertical) return;
+  if (!findBar.hidden) return;
+  if (document.querySelector("dialog[open], .image-viewer:not([hidden])")) return;
+  const el = document.activeElement;
+  if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+
+  if (vertical) {
+    // ↑ / ↓ only once the tree has the cursor (clicked into it), so a stray press
+    // while working elsewhere never swaps the session under the user.
+    if (!treeKeysActive && !(el instanceof HTMLElement && el.closest("#workspace-trees"))) return;
+    // ↑ / ↓ walk the whole tree — workspace rows and their sessions — wrapping at both ends.
+    const rows = Array.from(treesEl.querySelectorAll<HTMLElement>(".workspace-path-row, .session-item"));
+    if (rows.length < 2) return;
+    let at = -1;
+    const remembered = sessionNavIndex >= 0 ? rows[sessionNavIndex] : undefined;
+    // Only trust the remembered slot while it is still the highlighted row.
+    if (remembered && (remembered.classList.contains("active") || remembered.classList.contains("is-active"))) {
+      at = sessionNavIndex;
+    }
+    if (at < 0) at = rows.findIndex((row) => row.classList.contains("active"));
+    if (at < 0) at = rows.findIndex((row) => row.classList.contains("is-active"));
+    if (at < 0) at = vertical > 0 ? -1 : 0;
+    const nextIndex = (at + vertical + rows.length) % rows.length;
+    const next = rows[nextIndex]!;
+    ev.preventDefault();
+    sessionNavIndex = nextIndex;
+    next.scrollIntoView({ block: "nearest" });
+    if (next.classList.contains("workspace-path-row")) {
+      const path = next.dataset.workspace;
+      sessionNavPath = path ?? null;
+      // Select without folding, so the list keeps its shape for the next press.
+      if (path) void selectWorkspace(path).catch(showStatusError);
+      return;
+    }
+    sessionNavPath = null;
+    next.querySelector<HTMLElement>(".session-label")?.click();
+    return;
+  }
+
+  const step = horizontal;
+  // On the 模型 page the category row owns the arrows only once focus is inside
+  // the page; otherwise ← / → keep walking the library pages (so 模型 → 连接 wraps).
+  const focusInModelsPage =
+    modelsPageOpen && document.activeElement instanceof Element && document.activeElement.closest("#models-page") !== null;
+  if (focusInModelsPage) {
+    ev.preventDefault();
+    modelsApi.cycleTab(step);
+    return;
+  }
+  // 记忆 has its own two tabs; they answer once focus is inside that page.
+  const focusInMemoryPage =
+    memoryPageOpen && document.activeElement instanceof Element && document.activeElement.closest("#memory-page") !== null;
+  if (focusInMemoryPage) {
+    ev.preventDefault();
+    memoryPage.cycleTab(step);
+    return;
+  }
+  if (libraryOpen()) {
+    const at = LIBRARY_CYCLE.findIndex((page) => page.isOpen());
+    if (at < 0) return;
+    ev.preventDefault();
+    // Go through the sidebar button so the page loads its data, exactly as a click would.
+    LIBRARY_CYCLE[(at + step + LIBRARY_CYCLE.length) % LIBRARY_CYCLE.length].button.click();
+    return;
+  }
+  if (activeView === "chat") {
+    // The kind row only answers once the cursor is on it (clicked one of the tabs).
+    const onKindTab = el instanceof HTMLElement && el.closest(".composer-kind-tab") !== null;
+    if (!onKindTab) return;
+    const tabs = Array.from(composerKindEl.querySelectorAll<HTMLButtonElement>(".composer-kind-tab")).filter(
+      (btn) => !btn.hidden && !btn.disabled,
+    );
+    const at = tabs.findIndex((btn) => parseComposerKind(btn.dataset.kind) === activeComposerKind);
+    if (at >= 0 && tabs.length > 1) {
+      const nextTab = tabs[(at + step + tabs.length) % tabs.length]!;
+      ev.preventDefault();
+      void setActiveComposerKind(parseComposerKind(nextTab.dataset.kind)).catch(showStatusError);
+    }
+    return;
+  }
+  if (storeTabs.hidden) return;
+  const index = VIEW_CYCLE.indexOf(activeView);
+  if (index < 0) return;
+  const next = VIEW_CYCLE[(index + step + VIEW_CYCLE.length) % VIEW_CYCLE.length];
+  if (next === activeView) return;
+  ev.preventDefault();
+  setMainView(next);
+});
+
 for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>("[data-app-menu]"))) {
   btn.addEventListener("click", () => {
     const index = Number(btn.dataset.appMenu);
@@ -1378,9 +1529,11 @@ for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>("[data
     void window.agent.popupAppMenu(index, Math.round(rect.left), Math.round(rect.bottom));
   });
 }
-document.getElementById("btn-settings")?.addEventListener("click", () => {
-  void showSettingsModal().catch(showStatusError);
-});
+for (const el of Array.from(document.querySelectorAll<HTMLButtonElement>("#btn-settings, [data-settings]"))) {
+  el.addEventListener("click", () => {
+    void showSettingsModal().catch(showStatusError);
+  });
+}
 
 function hidePageCtxMenu(): void {
   pageCtxMenu.hidden = true;
@@ -1777,9 +1930,10 @@ function showRunStatus(text: string, run: RunPaint | null = drawing): void {
   setStatus(text, true, "run");
 }
 
-/** No open session: the title row is the home page the user asked to remove. */
+/** No open session: the title row is the home page the user asked to remove.
+    A library page still needs the bar, since its title lives there. */
 function syncHomeBar(): void {
-  const home = !currentSessionId && storeTabs.hidden;
+  const home = !currentSessionId && storeTabs.hidden && !libraryOpen();
   mainTitle.hidden = home;
   mainBar.hidden = home;
 }
@@ -2529,6 +2683,7 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   block.className = "workspace-tree";
   const row = document.createElement("div");
   row.className = "workspace-path-row";
+  row.dataset.workspace = path;
   if (!open) row.classList.add("is-collapsed");
   if (path === activeWorkspace) row.classList.add("is-active");
 
@@ -4777,6 +4932,7 @@ window.addEventListener("keydown", (ev) => {
     taskPanelOpen: taskPanelOpen && !taskPanelEl.hidden,
     libraryFormOpen: libraryFormOpen(),
     libraryOpen: libraryOpen(),
+    logsOpen: !libraryOpen() && isFileTab(activeView),
     viewingRun: Boolean(pageRun()?.gate.isRunning),
   });
   if (action === "none") return;
@@ -4797,6 +4953,9 @@ window.addEventListener("keydown", (ev) => {
     else if (mcpPageOpen) closeMcpPage();
     else if (memoryPageOpen) closeMemoryPage();
     else if (modelsPageOpen) closeModelsPage();
+  } else if (action === "close-logs") {
+    // Same outcome as clicking 日志 again while a file tab is showing.
+    setMainView("chat");
   } else {
     requestStop();
   }
@@ -5654,6 +5813,10 @@ document.addEventListener("visibilitychange", () => {
 
 document.addEventListener("click", (ev) => {
   const t = ev.target;
+  // Clicking into the tree arms ↑ / ↓; leaving it disarms them.
+  treeKeysActive = t instanceof Element && t.closest("#workspace-trees") !== null;
+  // Leaving the folder rows drops the keyboard cursor, so Enter no longer folds one.
+  if (!(t instanceof Element) || !t.closest(".workspace-path-row")) sessionNavPath = null;
   if (t instanceof Element && t.closest(".session-menu, .session-menu-pop")) return;
   closeSessionMenus();
 });

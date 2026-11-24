@@ -218,7 +218,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   gap: 18px;
   padding: 20px 16px 16px;
   border-right: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.5);
+  background: transparent;
   overflow: hidden;
   animation: side-in 560ms 60ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -496,14 +496,6 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow: hidden;
 }
 
-/* Browser page: no tinted wrapper behind the panels, so the gap between the
-   browser and the explain pane shows the page background, not a seam. */
-.workbench-card:has(.workbench-stage[data-page="browser"]) {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
 .workbench-sheet.is-closing {
   animation: workbench-down 220ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
@@ -531,7 +523,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   gap: 18px;
   padding: 20px 16px 16px;
   border-right: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.5);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -571,7 +563,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.5);
 }
 
 .workbench-bar {
@@ -594,39 +586,36 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .workbench-x {
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 14px;
+  right: 14px;
   z-index: 2;
-  width: 40px;
+  width: 32px;
   height: 32px;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
-  color: var(--ink);
+  color: var(--ink-muted);
   display: grid;
   place-items: center;
   padding: 0;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
 }
 
 .workbench-x:hover {
-  background: rgba(255, 255, 255, 0.75);
-}
-
-.workbench-x svg {
-  width: 10px;
-  height: 10px;
-}
-
-.workbench-x:hover {
-  background: #e81123;
-  color: #fff;
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+  color: var(--ink);
 }
 
 .workbench-x:active {
-  background: #f1707a;
-  color: #fff;
+  background: color-mix(in srgb, var(--line) 80%, transparent);
+}
+
+.workbench-x svg {
+  width: 12px;
+  height: 12px;
 }
 
 .workbench-stage .skills-note {
@@ -806,9 +795,17 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Pure white column: it sits behind the native page view, whose square
+     corners can only be masked by white, never clipped (native layer). */
   background: #ffffff;
   border-radius: 0 16px 16px 0;
   overflow: hidden;
+}
+
+/* The whole right side of the browser page is pure white too, so the gap
+   beside the explain pane matches the column and no seams show. */
+.workbench-stage[data-page="browser"] {
+  background: #ffffff;
 }
 
 .browser-explain-slot {
@@ -831,14 +828,17 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   height: 30px;
   margin-left: 4px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
 }
 
 .browser-top #workbench-close:hover {
-  background: rgba(255, 255, 255, 0.8);
+  /* The generic close-button hover paints the icon white; on this light bar we
+     keep a grey wash and the dark icon so the × stays visible. */
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+  color: var(--ink);
 }
 
 .browser-page:has(#explain-pane:not([hidden])) .browser-top {
@@ -910,6 +910,9 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 .browser-tab-close,
 .browser-tab-new,
 .browser-nav {
+  display: grid;
+  place-items: center;
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--ink-muted);
@@ -918,13 +921,33 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   cursor: pointer;
 }
 
+.browser-nav svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+/* Back is the forward arrow mirrored. */
+#browser-back svg {
+  transform: scaleX(-1);
+}
+
 .browser-tab-close {
+  display: grid;
+  place-items: center;
   width: 22px;
   height: 22px;
   margin-right: 4px;
+  padding: 0;
   border-radius: 6px;
-  font-size: 1rem;
+  line-height: 1;
   opacity: 0;
+}
+
+.browser-tab-close svg {
+  width: 9px;
+  height: 9px;
+  display: block;
 }
 
 .browser-tab:hover .browser-tab-close,
@@ -940,12 +963,13 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   color: var(--ink);
 }
 
+.browser-tab-close:hover {
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+
 .browser-tab-new {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  font-size: 1.1rem;
+  margin-left: 2px;
 }
 
 .browser-bar {
@@ -959,9 +983,9 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .browser-nav {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   font-size: 0.95rem;
 }
 
@@ -1025,14 +1049,31 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   background: var(--teal-soft);
 }
 
-/* The first button in the row: hides and shows the workbench menu. */
+/* The first button in the row: hides and shows the workbench menu.
+   Same mint square + interaction as the library add buttons. */
 .browser-menu-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-right: 6px;
   padding: 0;
-  color: var(--teal);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+  transition:
+    background 0.14s ease,
+    transform 0.12s ease;
+}
+
+#browser-menu-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  /* The generic nav hover paints the icon near-black; keep it teal so the
+     glyph reads brighter against the deeper mint, like the add buttons. */
+  color: var(--accent-ink);
+}
+
+#browser-menu-toggle:active {
+  transform: scale(0.94);
 }
 
 .browser-menu-toggle svg {
@@ -1041,10 +1082,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   display: block;
 }
 
-/* Menu hidden: the same arrow, turned around, to bring it back. */
-.browser-menu-toggle[aria-expanded="false"] svg {
-  transform: rotate(180deg);
-}
+/* Menu hidden: same icon, no flip — the arrow only marks the menu button. */
 
 /* Only the browser page can hide the menu. Any other page needs it to get back, so it shows there whatever was chosen. */
 .workbench-sheet.is-menu-hidden:has(.workbench-stage[data-page="browser"]) .workbench-menu {
@@ -1084,26 +1122,38 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 .memory-tabs {
   display: flex;
-  gap: 6px;
-  padding: 8px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
+  align-items: center;
+  gap: 4px;
+  margin: 10px 10px 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
   background: color-mix(in srgb, var(--line) 28%, #fff);
 }
 
 .memory-tab {
+  appearance: none;
+  -webkit-appearance: none;
   flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin: 0;
-  padding: 8px 10px;
+  padding: 4px 6px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1.2;
   color: var(--ink-muted);
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.memory-tab:hover {
+  color: var(--ink);
 }
 
 .memory-tab.is-active {
@@ -1802,7 +1852,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.5);
   animation: main-in 560ms 100ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1936,6 +1986,11 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .main-bar.is-covered .view-tabs {
+  display: none;
+}
+
+/* The explain toggle belongs to the chat; a library page owns the bar. */
+.main-bar.is-covered #explain-toggle {
   display: none;
 }
 
@@ -2411,6 +2466,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 .context-entry summary::before {
   content: "›";
+  /* Number first, arrow next: shift the disclosure marker after .entry-index. */
+  order: 1;
   color: #5f746c;
   font-size: 15px;
   line-height: 1;
@@ -2422,12 +2479,14 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .entry-index {
+  order: 0;
   color: #5f746c;
   font-variant-numeric: tabular-nums;
 }
 
-.entry-sep {
-  color: #3f5158;
+.entry-role,
+.entry-rest {
+  order: 2;
 }
 
 /* Role marker: user / assistant / tool each get a small pill. */
@@ -2680,13 +2739,28 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   display: none;
 }
 
-.tool-group-summary::before {
-  content: "▸ ";
-  color: var(--ink-muted);
+/* Disclosure arrow drawn from the arrow-right SVG, tinted by the current text color. */
+:root {
+  --disclosure-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'%3E%3Cpath d='M360 832c-10.752 0-20.096-3.968-28.096-11.904C323.904 812.096 320 802.752 320 792l0-560C320 221.184 323.904 211.84 331.904 203.904 339.904 195.904 349.248 192 360 192s20.096 3.904 28.096 11.904l280 280C675.968 491.84 680 501.184 680 512c0 10.752-3.968 20.096-11.904 28.096l-280 280C380.096 828.032 370.752 832 360 832z' fill='%23000'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.tool-group-summary::before,
+.tool-summary::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  background-color: currentColor;
+  -webkit-mask: var(--disclosure-mask);
+  mask: var(--disclosure-mask);
+  transition: transform 0.15s ease;
 }
 
 .tool-group[open] > .tool-group-summary::before {
-  content: "▾ ";
+  transform: rotate(90deg);
 }
 
 .tool-group.is-error > .tool-group-summary {
@@ -2728,14 +2802,14 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   position: absolute;
   left: -45px;
   top: 0;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 9px;
   border: 1px solid rgba(20, 184, 166, 0.2);
   background:
-    color-mix(in srgb, var(--accent) 14%, #fff)
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230d9488' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='9' width='16' height='11' rx='3'/%3E%3Cpath d='M12 6V9'/%3E%3Ccircle cx='12' cy='4.6' r='1.5' fill='%230d9488' stroke='none'/%3E%3C/svg%3E")
-      center / 18px 18px no-repeat;
+    #e7f4f0
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230d9488' stroke-width='1.8' stroke-linejoin='round'%3E%3Crect x='4' y='8' width='16' height='12' rx='3'/%3E%3Cpath d='M12 4v4'/%3E%3Ccircle cx='12' cy='3' r='1.3' fill='%230d9488' stroke='none'/%3E%3C/svg%3E")
+      center / 17px 17px no-repeat;
 }
 
 /* User bubble uses the preview's teal gradient (both center chat and explain pane). */
@@ -2752,6 +2826,11 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 #main .tool-group:not([open])::before {
   display: none;
+}
+
+#main .tool-group-summary::before {
+  /* The flex gap already spaces the arrow from the label. */
+  margin-right: 0;
 }
 
 #main .tool-group-summary {
@@ -3373,13 +3452,8 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   display: none;
 }
 
-.tool-summary::before {
-  content: "▸ ";
-  color: var(--ink-muted);
-}
-
 .tool-step details[open] .tool-summary::before {
-  content: "▾ ";
+  transform: rotate(90deg);
 }
 
 .tool-step.is-error > details > .tool-summary {
@@ -4088,12 +4162,6 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   color: var(--accent-ink);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   font-weight: 700;
-}
-
-#composer .composer-kind-tab:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: -2px;
-  z-index: 1;
 }
 
 .composer-video-chip,
@@ -5102,6 +5170,85 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   margin-left: auto;
 }
 
+/* Library pages (技能 / 连接 / 记忆 / 模型) lift their title row into the main bar. */
+.library-head {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.library-head[hidden] {
+  display: none;
+}
+
+.library-head .skills-page-head {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 10px;
+}
+
+.library-head .skills-page-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.library-head .skills-count {
+  padding: 1px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* Add button in the bar: same mint square + hover as the explain collapse button. */
+.library-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+  line-height: 0;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    transform 0.12s ease;
+}
+
+.library-add svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+.library-add svg path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.library-add:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent-ink);
+}
+
+.library-add:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.library-add:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .btn-add-icon {
   display: inline-flex;
   align-items: center;
@@ -5968,11 +6115,6 @@ input[type="radio"] {
   background: #fff;
   color: var(--accent-ink);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
-}
-
-.models-tab:focus-visible {
-  outline: 2px solid var(--teal);
-  outline-offset: 1px;
 }
 
 .models-tab-count {

@@ -6,6 +6,7 @@ export type EscapeAction =
   | "close-tasks"
   | "close-library-form"
   | "close-library"
+  | "close-logs"
   | "stop";
 
 export interface EscapeState {
@@ -24,6 +25,8 @@ export interface EscapeState {
   libraryFormOpen: boolean;
   /** One of 连接 / 技能 / 记忆 / 模型 is covering the stage. */
   libraryOpen: boolean;
+  /** A log file tab (meta / messages / trace / context) is showing instead of the chat. */
+  logsOpen: boolean;
   /** A turn is running on the session on screen. */
   viewingRun: boolean;
 }
@@ -38,5 +41,7 @@ export function escapeAction(state: EscapeState): EscapeAction {
   if (state.libraryFormOpen) return "close-library-form";
   // Same as clicking the pale-green 连接/技能/记忆/模型 button again.
   if (state.libraryOpen) return "close-library";
+  // Same as clicking 日志 again: leave the log panel for the chat.
+  if (state.logsOpen) return "close-logs";
   return state.viewingRun ? "stop" : "none";
 }

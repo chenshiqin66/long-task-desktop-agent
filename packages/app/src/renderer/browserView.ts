@@ -183,16 +183,18 @@ export function mountBrowser(opts: {
       close.className = "browser-tab-close";
       close.dataset.tabClose = tab.id;
       close.setAttribute("aria-label", `关闭 ${label.textContent}`);
-      close.textContent = "×";
+      close.innerHTML =
+        '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 1.6 8.4 8.4M8.4 1.6 1.6 8.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
       item.append(close);
       tabsEl.append(item);
     }
     const add = document.createElement("button");
     add.type = "button";
-    add.className = "browser-tab-new";
+    add.className = "browser-tab-new library-add";
     add.dataset.tabNew = "1";
     add.setAttribute("aria-label", "新建标签页");
-    add.textContent = "+";
+    add.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
     tabsEl.append(add);
   }
 

@@ -42,6 +42,8 @@ export interface MemoryPage {
   isFormOpen(): boolean;
   /** Same as clicking 取消 on the memory editor. */
   cancelForm(): void;
+  /** ← / → inside the page: walk 指令 / 记忆, wrapping at both ends. */
+  cycleTab(step: number): void;
 }
 
 type Draft = { key: string; description: string; body: string };
@@ -65,6 +67,7 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
   let draft: Draft | null = null;
   let busy = false;
   let activeTab: MemoryTab = "instructions";
+  const MEMORY_TABS: readonly MemoryTab[] = ["instructions", "memories"];
 
   function setNote(text: string): void {
     note.hidden = !text;
@@ -308,6 +311,7 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
         if (activeTab === item.id) return;
         activeTab = item.id;
         paint();
+        focusActiveTab();
       });
       bar.append(btn);
     }
@@ -351,6 +355,21 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
     view.append(switchRow(page), shell);
   }
 
+  function focusActiveTab(): void {
+    view.querySelector<HTMLButtonElement>(".memory-tab.is-active")?.focus({ preventScroll: true });
+  }
+
+  /** ← / → walk 指令 / 记忆, wrapping at both ends. */
+  function cycleTab(step: number): void {
+    const at = MEMORY_TABS.indexOf(activeTab);
+    if (at < 0) return;
+    const next = MEMORY_TABS[(at + step + MEMORY_TABS.length) % MEMORY_TABS.length]!;
+    if (next === activeTab) return;
+    activeTab = next;
+    paint();
+    focusActiveTab();
+  }
+
   return {
     open: async (opts) => {
       setNote("");
@@ -367,6 +386,7 @@ export function mountMemoryPage(view: HTMLElement, note: HTMLElement, deps: Memo
       setNote("");
       paint();
     },
+    cycleTab,
   };
 }
 

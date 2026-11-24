@@ -285,6 +285,7 @@ export function attachModelsLibrary(
   resetComposerKindToChat(): Promise<void>;
   composerKind(): Promise<ComposerKind>;
   loadConfig(): Promise<StoredConfig | null>;
+  cycleTab(step: number): void;
 } {
   const list = page.querySelector("#models-list") as HTMLElement;
   const tabsHost = page.querySelector("#models-tabs") as HTMLElement;
@@ -841,9 +842,28 @@ export function attachModelsLibrary(
         // Filtering only: no config write, no picker repaint, no model switch.
         paintTabs();
         paintList();
+        focusActiveTab();
       });
       tabsHost.append(btn);
     }
+  }
+
+  /** Keep the keyboard on the category row after a repaint. */
+  function focusActiveTab(): void {
+    tabsHost.querySelector<HTMLButtonElement>(".models-tab.is-active")?.focus({ preventScroll: true });
+  }
+
+  /** ← / → on the models page: walk 生文 / 生图 / 语音 / 生视频 / 其他, wrapping at both ends. */
+  function cycleTab(step: number): void {
+    const at = MODELS_TABS.findIndex((tab) => tab.id === activeTab);
+    if (at < 0) return;
+    const next = MODELS_TABS[(at + step + MODELS_TABS.length) % MODELS_TABS.length];
+    if (!next || next.id === activeTab) return;
+    activeTab = next.id;
+    tabChosen = true;
+    paintTabs();
+    paintList();
+    focusActiveTab();
   }
 
   function paintList(): void {
@@ -1252,5 +1272,6 @@ export function attachModelsLibrary(
     resetComposerKindToChat,
     composerKind: async () => composerKindOf(await loadConfig()),
     loadConfig,
+    cycleTab,
   };
 }

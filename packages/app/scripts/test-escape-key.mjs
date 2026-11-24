@@ -10,6 +10,7 @@ const idle = {
   taskPanelOpen: false,
   libraryFormOpen: false,
   libraryOpen: false,
+  logsOpen: false,
   viewingRun: false,
 };
 
@@ -29,6 +30,7 @@ assert.equal(
     taskPanelOpen: true,
     libraryFormOpen: true,
     libraryOpen: true,
+    logsOpen: true,
   }),
   "close-workbench",
 );
@@ -43,6 +45,13 @@ assert.equal(
 assert.equal(escapeAction({ ...idle, libraryFormOpen: true, libraryOpen: true }), "close-library-form");
 assert.equal(escapeAction({ ...idle, viewingRun: true, libraryOpen: true }), "close-library");
 assert.equal(escapeAction({ ...idle, libraryOpen: true }), "close-library");
+
+// a log file tab closes like a second click on 日志, before stopping the run
+assert.equal(escapeAction({ ...idle, viewingRun: true, logsOpen: true }), "close-logs");
+assert.equal(escapeAction({ ...idle, logsOpen: true }), "close-logs");
+
+// a library page still wins over the log panel
+assert.equal(escapeAction({ ...idle, libraryOpen: true, logsOpen: true }), "close-library");
 
 // another handler already used this Esc: rename box, skill menu, context menu
 assert.equal(escapeAction({ ...idle, viewingRun: true, handled: true }), "none");
