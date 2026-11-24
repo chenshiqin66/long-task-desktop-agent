@@ -286,6 +286,8 @@ export function attachModelsLibrary(
   let activeImagePreset: ImagePresetId = DEFAULT_IMAGE_PRESET;
   let imageDraftByModel: ImageByModel = defaultImageByModel();
   let imageModelDraftByPreset: Record<ImagePresetId, string> = defaultImageModelIds();
+  let lastKind: ModelKind = "text";
+  let modelBeforeImage = "";
 
   function durationBounds(model: string): { min: number; max: number } {
     const preset = videoPresetOf(model) ?? VIDEO_MODEL_PRESETS[0]!;
@@ -579,6 +581,13 @@ export function attachModelsLibrary(
   /** Search / video / speech kinds need stronger field hints than the empty defaults. */
   function syncKindFields(): void {
     const kind = parseModelKind(kindSelect.value);
+    if (lastKind === "image" && kind !== "image") {
+      modelInput.value = modelBeforeImage;
+    }
+    if (kind === "image" && lastKind !== "image" && lastKind !== "video") {
+      modelBeforeImage = modelInput.value;
+    }
+    lastKind = kind;
     const search = kind === "search";
     const video = kind === "video";
     const image = kind === "image";
@@ -659,6 +668,8 @@ export function attachModelsLibrary(
     editing = null;
     form.hidden = true;
     form.reset();
+    lastKind = "text";
+    modelBeforeImage = "";
     syncKindFields();
   }
 
@@ -666,6 +677,11 @@ export function attachModelsLibrary(
     editing = entry?.id ?? null;
     nameInput.value = entry?.name ?? "";
     kindSelect.value = modelKindOf(entry);
+    lastKind = modelKindOf(entry);
+    modelBeforeImage =
+      modelKindOf(entry) === "image" || modelKindOf(entry) === "video"
+        ? ""
+        : (entry?.model ?? "");
     syncKindFields();
     baseUrlInput.value = entry?.baseUrl ?? "";
     modelInput.value = entry?.model ?? "";
