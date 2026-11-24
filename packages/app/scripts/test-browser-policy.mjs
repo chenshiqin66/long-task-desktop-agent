@@ -90,7 +90,7 @@ assert(paneBounds({ x: 1, y: 2, width: 3 }, 1) === null, "missing field");
 
 // A tab sees an ordinary Chrome user agent.
 const ua =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) @agent/app/0.1.0 Chrome/130.0.0.0 Electron/33.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) @agent/app/0.2.0 Chrome/130.0.0.0 Electron/33.0.0 Safari/537.36";
 assert(
   pageUserAgent(ua, "@agent/app") ===
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",

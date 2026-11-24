@@ -1,4 +1,4 @@
-import { app, Menu, session, WebContentsView } from "electron";
+import { app, Menu, session, webFrameMain, WebContentsView } from "electron";
 import type { BrowserWindow, IpcMain, IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import {
   MAX_TABS,
@@ -57,6 +57,18 @@ const EXIT_FULLSCREEN = `(() => {
   const late = () => { document.removeEventListener("fullscreenchange", late); leave(); };
   document.addEventListener("fullscreenchange", late);
   setTimeout(() => document.removeEventListener("fullscreenchange", late), 2000);
+})(); 0`;
+
+/** Hide scrollbar UI only. Overflow stays, so the wheel, trackpad, and keys still scroll. */
+const HIDE_SCROLLBARS_CSS = `html,body,*{scrollbar-width:none !important}::-webkit-scrollbar{width:0 !important;height:0 !important;display:none !important;background:transparent !important}`;
+
+const HIDE_SCROLLBARS_SCRIPT = `(() => {
+  const id = "__agent_hide_scrollbars";
+  if (document.getElementById(id)) return;
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = ${JSON.stringify(HIDE_SCROLLBARS_CSS)};
+  (document.head || document.documentElement).appendChild(style);
 })(); 0`;
 
 const guardedPartitions = new Set<string>();
@@ -478,6 +490,23 @@ export class BrowserTabs {
     };
     wc.on("did-navigate", arrived);
     wc.on("did-navigate-in-page", arrived);
+    // Each navigation drops inserted CSS. Re-apply on the main frame early, and
+    // on subframes after they load (insertCSS only reaches the main frame).
+    const hideScrollbars = (): void => {
+      if (wc.isDestroyed()) return;
+      void wc.insertCSS(HIDE_SCROLLBARS_CSS, { cssOrigin: "user" }).catch(() => {
+        // The page may have navigated away or failed to open.
+      });
+    };
+    wc.on("dom-ready", hideScrollbars);
+    wc.on("did-frame-finish-load", (_event, isMainFrame, processId, routingId) => {
+      if (isMainFrame) return;
+      const frame = webFrameMain.fromId(processId, routingId);
+      if (!frame || frame.isDestroyed()) return;
+      void frame.executeJavaScript(HIDE_SCROLLBARS_SCRIPT, true).catch(() => {
+        // A finished or cross-origin frame can refuse the script.
+      });
+    });
     wc.on("did-start-loading", () => {
       tab.loading = true;
       this.changed();

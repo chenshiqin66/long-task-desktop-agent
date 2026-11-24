@@ -31,7 +31,7 @@ const CONNECT_TIMEOUT_MS = 20_000;
 const WIN_SHIMS = new Set(["npx", "npm", "pnpm", "yarn"]);
 
 export async function openMcpSession(config: McpServerConfig, signal?: AbortSignal): Promise<OpenedMcp> {
-  const client = new Client({ name: "long-task-agent", version: "0.1.0" });
+  const client = new Client({ name: "long-task-agent", version: "0.2.0" });
   const secrets = secretsOf(config);
   if (config.transport === "http") {
     const transport = new StreamableHTTPClientTransport(new URL(config.url), {

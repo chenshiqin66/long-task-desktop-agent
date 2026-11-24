@@ -129,7 +129,17 @@ export function mountBrowser(opts: {
 
   function box(): PaneBox {
     const rect = host.getBoundingClientRect();
-    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    // The native view is a square-cornered layer that CSS cannot clip. Inset
+    // the right and bottom just enough to sit inside the card's 16px corner
+    // curve (r * (1 - 1/sqrt(2)) ≈ 4.7px, rounded up) so the mint gutter
+    // and rounded corners stay visible without a thick white frame.
+    const inset = 6;
+    return {
+      x: rect.left,
+      y: rect.top,
+      width: Math.max(0, rect.width - inset),
+      height: Math.max(0, rect.height - inset),
+    };
   }
 
   function keyOf(b: PaneBox): string {
