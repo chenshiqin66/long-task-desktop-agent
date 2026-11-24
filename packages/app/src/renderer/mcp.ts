@@ -43,6 +43,10 @@ export function attachMcpLibrary(
   const count = page.querySelector("#mcp-count") as HTMLElement;
   const addBtn = page.querySelector("#mcp-add") as HTMLButtonElement;
   const form = page.querySelector("#mcp-form") as HTMLFormElement;
+  const modal = page.querySelector("#mcp-modal") as HTMLDialogElement;
+  const modalTitle = page.querySelector("#mcp-modal-title") as HTMLElement;
+  const modalClose = page.querySelector("#mcp-modal-close") as HTMLButtonElement;
+  const formError = page.querySelector("#mcp-form-error") as HTMLElement;
   const labelInput = page.querySelector("#mcp-label") as HTMLInputElement;
   const slugLine = page.querySelector("#mcp-slug") as HTMLElement;
   const derived = page.querySelector("#mcp-id-derived") as HTMLElement;
@@ -77,12 +81,16 @@ export function attachMcpLibrary(
     httpFields.hidden = !http;
   };
 
-  const closeForm = () => {
+  const resetFormState = () => {
     formOpen = false;
     editing = null;
-    form.hidden = true;
     nameField.hidden = true;
     nameInput.disabled = false;
+  };
+
+  const closeForm = () => {
+    if (modal.open) modal.close();
+    else resetFormState();
   };
 
   const refreshSlug = () => {
@@ -142,7 +150,9 @@ export function attachMcpLibrary(
   const openForm = (server?: McpServerView) => {
     formOpen = true;
     editing = server?.name ?? null;
-    form.hidden = false;
+    modalTitle.textContent = server ? "编辑连接" : "添加连接";
+    formError.hidden = true;
+    if (!modal.open) modal.showModal();
     labelInput.value = server && server.label !== server.name ? server.label : "";
     nameInput.disabled = Boolean(server);
     nameInput.value = server?.name ?? "";
@@ -241,7 +251,12 @@ export function attachMcpLibrary(
       if (!page.querySelector("#mcp-note")?.textContent || note.textContent === "") note.hidden = true;
       await reload();
     } catch (err) {
-      showNote(err);
+      if (modal.open) {
+        formError.hidden = false;
+        formError.textContent = plainError(err);
+      } else {
+        showNote(err);
+      }
     }
   }
 
@@ -254,6 +269,11 @@ export function attachMcpLibrary(
   argsInput.addEventListener("input", refreshSlug);
   addBtn.onclick = () => openForm();
   cancelBtn.onclick = () => closeForm();
+  modalClose.onclick = () => closeForm();
+  modal.addEventListener("click", (ev) => {
+    if (ev.target === modal) closeForm();
+  });
+  modal.addEventListener("close", resetFormState);
   form.onsubmit = (ev) => {
     ev.preventDefault();
     void run(async () => {
@@ -312,9 +332,9 @@ export function attachMcpLibrary(
   }
 
   return {
-    isFormOpen: () => formOpen && !form.hidden,
+    isFormOpen: () => formOpen && modal.open,
     cancelForm: () => {
-      if (formOpen && !form.hidden) closeForm();
+      if (formOpen && modal.open) closeForm();
     },
   };
 }

@@ -232,6 +232,15 @@ export function mountWorkbenchNav(opts: {
     opts.stage.querySelectorAll<HTMLElement>("[data-workbench-page]").forEach((part) => {
       part.hidden = part.dataset.workbenchPage !== next;
     });
+    // The close button rides at the browser tab bar's right end; otherwise it stays
+    // at the sheet's top-right corner.
+    const closeBtn = document.getElementById("workbench-close");
+    const browserTop = opts.stage.querySelector(".browser-top");
+    const sheet = opts.stage.closest(".workbench-sheet");
+    if (closeBtn && sheet) {
+      if (next === "browser" && browserTop) browserTop.append(closeBtn);
+      else sheet.append(closeBtn);
+    }
   }
 
   function show(next: WorkbenchPage): void {

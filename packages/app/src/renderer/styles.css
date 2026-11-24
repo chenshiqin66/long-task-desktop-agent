@@ -178,7 +178,24 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   z-index: 1;
   display: flex;
   height: 100vh;
+  box-sizing: border-box;
+  padding: 14px;
+  gap: 14px;
   animation: app-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 左侧栏 + 中间会话共用一张圆角卡片，右侧解释栏是独立卡片。 */
+#workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 8px 28px rgba(22, 33, 46, 0.1),
+    0 1px 3px rgba(22, 33, 46, 0.05);
+  overflow: hidden;
 }
 
 @keyframes app-in {
@@ -201,8 +218,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   gap: 18px;
   padding: 20px 16px 16px;
   border-right: 1px solid var(--line);
-  background: color-mix(in srgb, var(--paper-elev) 88%, transparent);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.5);
   overflow: hidden;
   animation: side-in 560ms 60ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -228,12 +244,13 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 .app-menu button {
   border: none;
   background: transparent;
-  color: var(--ink);
+  color: var(--ink-muted);
   font-family: var(--font-ui);
-  font-size: var(--text-sm);
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1.2;
-  padding: 4px 6px;
-  border-radius: 6px;
+  padding: 5px 9px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
@@ -266,27 +283,45 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   width: auto;
 }
 
-/* 加号占自然宽度，与「新建会话」等高；悬停提示走 title。 */
+/* 新建工作区按钮：与「新建会话」等高（30px），圆角 9px。 */
 .sidebar-actions #btn-workspace {
   flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: auto;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 30px;
   min-width: 0;
-  height: auto;
-  border-radius: 8px;
-  border: 1px solid #15c1ae;
-  background: var(--paper-elev);
-  padding: 0 10px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: rgba(20, 184, 166, 0.06);
+  color: #0d9488;
   line-height: 0;
 }
 
 .sidebar-actions #btn-workspace .workspace-add-icon {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   display: block;
-  color: #15c1ae;
+  color: currentColor;
+}
+
+#btn-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border-radius: 9px;
+  border-color: transparent;
+  background: linear-gradient(135deg, #1d2b3a, #111b27);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+#btn-new:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1d2b3a, #111b27);
+  filter: brightness(1.12);
 }
 
 .workspace-group {
@@ -304,15 +339,33 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   justify-items: stretch;
   gap: 8px;
   width: 100%;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
 }
 
 .sidebar-tools {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   justify-items: stretch;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   min-width: 0;
+}
+
+.sidebar-tools .btn {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.sidebar-tools .btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent-ink);
 }
 
 .sidebar-tools .btn,
@@ -329,22 +382,38 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease;
 }
 
-/* 文字真正居中，图标绝对定位到文字左侧，不占用居中计算。 */
+#btn-workbench:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent-ink);
+}
+
+/* 图标在文字左侧，整组居中（与设计稿一致）。 */
 .workbench-label {
-  position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
 }
 
 .workbench-icon {
-  position: absolute;
-  right: calc(100% + 8px);
-  top: 50%;
-  transform: translateY(-50%);
   width: 16px;
   height: 16px;
-  color: var(--ink-muted);
+  flex: 0 0 auto;
+  color: #0d9488;
 }
 
 #btn-workbench.is-current .workbench-icon,
@@ -376,14 +445,63 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   background: var(--teal-soft);
 }
 
+/* 选中的工具按钮（连接/技能/记忆/模型）不压暗，沿用悬停时的白底青边样式。 */
+.sidebar-tools #btn-mcp.is-current,
+.sidebar-tools #btn-skills.is-current,
+.sidebar-tools #btn-memory.is-current,
+.sidebar-tools #btn-config.is-current,
+.sidebar-tools #btn-mcp.is-current:hover:not(:disabled),
+.sidebar-tools #btn-skills.is-current:hover:not(:disabled),
+.sidebar-tools #btn-memory.is-current:hover:not(:disabled),
+.sidebar-tools #btn-config.is-current:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent-ink);
+}
+
+/* 工作台按钮打开时也用白底青边，跟上面四个工具按钮一致，不压暗。 */
+#btn-workbench.is-current,
+#btn-workbench.is-current:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent-ink);
+}
+
 .workbench-sheet {
   position: fixed;
   inset: 0;
   z-index: 90;
   display: flex;
   height: 100vh;
-  background: var(--paper);
+  box-sizing: border-box;
+  padding: 14px;
+  background:
+    radial-gradient(900px 480px at 8% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 55%),
+    radial-gradient(700px 420px at 100% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 50%),
+    linear-gradient(165deg, #e5f0ec 0%, var(--paper) 42%, #e8f1ed 100%);
   animation: workbench-up 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 工作台内容与主页面一致：左侧菜单 + 右侧舞台共用一张圆角卡片。 */
+.workbench-card {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 8px 28px rgba(22, 33, 46, 0.1),
+    0 1px 3px rgba(22, 33, 46, 0.05);
+  overflow: hidden;
+}
+
+/* Browser page: no tinted wrapper behind the panels, so the gap between the
+   browser and the explain pane shows the page background, not a seam. */
+.workbench-card:has(.workbench-stage[data-page="browser"]) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .workbench-sheet.is-closing {
@@ -413,7 +531,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   gap: 18px;
   padding: 20px 16px 16px;
   border-right: 1px solid var(--line);
-  background: color-mix(in srgb, var(--paper-elev) 88%, transparent);
+  background: rgba(255, 255, 255, 0.5);
   overflow: hidden;
 }
 
@@ -453,7 +571,7 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--paper-elev) 70%, transparent);
+  background: transparent;
 }
 
 .workbench-bar {
@@ -476,19 +594,24 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
 
 .workbench-x {
   position: absolute;
-  top: 0;
-  right: 0;
+  top: 16px;
+  right: 16px;
   z-index: 2;
-  width: 46px;
+  width: 40px;
   height: 32px;
   border: none;
-  border-radius: 0;
+  border-radius: 8px;
   background: transparent;
   color: var(--ink);
   display: grid;
   place-items: center;
   padding: 0;
   cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.workbench-x:hover {
+  background: rgba(255, 255, 255, 0.75);
 }
 
 .workbench-x svg {
@@ -655,7 +778,9 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   align-items: center;
   gap: 4px;
   /* Right side clears the close button, which sits in the sheet's top-right corner. */
-  padding: 6px 54px 6px 12px;
+  height: 42px;
+  box-sizing: border-box;
+  padding: 0 20px 0 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   flex-shrink: 0;
 }
@@ -670,12 +795,20 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   flex-direction: row;
 }
 
+/* Only reserve a gap for the explain pane while it is actually docked. */
+.browser-page:has(#explain-pane:not([hidden])) {
+  gap: 14px;
+}
+
 .browser-main {
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  background: #ffffff;
+  border-radius: 0 16px 16px 0;
+  overflow: hidden;
 }
 
 .browser-explain-slot {
@@ -684,9 +817,28 @@ pre.md-code::-webkit-scrollbar-thumb:hover,
   min-height: 0;
 }
 
-/* The close button sits over the pane's header while the pane is open, over the tab row while it is not. */
-.browser-explain-slot #explain-pane .explain-bar {
-  padding-right: 54px;
+/* Solid white card behind the docked pane so no tint band shows under its title bar. */
+.browser-explain-slot #explain-pane {
+  background: #ffffff;
+}
+
+/* The close button lives at the browser tab bar's right end, not over the explain pane. */
+.browser-top #workbench-close {
+  position: static;
+  top: auto;
+  right: auto;
+  width: 30px;
+  height: 30px;
+  margin-left: 4px;
+  padding: 0;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.browser-top #workbench-close:hover {
+  background: rgba(255, 255, 255, 0.8);
 }
 
 .browser-page:has(#explain-pane:not([hidden])) .browser-top {
@@ -1237,7 +1389,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .btn-accent:hover:not(:disabled) {
-  filter: brightness(1.05);
+  filter: brightness(1.07);
 }
 
 .btn-ghost {
@@ -1247,8 +1399,9 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .btn-ghost:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
-  background: var(--teal-soft);
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent-ink);
 }
 
 .workspace-trees {
@@ -1269,6 +1422,19 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  transition: background 0.15s ease;
+}
+
+/* 悬停整个工作区块时，标题+会话列表底色变浅青，白色会话 pill 才显得出来。 */
+.workspace-tree:hover {
+  background: rgba(20, 184, 166, 0.06);
+}
+
+/* 当前工作区整块常驻浅青底色，选中的会话白色 pill 始终清晰。 */
+.workspace-tree:has(.workspace-path-row.is-active) {
+  background: rgba(20, 184, 166, 0.08);
 }
 
 .workspace-path-row {
@@ -1281,9 +1447,13 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .workspace-path-row.is-active {
-  color: var(--ink);
-  background: var(--teal-soft);
-  border-radius: 6px;
+  color: var(--accent-ink);
+  background: rgba(20, 184, 166, 0.13);
+  border-radius: 9px;
+}
+
+.workspace-path-row.is-active .workspace-path {
+  color: var(--accent-ink);
 }
 
 .workspace-path {
@@ -1423,7 +1593,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   align-items: center;
   gap: 2px;
   padding: 1px 2px 1px 4px;
-  border-radius: 6px;
+  border-radius: 9px;
   font-family: var(--font-ui);
   font-size: var(--text);
   font-weight: 400;
@@ -1436,10 +1606,17 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .session-list li.session-item:hover {
-  background: rgba(255, 255, 255, 0.55);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(22, 33, 46, 0.06);
 }
 
-.session-list li.session-item.active,
+.session-list li.session-item.active {
+  background: #ffffff;
+  border-color: transparent;
+  color: var(--accent-ink);
+  box-shadow: 0 1px 3px rgba(22, 33, 46, 0.07);
+}
+
 .session-list li.session-item.menu-open {
   background: var(--teal-soft);
   border-color: color-mix(in srgb, var(--teal-bright) 35%, transparent);
@@ -1472,7 +1649,12 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .session-list li.session-item.active .session-icon {
-  color: #15c1ae;
+  color: #0d9488;
+}
+
+.session-list li.session-item.active .session-icon path {
+  fill: currentColor;
+  stroke: currentColor;
 }
 
 .session-label-text {
@@ -1620,7 +1802,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--paper-elev) 70%, transparent);
+  background: transparent;
   animation: main-in 560ms 100ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1630,8 +1812,13 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--line);
-  background: color-mix(in srgb, var(--paper-elev) 78%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
+  box-shadow:
+    0 8px 28px rgba(22, 33, 46, 0.1),
+    0 1px 3px rgba(22, 33, 46, 0.05);
+  overflow: hidden;
 }
 
 #explain-pane[hidden] {
@@ -1655,13 +1842,22 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 .explain-title {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   line-height: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), #0d9488);
+  box-shadow: 0 4px 12px rgba(20, 184, 166, 0.32);
 }
 
 .explain-title svg {
-  height: 28px;
-  width: auto;
+  height: 20px;
+  width: 20px;
   display: block;
+}
+.explain-title svg path {
+  fill: #fff;
 }
 
 .explain-head {
@@ -1697,6 +1893,46 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 
 .explain-toggle:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* 中间栏右上角的机器人：和解释栏左上角的头像样式一致。 */
+#explain-toggle {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), #0d9488);
+  box-shadow: 0 4px 12px rgba(20, 184, 166, 0.32);
+}
+#explain-toggle:hover {
+  background: linear-gradient(135deg, var(--accent), #0d9488);
+  filter: brightness(1.06);
+}
+#explain-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+#explain-toggle svg path {
+  fill: #fff;
+}
+
+/* 收起按钮：浅青底圆角方块 + 深青箭头，和设计稿一致。 */
+#explain-collapse {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+}
+
+#explain-collapse:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+#explain-collapse svg {
+  width: 18px;
+  height: 18px;
 }
 
 .main-bar.is-covered .view-tabs {
@@ -2349,6 +2585,28 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   scroll-behavior: smooth;
   /* Growing the last bubble must not drag a reader who has scrolled up. */
   overflow-anchor: none;
+}
+
+/* 中间会话区与解释栏都隐藏纵向滚动条，但保留滚动能力。 */
+#main .messages,
+#explain-pane .messages,
+#explain-pane .notice-body,
+#explain-pane .md-table-wrap,
+#explain-pane .tool-detail,
+#explain-pane pre,
+#explain-pane textarea {
+  scrollbar-width: none;
+}
+#main .messages::-webkit-scrollbar,
+#explain-pane .messages::-webkit-scrollbar,
+#explain-pane .notice-body::-webkit-scrollbar,
+#explain-pane .md-table-wrap::-webkit-scrollbar,
+#explain-pane .tool-detail::-webkit-scrollbar,
+#explain-pane pre::-webkit-scrollbar,
+#explain-pane textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .messages > .scroll-hold {
@@ -5564,6 +5822,12 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   align-items: flex-start;
 }
 
+/* 原生复选框/单选统一用主题青绿，别冒出浏览器默认的蓝色。 */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
 .models-tabs {
   display: flex;
   flex-wrap: nowrap;
@@ -5897,7 +6161,7 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .mcp-btn {
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--accent) 62%, var(--line));
   border-radius: 8px;
   background: #fff;
   padding: 5px 10px;
@@ -5905,16 +6169,24 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
   font-size: var(--text-sm);
   color: var(--ink);
   cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
 .mcp-btn:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
-  background: var(--teal-soft);
+  border-color: var(--accent);
+  background: #fff;
+  color: var(--accent-ink);
 }
 
 .mcp-btn-danger {
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+}
+
+.mcp-btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: #fff;
+  color: var(--danger);
 }
 
 .mcp-actions button:disabled {

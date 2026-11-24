@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>三栏整体布局 · 设计预览</title>
+<style>
+  :root{
+    --accent:#14b8a6;
+    --accent-deep:#0d9488;
+    --accent-ink:#0b7c74;
+    --ink:#16212e;
+    --ink-2:#3d4c5a;
+    --muted:#7b8a97;
+    --line:#e2eae6;
+    --line-2:#cfdcd6;
+    --paper:#eef5f2;
+    --surface:#ffffff;
+    --surface-2:#f7fbf9;
+    --bubble:#e7f4f0;
+    --shadow-sm:0 1px 2px rgba(22,33,46,.05);
+    --shadow-md:0 8px 28px rgba(22,33,46,.10),0 1px 3px rgba(22,33,46,.05);
+    --shadow-lg:0 20px 55px rgba(22,33,46,.16);
+    --font:"Microsoft YaHei UI","PingFang SC","Segoe UI",system-ui,sans-serif;
+    --mono:"Cascadia Mono","Sarasa Mono SC","Consolas",monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--font);color:var(--ink);
+    background:
+      radial-gradient(1000px 600px at 6% -10%,rgba(20,184,166,.13),transparent 55%),
+      radial-gradient(820px 520px at 104% 0%,rgba(20,184,166,.10),transparent 52%),
+      linear-gradient(165deg,#edf5f2 0%,var(--paper) 46%,#eaf3ef 100%);
+    -webkit-font-smoothing:antialiased;font-size:13px;
+  }
+  .app{display:flex;height:100vh;max-width:1780px;margin:0 auto;padding:14px;gap:0}
+
+  /* ============ Sidebar ============ */
+  .sidebar{
+    width:258px;flex:0 0 258px;display:flex;flex-direction:column;gap:15px;
+    background:rgba(255,255,255,.5);border-right:1px solid var(--line);padding:16px 13px 13px;
+  }
+  .app-menu{display:flex;gap:4px;padding:0 4px}
+  .app-menu button{border:0;background:transparent;color:var(--muted);font:600 12px var(--font);padding:5px 9px;border-radius:8px;cursor:pointer;transition:.16s}
+  .app-menu button:hover{color:var(--accent-ink);background:rgba(20,184,166,.08)}
+  .row{display:flex;gap:8px;align-items:stretch}
+  .btn{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);font:600 12.5px var(--font);border-radius:9px;height:30px;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:.16s;box-shadow:var(--shadow-sm)}
+  .btn:hover{border-color:var(--accent);color:var(--accent-ink);transform:translateY(-1px)}
+  .btn-add{flex:0 0 auto;width:42px;padding:0;display:grid;place-items:center;border-color:var(--accent);background:rgba(20,184,166,.06);color:var(--accent-deep)}
+  .btn-add svg{width:17px;height:17px}
+  .btn-new{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#1d2b3a,#111b27);color:#fff;border-color:transparent}
+  .btn-new:hover{color:#fff;filter:brightness(1.12)}
+  .btn-new svg{width:15px;height:15px;opacity:.85}
+  .tree{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:5px;padding-right:2px}
+  .tree::-webkit-scrollbar{width:5px}
+  .tree::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  .ws{padding:5px 4px;border-radius:10px;transition:.15s;cursor:pointer}
+  .ws:hover{background:rgba(20,184,166,.05)}
+  .ws:has(.ws-head.active){background:rgba(20,184,166,.08)}
+  .ws-head{display:flex;align-items:center;gap:8px;padding:6px 7px;height:30px;border-radius:9px;color:var(--ink-2);font-weight:400}
+  .ws-head.active{background:rgba(20,184,166,.13);color:var(--accent-ink)}
+  .ws-icon{width:16px;height:16px;flex:0 0 auto;color:var(--muted)}
+  .ws-head.active .ws-icon{color:var(--accent-deep)}
+  .ws-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chev{width:14px;height:14px;color:var(--muted)}
+  .ws.collapsed .chev{transform:rotate(-90deg)}
+  .sessions{list-style:none;margin:4px 0 2px;padding:0 0 0 29px;display:flex;flex-direction:column;gap:2px}
+  .session{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:9px;color:var(--ink-2);font-weight:400;position:relative;transition:.15s}
+  .session:hover{background:rgba(255,255,255,.8);box-shadow:var(--shadow-sm)}
+  .session.active{background:var(--surface);color:var(--accent-ink);font-weight:400;box-shadow:var(--shadow-sm)}
+  .s-icon{width:14px;height:14px;flex:0 0 auto;color:var(--muted)}
+  .session.active .s-icon{color:var(--accent-deep)}
+  .session.active .s-icon path{fill:currentColor;stroke:currentColor}
+  .s-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dots{opacity:0;color:var(--muted);font-weight:400;font-size:.85rem;line-height:1;letter-spacing:.02em;transition:.15s;cursor:pointer}
+  .session:hover .dots,.session.active .dots{opacity:.8}
+  .foot{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+  .tools{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .tool{border:1px solid var(--line);background:rgba(255,255,255,.7);border-radius:9px;padding:8px 0;text-align:center;color:var(--ink-2);font:600 12px var(--font);cursor:pointer;transition:.16s}
+  .tool:hover{border-color:var(--accent);color:var(--accent-ink);background:#fff}
+  .bench{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;border:1px solid var(--line);background:rgba(255,255,255,.7);border-radius:10px;padding:10px;color:var(--ink-2);font:600 12.5px var(--font);cursor:pointer;transition:.16s}
+  .bench:hover{border-color:var(--accent);color:var(--accent-ink);background:#fff}
+  .bench svg{width:16px;height:16px;color:var(--accent-deep)}
+
+  /* ============ Main chat ============ */
+  /* Center + right share one card, split by a single vertical line. */
+  .workspace{flex:1;min-width:0;display:flex;background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.9);border-radius:16px;box-shadow:var(--shadow-md);backdrop-filter:blur(14px);overflow:hidden}
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+  .main-bar{display:flex;align-items:center;gap:14px;height:56px;padding:0 20px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.45)}
+  .title-wrap{display:flex;align-items:center;gap:8px;min-width:0}
+  .menu-ic{width:17px;height:17px;color:var(--accent-deep);flex:0 0 auto}
+  .title{font-size:14.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tab{border:1px solid var(--line);background:rgba(255,255,255,.6);color:var(--muted);font:600 12px var(--font);padding:6px 13px;border-radius:8px;cursor:pointer;transition:.16s}
+  .tab:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .bot{margin-left:auto;width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-deep));box-shadow:0 4px 12px rgba(20,184,166,.32)}
+  .bot svg{width:20px;height:20px;color:#fff}
+  .chat{flex:1;min-height:0;overflow-y:auto;padding:24px 30px 10px;display:flex;flex-direction:column;gap:20px}
+  .chat::-webkit-scrollbar{width:7px}
+  .chat::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+  .turn{display:flex;flex-direction:column;gap:9px}
+  .user{align-self:flex-end;max-width:74%}
+  .user .bubble{background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#fff;padding:11px 16px;border-radius:14px 14px 4px 14px;font-size:13px;line-height:1.5;box-shadow:0 6px 16px rgba(20,184,166,.22)}
+  .meta{align-self:flex-end;color:var(--muted);font-size:11px;margin-top:-2px}
+  .assistant{max-width:100%;display:flex;gap:13px;align-items:flex-start}
+  .avatar{width:30px;height:30px;flex:0 0 auto;border-radius:9px;background:var(--bubble);display:grid;place-items:center;color:var(--accent-deep);border:1px solid rgba(20,184,166,.2)}
+  .avatar svg{width:17px;height:17px}
+  .body{flex:1;min-width:0;padding-top:3px;color:var(--ink-2);font-size:13px;line-height:1.72}
+  .body p+p{margin-top:9px}
+  .body ul,.body ol{margin:8px 0 0;padding-left:20px}
+  .body li{margin:5px 0}
+  .body strong,.body b{color:var(--ink);font-weight:700}
+  code{font-family:var(--mono);font-size:11.5px;background:var(--bubble);color:var(--accent-ink);padding:1px 6px;border-radius:5px;border:1px solid rgba(20,184,166,.15)}
+  .dock{padding:10px 18px 16px}
+  .composer{background:var(--surface);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow-md);padding:11px 13px 12px;transition:.18s}
+  .composer:focus-within{border-color:var(--accent);box-shadow:0 8px 28px rgba(20,184,166,.14)}
+  .kinds{display:flex;gap:4px;margin-bottom:6px}
+  .kind{border:0;background:transparent;color:var(--muted);font:600 12px var(--font);padding:5px 11px;border-radius:8px;cursor:pointer;transition:.15s}
+  .kind:hover{background:var(--surface-2);color:var(--ink-2)}
+  .kind.on{background:var(--bubble);color:var(--accent-ink)}
+  .input{width:100%;border:0;outline:0;resize:none;font:400 13px/1.5 var(--font);color:var(--ink);background:transparent;padding:4px 4px 8px;min-height:38px}
+  .input::placeholder{color:var(--muted)}
+  .actions{display:flex;align-items:center;gap:6px;border-top:1px solid var(--line);padding-top:9px}
+  .ic{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;transition:.15s}
+  .ic:hover{background:var(--bubble);color:var(--accent-ink)}
+  .ic svg{width:17px;height:17px}
+  .spacer{flex:1}
+  .model{border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:7px 10px;color:var(--ink-2);font:600 11.5px var(--font);cursor:pointer}
+  .model:hover{border-color:var(--accent)}
+  .send{width:34px;height:34px;border:0;border-radius:9px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#fff;box-shadow:0 4px 12px rgba(20,184,166,.3);cursor:pointer;transition:.16s}
+  .send:hover{transform:translateY(-1px)}
+  .send svg{width:17px;height:17px}
+
+  /* ============ Explain pane ============ */
+  .explain{flex:0 0 auto;margin-left:14px;display:flex;flex-direction:column;background:linear-gradient(180deg,#ffffff 0%,#f7fbf9 100%);border:1px solid rgba(255,255,255,.9);border-radius:16px;box-shadow:var(--shadow-md);backdrop-filter:blur(14px);overflow:hidden;transition:width .28s ease,margin-left .28s ease,opacity .2s ease}
+  .explain.is-collapsed{border-width:0;box-shadow:none;opacity:0}
+  .ex-bar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 13px 0 15px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.6)}
+  .ex-brand{display:flex;align-items:center;gap:10px;min-width:0}
+  .ex-avatar{width:32px;height:32px;flex:0 0 auto;border-radius:10px;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-deep));box-shadow:0 4px 12px rgba(20,184,166,.32)}
+  .ex-avatar svg{width:18px;height:18px}
+  /* Single robot button: lives in the center header (summon) or the explain header (identity). */
+  .robot-slot{display:inline-flex;align-items:center;flex:0 0 auto}
+  #slotMain{margin-left:auto}
+  .robot{width:32px;height:32px;flex:0 0 auto;border:0;border-radius:10px;display:grid;place-items:center;padding:0;background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#fff;box-shadow:0 4px 12px rgba(20,184,166,.32);cursor:pointer;transition:transform .15s,box-shadow .15s}
+  .robot:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(20,184,166,.4)}
+  .robot svg{width:20px;height:20px;display:block}
+  .ex-name{font-size:13.5px;font-weight:700;line-height:1.2}
+  .ex-sub{font-size:10.5px;color:var(--muted);margin-top:1px}
+  .ex-right{display:flex;align-items:center;gap:10px}
+  .ex-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(20,184,166,.16)}
+  .ex-collapse{width:30px;height:30px;display:grid;place-items:center;border:0;border-radius:9px;background:rgba(20,184,166,.14);color:var(--accent-ink);cursor:pointer;transition:.15s}
+  .ex-collapse:hover{background:rgba(20,184,166,.22)}
+  .ex-collapse svg{width:18px;height:18px}
+  .ex-body{flex:1;min-height:0;overflow-y:auto;padding:16px}
+  .ex-body::-webkit-scrollbar{width:7px}
+  .ex-body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
+  .state{display:none}
+  .state.on{display:block;animation:fade .3s ease both}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .dropzone{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px;text-align:center;padding:24px 18px;border:1.5px dashed var(--line-2);border-radius:16px;background:rgba(255,255,255,.45)}
+  .dz-icon{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;background:var(--bubble);color:var(--accent-deep);border:1px solid rgba(20,184,166,.2)}
+  .dz-icon svg{width:26px;height:26px}
+  .dz-title{font-size:13.5px;font-weight:700;color:var(--ink)}
+  .dz-sub{font-size:12px;color:var(--muted);line-height:1.6;max-width:15rem}
+  .dz-chips{display:flex;flex-wrap:wrap;gap:7px;justify-content:center}
+  .dz-chip{font-size:11px;color:var(--ink-2);background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 11px;box-shadow:var(--shadow-sm)}
+  .dz-chip b{color:var(--accent-ink);font-weight:700}
+  .quote{border-left:3px solid var(--accent);background:var(--bubble);border-radius:0 10px 10px 0;padding:10px 13px;margin-bottom:15px}
+  .q-tag{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--accent-ink);text-transform:uppercase}
+  .q-tag svg{width:12px;height:12px}
+  .q-text{font-size:12px;color:var(--ink-2);line-height:1.6;margin-top:5px}
+  .answer h4{font-size:12.5px;color:var(--ink);margin:0 0 8px;display:flex;align-items:center;gap:7px}
+  .answer h4::before{content:"";width:4px;height:14px;border-radius:2px;background:var(--accent)}
+  .answer .lead{font-size:12.5px;color:var(--ink-2);line-height:1.75;margin-bottom:12px}
+  .answer ol{margin:0 0 13px;padding-left:18px;display:flex;flex-direction:column;gap:9px}
+  .answer ol li{font-size:12px;color:var(--ink-2);line-height:1.66}
+  .answer ol li b{color:var(--ink);font-weight:700}
+  .callaout{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:10px 12px;font-size:11.5px;color:var(--muted);line-height:1.6}
+  .callaout b{color:var(--accent-ink)}
+  .ex-answer-actions{display:flex;gap:8px;margin-top:13px}
+  .ex-act{font-size:11.5px;color:var(--ink-2);border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;cursor:pointer;transition:.15s}
+  .ex-act:hover{border-color:var(--accent);color:var(--accent-ink)}
+  .ex-composer{flex-shrink:0;padding:11px 13px 13px;border-top:1px solid var(--line);background:rgba(255,255,255,.6)}
+  .ex-input-card{border:1px solid var(--line-2);border-radius:13px;background:#fff;box-shadow:var(--shadow-sm);padding:9px 11px 10px;transition:.16s}
+  .ex-input-card:focus-within{border-color:var(--accent);box-shadow:0 6px 20px rgba(20,184,166,.14)}
+  .ex-input-card textarea{width:100%;border:0;outline:0;resize:none;background:transparent;font:400 12.5px/1.55 var(--font);color:var(--ink);min-height:38px}
+  .ex-input-card textarea::placeholder{color:var(--muted)}
+  .ex-actions{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .ex-model{border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:6px 10px;color:var(--ink-2);font:600 11px var(--font);cursor:pointer}
+  .ex-model:hover{border-color:var(--accent)}
+  .ex-spacer{flex:1}
+  .ex-send{width:32px;height:32px;border:0;border-radius:9px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#fff;box-shadow:0 4px 12px rgba(20,184,166,.3);cursor:pointer;transition:.16s}
+  .ex-send:hover{transform:translateY(-1px)}
+  .ex-send svg{width:16px;height:16px}
+
+  /* state switch */
+  .switcher{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);display:flex;gap:6px;align-items:center;background:rgba(22,33,46,.92);padding:6px 6px 6px 12px;border-radius:12px;box-shadow:var(--shadow-lg);z-index:30}
+  .switcher .lbl{color:#8fa39b;font:600 11px var(--font);margin-right:2px}
+  .switcher button{border:0;background:transparent;color:#cfd9d4;font:600 12px var(--font);padding:7px 13px;border-radius:8px;cursor:pointer;transition:.15s}
+  .switcher button:hover{color:#fff}
+  .switcher button.on{background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:#fff}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="workspace"><!-- left sidebar + center chat share one card -->
+  <!-- ============ Left sidebar ============ -->
+  <aside class="sidebar">
+    <nav class="app-menu"><button>视图</button><button>帮助</button><button>设置</button></nav>
+    <div class="row">
+      <button class="btn btn-add" title="增加工作区"><svg viewBox="0 0 1024 1024" aria-hidden="true" fill="currentColor"><path d="M930.944 209.472 544.256 209.472 512 162.944C478.976 101.568 470.336 69.824 418.944 69.824L93.056 69.824C41.664 69.824 0 111.488 0 162.944l0 698.176c0 51.456 41.664 93.056 93.056 93.056l837.824 0c51.456 0 93.056-41.664 93.056-93.056L1023.936 302.528C1024 251.072 982.336 209.472 930.944 209.472L930.944 209.472zM750.016 621.696 547.456 621.696l0 202.432L476.544 824.128 476.544 621.696 274.112 621.696 274.112 551.744l202.432 0L476.544 349.184l70.976 0 0 202.432 202.432 0L749.952 621.696 750.016 621.696z"/></svg></button>
+      <button class="btn btn-new">新建会话</button>
+    </div>
+    <div class="tree">
+      <div class="ws collapsed">
+        <div class="ws-head">
+          <svg class="ws-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>
+          <span class="ws-name">生图生视频测试</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+      </div>
+      <div class="ws">
+        <div class="ws-head active">
+          <svg class="ws-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>
+          <span class="ws-name">Agents趋势跟踪</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+        <ul class="sessions">
+          <li class="session active"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">询问不同模型应答差异原因</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">火山多模态输入测试</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">火山引擎生图测试</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">Token促销与模型身份</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">GrokBot联动</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">自进化与系统提示词</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">腾讯云证书自动续约</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">人物传记视频流水线设计</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">shadcn项目调研</span><span class="dots">⋯</span></li>
+          <li class="session"><svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span class="s-name">三家AI记忆系统对比</span><span class="dots">⋯</span></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot">
+      <div class="tools"><button class="tool">连接</button><button class="tool">技能</button><button class="tool">记忆</button><button class="tool">模型</button></div>
+      <button class="bench"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>我的工作台</button>
+    </div>
+  </aside>
+
+  <!-- ============ Center chat ============ -->
+  <main class="main">
+    <header class="main-bar">
+      <div class="title-wrap">
+        <svg class="menu-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h16"/></svg>
+        <span class="title">询问不同模型应答差异原因</span>
+      </div>
+      <button class="tab">日志</button>
+      <div class="robot-slot" id="slotMain"></div>
+    </header>
+
+    <div class="chat">
+      <div class="turn">
+        <div class="user"><div class="bubble">你好，我与你对话的时候，每次对话换不同的模型，为什么有的一上来就调工具，有的直接回答问题呢？</div></div>
+        <div class="meta">17:08:28</div>
+      </div>
+      <div class="turn">
+        <div class="assistant">
+          <div class="avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4"/><circle cx="12" cy="3" r="1.3" fill="currentColor"/></svg></div>
+          <div class="body">
+            <p>这是个好问题。差异主要来自三层原因，而不只是"模型不一样"本身：</p>
+            <p><strong>1. 外壳（系统提示）不同</strong><br>同一个对话平台，切模型时包裹模型的系统提示词往往也不同。像我现在就被包在一个"编码助手"外壳里——提示里写明了"需要时用工具"，所以我上一来会先看目录。</p>
+            <ul><li>有的模型拿到的是很薄的聊天提示，自然倾向于直接回答。</li></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dock">
+      <div class="composer">
+        <div class="kinds"><button class="kind on">Chat</button><button class="kind">图</button><button class="kind">语音</button><button class="kind">视频</button></div>
+        <textarea class="input" rows="2" placeholder="向CSQ-Agent发送消息…"></textarea>
+        <div class="actions">
+          <button class="ic" title="上传图片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 17 5-5 3.5 3.5L16 12l4 5"/></svg></button>
+          <button class="ic" title="上传视频"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg></button>
+          <button class="ic" title="上传音频"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8a5 5 0 0 1 0 8"/></svg></button>
+          <button class="ic" title="语音输入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+          <div class="spacer"></div>
+          <button class="model">deepseek-v3 ▾</button>
+          <button class="send" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </main>
+  </div><!-- /workspace -->
+
+  <!-- ============ Right explain pane ============ -->
+  <aside class="explain">
+    <header class="ex-bar">
+      <div class="robot-slot" id="slotEx"><button class="robot" id="robot" title="呼出解释栏" aria-label="呼出解释栏"><svg viewBox="0 0 1069 1024" fill="#fff" aria-hidden="true"><path d="M534.755556 1001.244444C302.262044 1001.244444 113.777778 822.954667 113.777778 603.022222S302.262044 204.8 534.755556 204.8 955.733333 383.089778 955.733333 603.022222 767.249067 1001.244444 534.755556 1001.244444zM728.177778 455.111111c-202.774756-29.855289-364.088889 0-364.088889 0-71.361422 14.108444-113.777778 73.705244-113.777778 136.533333v22.755556c0 62.850844 50.949689 136.533333 113.777778 136.533333 0 0 168.823467 30.378667 364.088889 0 70.815289-12.014933 113.777778-73.682489 113.777778-136.533333v-22.755556c0-62.828089-44.782933-119.671467-113.777778-136.533333z"/><path d="M276.115911 52.4288l39.412622-22.755556 136.533334 236.475734-39.412623 22.778311-136.533333-236.498489z"/><path d="M307.2 79.644444m-79.644444 0a79.644444 79.644444 0 1 0 159.288888 0 79.644444 79.644444 0 1 0-159.288888 0Z"/><path d="M815.536356 54.135467l-39.913245-23.278934-138.262755 241.891556 39.913244 23.278933 138.262756-241.891555z"/><path d="M703.2832 81.419378a81.419378 80.713956 90 1 0 161.427911 0 81.419378 80.713956 90 1 0-161.427911 0Z"/><path d="M113.777778 455.111111s-108.384711 6.257778-113.777778 113.777778v91.022222s17.954133 106.723556 113.777778 91.022222c0 0-71.293156-139.628089 0-295.822222zM955.733333 455.111111s108.384711 6.235022 113.777778 113.231645v90.589866s-17.954133 106.222933-113.777778 90.589867c0 0 71.293156-138.968178 0-294.411378zM409.6 568.888889a45.511111 45.511111 0 1 1 0.022756 90.999467A45.511111 45.511111 0 0 1 409.6 568.888889z"/><path d="M682.666667 614.4m-68.266667 0a68.266667 68.266667 0 1 0 136.533333 0 68.266667 68.266667 0 1 0-136.533333 0Z"/></svg></button></div>
+      <button class="ex-collapse" title="收起解释栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+    </header>
+
+    <div class="ex-body">
+      <div class="state" data-state="empty">
+        <div class="dropzone">
+          <div class="dz-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v10"/><path d="M8 7l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></div>
+          <div class="dz-title">把对话里的文字拖到这里</div>
+          <div class="dz-sub">选中一段内容，或直接粘贴，我在这里给你简短解释，不打断主会话。</div>
+          <div class="dz-chips"><span class="dz-chip"><b>拖入</b> 选中文字</span><span class="dz-chip"><b>粘贴</b> 一段代码</span><span class="dz-chip"><b>追问</b> 下方输入</span></div>
+        </div>
+      </div>
+
+      <div class="state on" data-state="answer">
+        <div class="quote">
+          <span class="q-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M8 7H5a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h3v3H5"/><path d="M18 7h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h3v3h-3"/></svg>引用原文</span>
+          <div class="q-text">"有的模型一上来就调工具，有的直接回答"</div>
+        </div>
+        <div class="answer">
+          <h4>为什么行为不一样</h4>
+          <p class="lead">同一句提问，模型表现不同，主要不是"脑子不同"，而是它拿到的<code>外壳</code>不同。</p>
+          <ol>
+            <li><b>系统提示不同。</b>有的外壳明确要求"先查资料再用工具"，于是它一上来就调工具。</li>
+            <li><b>工具清单不同。</b>没有工具可用的模型只能直接回答。</li>
+            <li><b>训练倾向不同。</b>有的模型默认更"谨慎"，倾向先取证。</li>
+          </ol>
+          <div class="callaout">一句话：<b>先看它被包在什么外壳里</b>，再看模型本身，差异就说得通了。</div>
+          <div class="ex-answer-actions"><button class="ex-act">重新解释</button><button class="ex-act">复制</button></div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="ex-composer">
+      <div class="ex-input-card">
+        <textarea rows="2" placeholder="简答"></textarea>
+        <div class="ex-actions">
+          <button class="ex-model">深度求索（生文） ▾</button>
+          <div class="ex-spacer"></div>
+          <button class="ex-send" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+        </div>
+      </div>
+    </footer>
+  </aside>
+</div>
+
+<div class="switcher">
+  <span class="lbl">解释栏</span>
+  <button data-go="answer" class="on">解释内容</button>
+  <button data-go="empty">空状态</button>
+</div>
+
+<script>
+  document.querySelectorAll('.switcher button').forEach(function(b){
+    b.onclick=function(){
+      document.querySelectorAll('.switcher button').forEach(function(x){x.classList.toggle('on',x===b)});
+      document.querySelectorAll('.state').forEach(function(s){ s.classList.toggle('on', s.dataset.state===b.dataset.go); });
+    };
+  });
+
+  // ---- Explain pane: real width + expand/collapse with one robot icon ----
+  var explain = document.querySelector('.explain');
+  var robot = document.getElementById('robot');
+  var slotMain = document.getElementById('slotMain');
+  var slotEx = document.getElementById('slotEx');
+  var chevron = document.querySelector('.ex-collapse');
+  var open = true;
+
+  // Same formula as the real app (explainPane.ts layout()).
+  function exWidth(){
+    var sideW = document.querySelector('.sidebar').getBoundingClientRect().width;
+    var avail = Math.max(0, window.innerWidth - sideW);
+    var w = Math.min(520, Math.max(360, Math.round(avail * 0.38)));
+    if (avail - w < 240) w = Math.max(280, avail - 240);
+    return Math.round(w * 0.8);
+  }
+  function apply(){
+    if (open){
+      explain.classList.remove('is-collapsed');
+      explain.style.width = exWidth() + 'px';
+      explain.style.marginLeft = '14px';
+      slotEx.appendChild(robot);
+      robot.title = '解释器';
+      robot.setAttribute('aria-label', '解释器');
+    } else {
+      explain.classList.add('is-collapsed');
+      explain.style.width = '0px';
+      explain.style.marginLeft = '0px';
+      slotMain.appendChild(robot);
+      robot.title = '呼出解释栏';
+      robot.setAttribute('aria-label', '呼出解释栏');
+    }
+  }
+  robot.onclick = function(){ open = !open; apply(); };
+  if (chevron) chevron.onclick = function(){ open = false; apply(); };
+  window.addEventListener('resize', function(){ if (open) explain.style.width = exWidth() + 'px'; });
+  apply();
+</script>
+</body>
+</html>

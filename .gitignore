@@ -13,3 +13,7 @@ dist/
 **/.tmp-*.mjs
 packages/core/pnpm-lock.yaml
 packages/core/pnpm-workspace.yaml
+
+# Local tooling config and the standalone portfolio deliverable
+.qwen/
+agentintroduce/

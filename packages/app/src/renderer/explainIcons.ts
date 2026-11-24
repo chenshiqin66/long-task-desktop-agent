@@ -72,10 +72,14 @@ export function paintExplainIcons(root: ParentNode = document): void {
   const title = root.querySelector(".explain-title");
   if (title instanceof HTMLElement) paintExplainTitle(title);
   const collapse = root.querySelector("#explain-collapse");
-  if (collapse instanceof HTMLButtonElement) paintIconButton(collapse, "slide-right", "收起");
+  if (collapse instanceof HTMLButtonElement) paintIconButton(collapse, "chevron", "收起");
 }
 
-function paintIconButton(btn: HTMLButtonElement, kind: "robot" | "slide-right", label: string): void {
+function paintIconButton(
+  btn: HTMLButtonElement,
+  kind: "robot" | "slide-right" | "chevron",
+  label: string,
+): void {
   btn.setAttribute("aria-label", label);
   if (btn.querySelector(`svg[data-kind="${kind}"]`) && btn.childElementCount === 1) return;
   btn.replaceChildren(iconSvg(kind));
@@ -89,11 +93,25 @@ function paintExplainTitle(el: HTMLElement): void {
   el.replaceChildren(iconSvg("robot"), label);
 }
 
-function iconSvg(kind: "robot" | "slide-right"): SVGSVGElement {
+function iconSvg(kind: "robot" | "slide-right" | "chevron"): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", kind === "robot" ? ROBOT_ICON_VIEWBOX : SLIDE_RIGHT_ICON_VIEWBOX);
   svg.setAttribute("aria-hidden", "true");
   svg.dataset.kind = kind;
+
+  if (kind === "chevron") {
+    svg.setAttribute("viewBox", "0 0 24 24");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M9 6l6 6-6 6");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "2");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.append(path);
+    return svg;
+  }
+
+  svg.setAttribute("viewBox", kind === "robot" ? ROBOT_ICON_VIEWBOX : SLIDE_RIGHT_ICON_VIEWBOX);
   const paths = kind === "robot" ? ROBOT_ICON_PATHS : SLIDE_RIGHT_ICON_PATHS;
   for (const entry of paths) {
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");

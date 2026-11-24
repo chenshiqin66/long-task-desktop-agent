@@ -9,6 +9,7 @@
   <body>
     <div class="atmosphere" aria-hidden="true"></div>
     <div id="app">
+      <div id="workspace">
       <aside id="sidebar">
         <nav class="app-menu" aria-label="应用菜单">
           <button type="button" data-app-menu="0">视图</button>
@@ -18,7 +19,7 @@
 
         <nav class="sidebar-actions" aria-label="会话操作">
           <button type="button" id="btn-workspace" class="btn btn-ghost" aria-label="增加工作区" title="增加工作区">
-            <svg class="workspace-add-icon" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M434.902576 435.039187l0-7.656377c0-84.99479 0-214.688617 0-299.704896 0-34.795481 24.739451-61.302181 59.513442-61.912072 41.624003-0.741897-6.065136-0.720408 35.602869-0.021489 34.164101 0.566912 59.032488 27.182083 59.07649 61.739133 0.086981 84.797291 0.044002 214.274178 0.044002 299.07147l0 8.486278 8.289804 0c84.164888 0 213.008348 0 297.173237 0 38.395472 0 63.963801 25.546839 64.051805 64.029292 0.086981 38.482453 0.086981-12.391215 0 26.113751-0.088004 38.526455-25.65531 64.028269-64.007803 64.028269L597.473185 589.212546l-8.02886 0c-0.130983 2.182712-0.304945 4.01443-0.304945 5.824659-0.044002 85.234243 0.042979 215.125569-0.044002 300.337299 0 30.345122-17.671475 54.342676-45.245484 61.301158-5.454222 1.375324-11.257391 1.963725-16.929578 1.985214-39.530318 0.174985 10.253528 0.130983-29.275767 0.086981-36.650735-0.042979-62.698994-26.004257-62.741973-62.698994-0.042979-85.429695 0-215.538985 0-300.968679l0-5.868661-7.67889 0c-84.99479 0-214.710107 0-299.703873-0.021489-35.733852 0-62.087057-26.200732-62.175061-61.978587-0.086981-39.987736-0.086981 9.402137 0-30.563086 0.086981-35.384905 26.440186-61.58666 61.956074-61.58666 84.775802-0.044002 214.274178-0.021489 299.04998-0.021489C428.881442 435.039187 431.412079 435.039187 434.902576 435.039187L434.902576 435.039187zM434.902576 435.039187" fill="currentColor"/></svg>
+            <svg class="workspace-add-icon" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M930.944 209.472 544.256 209.472 512 162.944C478.976 101.568 470.336 69.824 418.944 69.824L93.056 69.824C41.664 69.824 0 111.488 0 162.944l0 698.176c0 51.456 41.664 93.056 93.056 93.056l837.824 0c51.456 0 93.056-41.664 93.056-93.056L1023.936 302.528C1024 251.072 982.336 209.472 930.944 209.472L930.944 209.472zM750.016 621.696 547.456 621.696l0 202.432L476.544 824.128 476.544 621.696 274.112 621.696 274.112 551.744l202.432 0L476.544 349.184l70.976 0 0 202.432 202.432 0L749.952 621.696 750.016 621.696z" fill="currentColor"/></svg>
           </button>
           <button type="button" id="btn-new" class="btn btn-primary" disabled>新建会话</button>
         </nav>
@@ -35,7 +36,7 @@
             <button type="button" id="btn-config" class="btn btn-ghost" aria-pressed="false" aria-label="配置模型">模型</button>
           </div>
           <button type="button" id="btn-workbench" class="btn btn-ghost" aria-pressed="false" aria-expanded="false" aria-controls="workbench-sheet">
-            <span class="workbench-label"><svg class="workbench-icon" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M837.12 112.64H161.28c-43.52 0-76.8 35.84-76.8 76.8v468.48c0 43.52 35.84 76.8 76.8 76.8h276.48v156.16H215.04c-15.36 0-25.6 12.8-25.6 25.6 0 15.36 12.8 25.6 25.6 25.6h570.88c15.36 0 25.6-12.8 25.6-25.6 0-15.36-12.8-25.6-25.6-25.6h-243.2V734.72h294.4c43.52 0 76.8-35.84 76.8-76.8V189.44c2.56-43.52-33.28-76.8-76.8-76.8z m25.6 545.28c0 15.36-12.8 25.6-25.6 25.6H161.28c-15.36 0-25.6-12.8-25.6-25.6V189.44c0-15.36 12.8-25.6 25.6-25.6h675.84c15.36 0 25.6 12.8 25.6 25.6v468.48z m0 0" fill="currentColor"/></svg>我的工作台</span>
+            <span class="workbench-label"><svg class="workbench-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>我的工作台</span>
           </button>
         </div>
       </aside>
@@ -135,7 +136,12 @@
               <button type="button" id="mcp-add" class="skills-add btn-add-icon" aria-label="添加"></button>
             </header>
             <p id="mcp-note" class="skills-note" hidden></p>
-            <form id="mcp-form" class="mcp-form" hidden>
+            <dialog id="mcp-modal" class="models-modal" aria-labelledby="mcp-modal-title">
+              <form id="mcp-form" class="models-form">
+                <div class="models-modal-head">
+                  <h2 id="mcp-modal-title" class="models-modal-title">添加连接</h2>
+                  <button type="button" id="mcp-modal-close" class="models-modal-close" aria-label="关闭">×</button>
+                </div>
               <label class="field">显示名
                 <input id="mcp-label" autocomplete="off" />
               </label>
@@ -177,11 +183,13 @@
               </div>
               <label class="mcp-check"><input id="mcp-enabled" type="checkbox" checked /> 启用</label>
               <label class="mcp-check"><input id="mcp-auto" type="checkbox" /> 自动放行这个 server 的工具。写文件、命令和其他 server 仍要确认。只读查询适合打开。</label>
+              <p id="mcp-form-error" class="skills-note" hidden></p>
               <div class="config-actions">
                 <button type="button" id="mcp-cancel" class="btn btn-ghost">取消</button>
                 <button type="submit" class="btn btn-accent">保存</button>
               </div>
-            </form>
+              </form>
+            </dialog>
             <div id="mcp-list" class="mcp-list"></div>
           </section>
 
@@ -294,6 +302,7 @@
           </footer>
         </div>
       </main>
+      </div><!-- /workspace -->
       <aside id="explain-pane" hidden aria-label="答案解释">
         <header class="explain-bar">
           <div class="explain-head">
@@ -529,6 +538,7 @@
     </dialog>
 
     <div id="workbench-sheet" class="workbench-sheet" hidden role="dialog" aria-modal="true" aria-label="我的工作台">
+      <div class="workbench-card">
       <aside class="workbench-menu">
         <nav id="workbench-nav" class="workbench-nav" aria-label="工作台菜单">
           <button type="button" id="workbench-folders" data-page="folders" aria-current="page">常用文件夹</button>
@@ -580,6 +590,7 @@
           <div id="browser-explain-slot" class="browser-explain-slot"></div>
         </div>
       </section>
+      </div><!-- /workbench-card -->
       <button type="button" id="workbench-close" class="workbench-x" aria-label="关闭工作台">
         <svg viewBox="0 0 10 10" aria-hidden="true">
           <path d="M1.15 1.15 L8.85 8.85 M8.85 1.15 L1.15 8.85" fill="none" stroke="currentColor" stroke-width="1.05" />
