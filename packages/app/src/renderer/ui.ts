@@ -921,8 +921,8 @@ export function renderEmptyState(container: HTMLElement, kind: "no-workspace" | 
     box.innerHTML = `<p class="empty-lead">开始之前，请选择一个工作区。</p>`;
   } else {
     box.innerHTML = `
-      <h2 class="empty-title">提出好问题，才是真智慧</h2>
-      <p class="empty-hint">人迷茫，不是因为不知道答案，而是不知道问题。</p>`;
+      <h1 class="empty-title">提出好问题，才是真智慧</h1>
+      <p class="empty-hint">人迷茫，不是因为没有答案，而是因为找不到问题。</p>`;
   }
   container.appendChild(box);
 }

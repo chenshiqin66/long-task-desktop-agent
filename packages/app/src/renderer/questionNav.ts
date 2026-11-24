@@ -1,9 +1,8 @@
-/** Main-conversation question rail. Collapsed ticks, titles on hover. */
+/** Main-conversation question rail. Collapsed ticks. */
 
 import { refreshStickyTurns } from "./ui.js";
 
 const TITLE_CHARS = 12;
-const TIP_CHARS = 80;
 
 export function questionTitle(text: string, limit = TITLE_CHARS): { label: string; full: string } {
   const full = text.replace(/\s+/g, " ").trim();
@@ -17,13 +16,6 @@ function graphemes(text: string): string[] {
     return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((part) => part.segment);
   }
   return Array.from(text);
-}
-
-function tip(full: string, label: string): string {
-  if (!full || full === label) return "";
-  const chars = graphemes(full);
-  if (chars.length <= TIP_CHARS) return full;
-  return `${chars.slice(0, TIP_CHARS).join("")}…`;
 }
 
 type Item = { el: HTMLElement; btn: HTMLButtonElement; label: string; fingerprint: string };
@@ -226,8 +218,6 @@ export function mountQuestionNav(nav: HTMLElement, messages: HTMLElement): void 
       btn.tabIndex = -1;
       btn.setAttribute("role", "listitem");
       btn.setAttribute("aria-label", row.title.full);
-      const hover = tip(row.title.full, row.title.label);
-      if (hover) btn.title = hover;
       const label = document.createElement("span");
       label.className = "question-nav-label";
       label.setAttribute("aria-hidden", "true");

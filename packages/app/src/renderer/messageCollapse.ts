@@ -1,6 +1,7 @@
-/** Long transcript bubbles fold to five typography lines until the user clicks them. */
+/** User bubbles fold past 5 lines; assistant replies past 30, until clicked. */
 
 export const MESSAGE_COLLAPSE_LINES = 5;
+export const ASSISTANT_COLLAPSE_LINES = 30;
 
 export function collapsedMaxHeight(opts: {
   lineHeight: number;
@@ -54,7 +55,7 @@ function selectionIn(body: HTMLElement): boolean {
   return body.contains(range.commonAncestorContainer);
 }
 
-function measureMaxHeight(body: HTMLElement): number | null {
+function measureMaxHeight(body: HTMLElement, lines: number): number | null {
   const style = getComputedStyle(body);
   const line = parseFloat(style.lineHeight);
   if (!Number.isFinite(line) || line <= 0) return null;
@@ -66,6 +67,7 @@ function measureMaxHeight(body: HTMLElement): number | null {
     paddingY: Number.isFinite(pad) ? pad : 0,
     borderY: Number.isFinite(border) ? border : 0,
     boxSizing,
+    lines,
   });
 }
 
@@ -75,12 +77,9 @@ const fitTimers = new WeakMap<HTMLElement, number>();
 const mutateAt = new WeakMap<HTMLElement, number>();
 const pendingFrame = new WeakSet<HTMLElement>();
 
-function syncChrome(body: HTMLElement, long: boolean, expanded: boolean): void {
-  if (!long) {
-    body.removeAttribute("title");
-    return;
-  }
-  body.title = expanded ? "点击收起" : "点击展开";
+function syncChrome(body: HTMLElement, _long: boolean, _expanded: boolean): void {
+  // No hover toast on collapsible bodies.
+  body.removeAttribute("title");
 }
 
 export function fitMessageCollapse(body: HTMLElement): void {
@@ -93,7 +92,12 @@ export function fitMessageCollapse(body: HTMLElement): void {
     scheduleMessageCollapse(target, 200);
     return;
   }
-  const max = measureMaxHeight(target);
+  const msg = target.closest(".msg");
+  const lines =
+    msg instanceof HTMLElement && msg.classList.contains("assistant")
+      ? ASSISTANT_COLLAPSE_LINES
+      : MESSAGE_COLLAPSE_LINES;
+  const max = measureMaxHeight(target, lines);
   if (max == null) return;
   if (target.clientHeight === 0 && target.scrollHeight === 0) {
     // Detached history holders have no layout yet; ResizeObserver will fit them once mounted.

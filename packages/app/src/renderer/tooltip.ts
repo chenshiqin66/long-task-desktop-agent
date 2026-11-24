@@ -73,6 +73,8 @@ export function installTooltips(): void {
     tip.hidden = true;
   };
   const show = (el: HTMLElement) => {
+    // The chat composer deliberately has no hover toast.
+    if (el.closest("#composer")) return;
     const text = el.getAttribute(TIP);
     if (!text) return;
     anchor = el;

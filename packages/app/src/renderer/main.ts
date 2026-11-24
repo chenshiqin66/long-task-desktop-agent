@@ -1996,7 +1996,6 @@ function updateChrome(): void {
   const titleLabel = mainTitle.querySelector(".view-tab-label");
   if (titleLabel) titleLabel.textContent = sessionTitle;
   else mainTitle.textContent = sessionTitle;
-  mainTitle.title = sessionTitle;
   syncHomeBar();
   const run = pageRun();
   const running = Boolean(run?.gate.isRunning);
@@ -2022,8 +2021,6 @@ function updateChrome(): void {
     sendNoun: COMPOSER_SEND_NOUN[activeComposerKind],
   });
   btnNew.disabled = !hasWorkspace || creatingSession;
-  // Sessions are created in the active workspace; say which one, so 新建 never lands somewhere unexpected.
-  btnNew.title = activeWorkspace ? `在「${workspaceLabel(activeWorkspace)}」新建会话` : "请先选择工作区";
   // Still disabled while stopping; only the fold/placeholder opens so it feels like wrapping up.
   inputEl.disabled = creatingSession || (running && !asking && !wakeHere);
   composerEl.classList.remove("is-locked");
@@ -2544,7 +2541,6 @@ function mountWorkspaceTree(path: string, open: boolean): HTMLUListElement {
   labelText.className = "workspace-label";
   labelText.textContent = label;
   pathBtn.append(labelText);
-  pathBtn.title = `工作区：${path}`;
   pathBtn.setAttribute("aria-expanded", open ? "true" : "false");
   pathBtn.setAttribute("aria-label", open ? `折叠 ${label}` : `展开 ${label}`);
   pathBtn.onclick = (ev) => {

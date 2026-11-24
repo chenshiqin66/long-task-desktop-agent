@@ -806,6 +806,8 @@ export function attachModelsLibrary(
       select.disabled = false;
       emptyBtn.hidden = true;
     }
+    // A single candidate reads as plain text, not a one-item dropdown.
+    select.classList.toggle("is-static", models.length === 1);
     painting = false;
     fitComposerModelSelect(select);
     fitComposerModelEmpty(emptyBtn);
