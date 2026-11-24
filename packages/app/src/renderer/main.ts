@@ -797,6 +797,22 @@ function recordString(row: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+/** Colorize a JSON string: keys teal, string values green, numbers amber. */
+function highlightJsonHtml(json: string): string {
+  const escaped = json.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return escaped.replace(
+    /("(?:[^"\\]|\\.)*")(\s*:)?|\b(\d+)\b/g,
+    (_m, str: string | undefined, colon: string | undefined, num: string | undefined) => {
+      if (str) {
+        return colon
+          ? `<span class="json-key">${str}</span>${colon}`
+          : `<span class="json-str">${str}</span>`;
+      }
+      return `<span class="json-num">${num}</span>`;
+    },
+  );
+}
+
 /** Pretty-print one message; paint user role + content lines in accent green. */
 function formatMessageStoreHtml(msg: unknown): string {
   let json: string;
@@ -806,15 +822,15 @@ function formatMessageStoreHtml(msg: unknown): string {
     return escapeHtml(String(msg));
   }
   const isUser = isRecord(msg) && msg.role === "user";
-  if (!isUser) return escapeHtml(json);
+  if (!isUser) return highlightJsonHtml(json);
   return json
     .split("\n")
     .map((line) => {
       const t = line.trimStart();
       if (/^"role"\s*:\s*"user"\b/.test(t) || /^"content"\s*:\s*"/.test(t)) {
-        return `<span class="store-user-line">${escapeHtml(line)}</span>`;
+        return `<span class="store-user-line">${highlightJsonHtml(line)}</span>`;
       }
-      return escapeHtml(line);
+      return highlightJsonHtml(line);
     })
     .join("\n");
 }
@@ -822,8 +838,9 @@ function formatMessageStoreHtml(msg: unknown): string {
 function storeJsonPre(item: unknown, highlightUser = false): HTMLPreElement {
   const pre = document.createElement("pre");
   pre.className = "context-entry-body";
-  if (highlightUser) pre.innerHTML = formatMessageStoreHtml(item);
-  else pre.textContent = formatStorePayload(item);
+  pre.innerHTML = highlightUser
+    ? formatMessageStoreHtml(item)
+    : highlightJsonHtml(formatStorePayload(item));
   return pre;
 }
 
@@ -1029,7 +1046,7 @@ function paintStoreView(): void {
     return;
   }
   if (activeView === "meta") {
-    storeView.textContent = formatStorePayload(value);
+    storeView.innerHTML = highlightJsonHtml(formatStorePayload(value));
     storeHint.textContent = "会话元数据 · JSON";
     return;
   }

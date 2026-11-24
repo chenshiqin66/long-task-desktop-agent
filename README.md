@@ -300,6 +300,7 @@ npm run eval:memory           # 构建 core 和评测器，运行记忆提取的
 | [界面行为](docs/ui-behavior.md) | 每块界面的行为和文案 |
 | [生视频用法要点](docs/video-generation.md) | 四档 MiniMax H3 型号 × 五种素材模式：附件、画幅、UI 映射 |
 | [路线图](docs/roadmap.md) | 多会话同时执行的边界、有意不做的设计、已落地的改进、后续改进 |
+| [系统通读题单](docs/system-review-questions.md) | 22 道题覆盖进程边界、循环与上下文、授权、子代理与任务、生成管线、扩展与工程分层 |
 
 ## 还没做的
 
