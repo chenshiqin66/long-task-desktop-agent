@@ -269,7 +269,8 @@ function ensureRoot(): HTMLElement {
 
   backdrop.addEventListener("click", () => closeViewer());
   stage.addEventListener("click", (ev) => {
-    if (moved || zoom > 1) return;
+    // A drag is not a click; anything else outside the image closes the viewer.
+    if (moved) return;
     if (ev.target === stage) closeViewer();
   });
   btnClose.addEventListener("click", () => closeViewer());
