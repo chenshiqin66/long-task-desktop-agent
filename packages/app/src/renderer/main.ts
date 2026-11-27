@@ -66,6 +66,12 @@ import {
 import { mountExplainPane, type ExplainPane } from "./explainPane.js";
 import { paintSendButton } from "./sendButton.js";
 import { createThinkingHint, thinkingLabel } from "./thinkingHint.js";
+import {
+  MSG_RUN_STATUS_CLASS,
+  assistantRunPhase,
+  clearMessageRunStatus,
+  paintMessageRunStatus,
+} from "./runStatus.js";
 import { paintAddButtons } from "./addButton.js";
 import { installTooltips } from "./tooltip.js";
 import { attachComposerResize } from "./composerResize.js";
@@ -1281,7 +1287,9 @@ function setStoreTabLabel(name: StoreTab, text: string): void {
   const label = tab.querySelector(".view-tab-label");
   if (label) label.textContent = text;
   else tab.textContent = text;
-  tab.title = text;
+  // The tab already shows its name and count. A toast that repeats that text adds nothing.
+  tab.removeAttribute("title");
+  tab.removeAttribute("data-tip");
 }
 
 function resetStoreLabels(): void {
@@ -1920,10 +1928,75 @@ function setStatus(text: string, busy = false, source: "page" | "run" = "page"):
   syncFloatPad();
 }
 
+
+function runTranscriptHost(run: RunPaint): HTMLElement {
+  const fromEl = run.streamingEl?.closest(".messages");
+  if (fromEl instanceof HTMLElement) return fromEl;
+  const onScreen = currentSessionId === run.sessionId && sameWorkspace(viewWorkspace, run.workspace);
+  if (onScreen) return messagesEl;
+  return ensureSessionView(runKeyOf(run.workspace, run.sessionId)).holder;
+}
+
+function runStatusTurn(run: RunPaint, host: HTMLElement): HTMLElement | null {
+  const fromEl = run.streamingEl?.closest(".turn");
+  if (fromEl instanceof HTMLElement) return fromEl;
+  const turns = host.querySelectorAll(":scope > .turn");
+  const last = turns[turns.length - 1];
+  return last instanceof HTMLElement ? last : null;
+}
+
+function removeRunStatusMessage(msg: HTMLElement): void {
+  const time = msg.nextElementSibling;
+  if (time instanceof HTMLElement && time.classList.contains("msg-time")) time.remove();
+  msg.remove();
+}
+
+/** Paint or clear the short status to the right of the robot. Never leaves a blank bubble. */
+function syncAssistantRunStatus(run: RunPaint, host = runTranscriptHost(run), ending = false): void {
+  const hostMsg = run.streamingEl?.closest(".msg");
+  const placeholder = Boolean(
+    hostMsg?.classList.contains("is-generating-image") ||
+      hostMsg?.classList.contains("is-generating-video") ||
+      hostMsg?.classList.contains("is-generating-speech"),
+  );
+  const phase = assistantRunPhase({
+    running: run.gate.isRunning && !ending,
+    hasTools: run.toolStepNodes.size > 0,
+    hasStreamText: Boolean(run.streamBuffer.trim()),
+    stopping: run.stopRequested,
+    asking: Boolean(run.pendingAsk),
+    placeholder,
+  });
+  const turn = runStatusTurn(run, host);
+  const keep = run.streamingEl?.closest(".msg");
+  if (phase === "thinking" || phase === "tool") {
+    let body = run.streamingEl;
+    if (!body || body.closest(".msg")?.classList.contains("is-generating-image")
+      || body.closest(".msg")?.classList.contains("is-generating-video")
+      || body.closest(".msg")?.classList.contains("is-generating-speech")) {
+      const existing = turn?.querySelector(`:scope > .msg.assistant.${MSG_RUN_STATUS_CLASS} > .msg-body`);
+      body = existing instanceof HTMLElement ? existing : null;
+    }
+    if (!body) return;
+    paintMessageRunStatus(body, phase);
+    return;
+  }
+  const nodes = turn
+    ? turn.querySelectorAll(`:scope > .msg.assistant.${MSG_RUN_STATUS_CLASS}`)
+    : host.querySelectorAll(`.msg.assistant.${MSG_RUN_STATUS_CLASS}`);
+  for (const node of Array.from(nodes)) {
+    if (!(node instanceof HTMLElement)) continue;
+    const keepThis = keep instanceof HTMLElement && (node === keep || node.contains(keep));
+    const empty = clearMessageRunStatus(node);
+    if (empty && !keepThis) removeRunStatusMessage(node);
+  }
+}
+
 /** Remember the running session's phase. Paint it only while that page is open. */
 function showRunStatus(text: string, run: RunPaint | null = drawing): void {
   if (!run) return;
   run.liveStatus = text;
+  syncAssistantRunStatus(run);
   if (!run.gate.isRunning || currentSessionId !== run.sessionId || !sameWorkspace(viewWorkspace, run.workspace)) {
     return;
   }
@@ -2195,6 +2268,7 @@ function updateChrome(): void {
       ? "回答上面的问题… Enter 发送，Shift+Enter 换行"
       : COMPOSER_PLACEHOLDER[activeComposerKind];
   }
+  if (run) syncAssistantRunStatus(run);
   if (running && run?.liveStatus && !stopping) {
     setStatus(run.liveStatus, true, "run");
   }
@@ -4491,6 +4565,7 @@ async function reask(
   try {
     appendUserQuestion(trimmed, preview, undefined, videoPreview, audioPreview);
     resetStreamTarget(appendMessage(messagesEl, "assistant", ""), next);
+    if (next.streamingEl) paintMessageRunStatus(next.streamingEl, "thinking");
     clearOpenTools(next);
     next.generatedImages = undefined;
     next.generatedVideos = undefined;
@@ -4612,6 +4687,7 @@ async function sendMessage(): Promise<void> {
     );
     if (!joiningWake) {
       resetStreamTarget(appendMessage(messagesEl, "assistant", ""), run);
+      if (run.streamingEl) paintMessageRunStatus(run.streamingEl, "thinking");
       clearOpenTools(run);
       run.generatedImages = undefined;
       run.generatedVideos = undefined;
@@ -5261,6 +5337,8 @@ function showGeneratingImagePlaceholder(run: RunPaint, host: HTMLElement): void 
   if (!run.streamingEl) {
     place(() => resetStreamTarget(appendMessage(host, "assistant", "正在生成图片"), run));
   } else {
+    const statusMsg = run.streamingEl.closest(".msg");
+    if (statusMsg instanceof HTMLElement) clearMessageRunStatus(statusMsg);
     run.streamingEl.textContent = "正在生成图片";
     delete run.streamingEl.dataset.rawMd;
   }
@@ -5278,6 +5356,8 @@ function showGeneratingVideoPlaceholder(run: RunPaint, host: HTMLElement): void 
   if (!run.streamingEl) {
     place(() => resetStreamTarget(appendMessage(host, "assistant", "正在生成视频"), run));
   } else {
+    const statusMsg = run.streamingEl.closest(".msg");
+    if (statusMsg instanceof HTMLElement) clearMessageRunStatus(statusMsg);
     run.streamingEl.textContent = "正在生成视频";
     delete run.streamingEl.dataset.rawMd;
   }
@@ -5295,6 +5375,8 @@ function showGeneratingSpeechPlaceholder(run: RunPaint, host: HTMLElement): void
   if (!run.streamingEl) {
     place(() => resetStreamTarget(appendMessage(host, "assistant", "正在合成语音"), run));
   } else {
+    const statusMsg = run.streamingEl.closest(".msg");
+    if (statusMsg instanceof HTMLElement) clearMessageRunStatus(statusMsg);
     run.streamingEl.textContent = "正在合成语音";
     delete run.streamingEl.dataset.rawMd;
   }
@@ -5498,6 +5580,7 @@ function applyTranscript(host: HTMLElement, e: {
   if (e.type === "text") {
     if (!run.streamingEl) place(() => resetStreamTarget(appendMessage(host, "assistant", "")));
     run.streamBuffer += e.delta ?? "";
+    if (run.streamBuffer.trim()) syncAssistantRunStatus(run, host);
     paintStreamRich(false);
     if (run.streamingEl && run.streamBuffer.trim()) ensureMessageTime(run.streamingEl);
     return true;
@@ -5528,6 +5611,7 @@ function applyTranscript(host: HTMLElement, e: {
       }
       if (!parentId) run.openToolDetail = body;
     });
+    syncAssistantRunStatus(run, host);
     return true;
   }
   if (e.type === "tool_result") {
@@ -5587,6 +5671,7 @@ function applyTranscript(host: HTMLElement, e: {
     } else {
       place(() => appendMessage(host, "error", errMsg));
     }
+    syncAssistantRunStatus(run, host, true);
     return true;
   }
   return false;
@@ -5612,6 +5697,11 @@ function finishRun(run: RunPaint, reason: string, onScreen: boolean): void {
   } else if (reason === "completed") {
     void fillGeneratedOnDone(run, host);
   }
+  if (reason === "cancelled" && run.streamingEl) {
+    run.streamingEl.closest(".msg")?.classList.remove(MSG_RUN_STATUS_CLASS);
+    run.streamingEl.querySelectorAll(".msg-run-status").forEach((node) => node.remove());
+  }
+  syncAssistantRunStatus(run, host, true);
   resetStreamTarget(null, run);
   run.prompt = null;
   run.pendingAsk = null;

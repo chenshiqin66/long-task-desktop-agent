@@ -5,7 +5,7 @@ export const COMPOSER_KINDS = ["text", "image", "tts", "video"] as const;
 export type ComposerKind = (typeof COMPOSER_KINDS)[number];
 
 export const COMPOSER_KIND_LABELS: Record<ComposerKind, string> = {
-  text: "Chat",
+  text: "Do-it",
   image: "生图",
   tts: "合成语音",
   video: "生视频",

@@ -2801,13 +2801,10 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 /* One robot avatar at the top-left of each answer block, beside the tool pill.
-   A timestamp (.msg-time) may sit between the user bubble and the answer. */
-#main .turn > .msg.user + .msg.assistant::before,
-#main .turn > .msg.user + .msg-time + .msg.assistant::before,
-#main .turn > .msg.assistant:first-child::before,
-#main .turn > .msg.user + .tool-group::after,
-#main .turn > .msg.user + .msg-time + .tool-group::after,
-#main .turn > .tool-group:first-child::after {
+   Timestamps and hidden empty assistant bubbles (left behind when tools start
+   first) may sit between the user bubble and the first visible reply; skip them. */
+#main .turn > .msg.assistant:not(.is-blank)::before,
+#main .turn > .tool-group::after {
   content: "";
   position: absolute;
   left: -45px;
@@ -2820,6 +2817,80 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
     #e7f4f0
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230d9488' stroke-width='1.8' stroke-linejoin='round'%3E%3Crect x='4' y='8' width='16' height='12' rx='3'/%3E%3Cpath d='M12 4v4'/%3E%3Ccircle cx='12' cy='3' r='1.3' fill='%230d9488' stroke='none'/%3E%3C/svg%3E")
       center / 17px 17px no-repeat;
+}
+
+/* Only the first visible reply in the turn keeps the avatar. */
+#main .turn > .msg.assistant:not(.is-blank) ~ .msg.assistant:not(.is-blank)::before,
+#main .turn > .msg.assistant:not(.is-blank) ~ .tool-group::after,
+#main .turn > .tool-group ~ .msg.assistant:not(.is-blank)::before,
+#main .turn > .tool-group ~ .tool-group::after {
+  content: none;
+  display: none;
+}
+
+/* Waiting status sits in the first visible reply, to the right of the robot, not as an empty bubble. */
+.msg.assistant.is-run-status {
+  min-height: 30px;
+}
+
+.msg.assistant.is-run-status .msg-body {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0;
+}
+
+.msg-run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-muted);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.msg-run-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 1em;
+}
+
+.msg-run-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.45;
+  animation: msg-run-dot 1s ease-in-out infinite;
+}
+
+.msg-run-dots span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.msg-run-dots span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes msg-run-dot {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-run-dots span {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 
 /* User bubble uses the preview's teal gradient (both center chat and explain pane). */
@@ -3279,7 +3350,79 @@ body:has(.workbench-sheet.is-menu-hidden:not([hidden]) .workbench-stage[data-pag
 }
 
 .msg.assistant .msg-body.is-collapsed {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 0.9em), transparent);
+  position: relative;
+}
+
+/* Fade the last 2–3 lines so the fold is obvious. The toggle sits outside the clamped body. */
+.msg.assistant .msg-body.is-collapsed::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3.8em;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    color-mix(in srgb, #fff 72%, var(--paper-elev)) 62%,
+    color-mix(in srgb, #fff 94%, var(--paper-elev)) 100%
+  );
+}
+
+.msg-collapse-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--paper-elev));
+  color: var(--accent-ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.msg-collapse-toggle:hover,
+.msg-collapse-toggle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 20%, var(--paper-elev));
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+}
+
+.msg-collapse-toggle::before {
+  content: "";
+  width: 0.42em;
+  height: 0.42em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-0.1em) rotate(45deg);
+}
+
+.msg-collapse-toggle[aria-expanded="true"] {
+  margin-top: 14px;
+  background: transparent;
+  border-color: var(--line);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.msg-collapse-toggle[aria-expanded="true"]::before {
+  transform: translateY(0.12em) rotate(-135deg);
+}
+
+/* Keep the clock below the toggle, not tucked into the folded last line. */
+.msg.assistant:has(.msg-collapse-toggle) + .msg-time {
+  margin-top: 4px;
+  clear: both;
 }
 
 .msg.assistant .msg-body .md-p {

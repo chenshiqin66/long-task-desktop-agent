@@ -38,6 +38,7 @@ describe("composerKind", () => {
   it("parses and labels composer categories", () => {
     expect(parseComposerKind(undefined)).toBe("text");
     expect(parseComposerKind("video")).toBe("video");
+    expect(COMPOSER_KIND_LABELS.text).toBe("Do-it");
     expect(COMPOSER_KIND_LABELS.video).toBe("生视频");
     expect(COMPOSER_SEND_LABELS.image).toBe("生成图片");
   });

@@ -11,6 +11,13 @@
 
 const TIP = "data-tip";
 
+/** Anchors that must not raise the shared dark-pill toast. */
+export const TOOLTIP_SUPPRESS = ["#composer", ".store-tab"] as const;
+
+export function shouldSuppressTooltip(el: { closest(selector: string): unknown }): boolean {
+  return TOOLTIP_SUPPRESS.some((sel) => Boolean(el.closest(sel)));
+}
+
 function mirror(el: HTMLElement): void {
   if (!el.hasAttribute("title")) return;
   const value = el.getAttribute("title") ?? "";
@@ -136,8 +143,7 @@ export function installTooltips(): void {
     tip.hidden = true;
   };
   const show = (el: HTMLElement) => {
-    // The chat composer deliberately has no hover toast.
-    if (el.closest("#composer")) return;
+    if (shouldSuppressTooltip(el)) return;
     const text = el.getAttribute(TIP);
     if (!text) return;
     anchor = el;

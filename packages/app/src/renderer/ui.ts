@@ -2,6 +2,7 @@ import { formatMarkdown, linkifyPlainText } from "./markdown.js";
 import { errorSummary } from "./errorSummary.js";
 import { shouldReleaseStuck } from "./stickyTurns.js";
 import { bindMessageCollapse, refreshMessageCollapse } from "./messageCollapse.js";
+import { MSG_RUN_STATUS_CLASS } from "./runStatus.js";
 
 export { escapeHtml, formatMarkdown, looksOpenable, linkifyPlainText } from "./markdown.js";
 
@@ -616,6 +617,8 @@ function isAskToolTitle(title: string): boolean {
 function isBlankGap(node: Element | null): boolean {
   if (!(node instanceof HTMLElement)) return false;
   if (node.classList.contains("tool-step") || node.classList.contains("tool-group")) return false;
+  // A waiting status row holds the robot avatar; never fold it away as a blank gap.
+  if (node.classList.contains(MSG_RUN_STATUS_CLASS)) return false;
   if (node.querySelector("img")) return false;
   const body = node.querySelector(".msg-body");
   const text = (body ? body.textContent : node.textContent) ?? "";

@@ -2,6 +2,7 @@
 
 export const MESSAGE_COLLAPSE_LINES = 5;
 export const ASSISTANT_COLLAPSE_LINES = 30;
+export const MSG_COLLAPSE_TOGGLE_CLASS = "msg-collapse-toggle";
 
 export function collapsedMaxHeight(opts: {
   lineHeight: number;
@@ -17,6 +18,21 @@ export function collapsedMaxHeight(opts: {
 
 export function shouldCollapseMessage(contentHeight: number, maxHeight: number): boolean {
   return contentHeight > maxHeight + 1;
+}
+
+/** How many typography lines sit below the clamp. */
+export function hiddenCollapseLines(contentHeight: number, maxHeight: number, lineHeight: number): number {
+  if (!(lineHeight > 0)) return 0;
+  const overflow = contentHeight - maxHeight;
+  if (overflow <= 1) return 0;
+  return Math.max(1, Math.ceil(overflow / lineHeight));
+}
+
+export function messageCollapseToggleLabel(opts: { expanded: boolean; hiddenLines?: number }): string {
+  if (opts.expanded) return "收起";
+  const hidden = opts.hiddenLines ?? 0;
+  if (hidden > 0) return `展开全部（还有 ${hidden} 行）`;
+  return "还有更多，点击展开";
 }
 
 const INTERACTIVE = "a, button, video, audio, input, textarea, select, label, .msg-image-btn";
@@ -55,20 +71,23 @@ function selectionIn(body: HTMLElement): boolean {
   return body.contains(range.commonAncestorContainer);
 }
 
-function measureMaxHeight(body: HTMLElement, lines: number): number | null {
+function measureMaxHeight(body: HTMLElement, lines: number): { max: number; line: number } | null {
   const style = getComputedStyle(body);
   const line = parseFloat(style.lineHeight);
   if (!Number.isFinite(line) || line <= 0) return null;
   const pad = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
   const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
   const boxSizing = style.boxSizing === "content-box" ? "content-box" : "border-box";
-  return collapsedMaxHeight({
-    lineHeight: line,
-    paddingY: Number.isFinite(pad) ? pad : 0,
-    borderY: Number.isFinite(border) ? border : 0,
-    boxSizing,
-    lines,
-  });
+  return {
+    max: collapsedMaxHeight({
+      lineHeight: line,
+      paddingY: Number.isFinite(pad) ? pad : 0,
+      borderY: Number.isFinite(border) ? border : 0,
+      boxSizing,
+      lines,
+    }),
+    line,
+  };
 }
 
 const bound = new WeakSet<HTMLElement>();
@@ -77,9 +96,52 @@ const fitTimers = new WeakMap<HTMLElement, number>();
 const mutateAt = new WeakMap<HTMLElement, number>();
 const pendingFrame = new WeakSet<HTMLElement>();
 
-function syncChrome(body: HTMLElement, _long: boolean, _expanded: boolean): void {
+function toggleBody(body: HTMLElement): void {
+  const expanded = body.classList.toggle("is-expanded");
+  body.classList.toggle("is-collapsed", !expanded);
+  syncChrome(body, true, expanded);
+}
+
+function onToggleClick(ev: MouseEvent): void {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const btn = ev.currentTarget;
+  if (!(btn instanceof HTMLElement)) return;
+  const msg = btn.closest(".msg");
+  const body = msg instanceof HTMLElement ? msg.querySelector(":scope > .msg-body") : null;
+  if (!(body instanceof HTMLElement) || !body.classList.contains("is-long")) return;
+  if (isStuck(body)) return;
+  toggleBody(body);
+}
+
+function syncChrome(body: HTMLElement, long: boolean, expanded: boolean): void {
   // No hover toast on collapsible bodies.
   body.removeAttribute("title");
+  const msg = body.closest(".msg");
+  if (!(msg instanceof HTMLElement)) return;
+  const existing = msg.querySelector(`:scope > .${MSG_COLLAPSE_TOGGLE_CLASS}`);
+  // Only assistant replies get the visible fold control; user bubbles keep the five-line clamp.
+  if (!msg.classList.contains("assistant") || !long) {
+    existing?.remove();
+    return;
+  }
+  let btn: HTMLButtonElement;
+  if (existing instanceof HTMLButtonElement) {
+    btn = existing;
+  } else {
+    existing?.remove();
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = MSG_COLLAPSE_TOGGLE_CLASS;
+    btn.addEventListener("click", onToggleClick);
+    body.after(btn);
+  }
+  const hidden = Number(body.dataset.hiddenLines ?? "0");
+  btn.textContent = messageCollapseToggleLabel({
+    expanded,
+    hiddenLines: Number.isFinite(hidden) ? hidden : 0,
+  });
+  btn.setAttribute("aria-expanded", String(expanded));
 }
 
 export function fitMessageCollapse(body: HTMLElement): void {
@@ -97,8 +159,8 @@ export function fitMessageCollapse(body: HTMLElement): void {
     msg instanceof HTMLElement && msg.classList.contains("assistant")
       ? ASSISTANT_COLLAPSE_LINES
       : MESSAGE_COLLAPSE_LINES;
-  const max = measureMaxHeight(target, lines);
-  if (max == null) return;
+  const measured = measureMaxHeight(target, lines);
+  if (measured == null) return;
   if (target.clientHeight === 0 && target.scrollHeight === 0) {
     // Detached history holders have no layout yet; ResizeObserver will fit them once mounted.
     if (!target.isConnected) return;
@@ -110,9 +172,12 @@ export function fitMessageCollapse(body: HTMLElement): void {
     });
     return;
   }
-  target.style.setProperty("--msg-clamp-height", `${max}px`);
+  target.style.setProperty("--msg-clamp-height", `${measured.max}px`);
   const expanded = target.classList.contains("is-expanded");
-  const long = shouldCollapseMessage(target.scrollHeight, max);
+  const long = shouldCollapseMessage(target.scrollHeight, measured.max);
+  const hidden = long ? hiddenCollapseLines(target.scrollHeight, measured.max, measured.line) : 0;
+  if (hidden > 0) target.dataset.hiddenLines = String(hidden);
+  else delete target.dataset.hiddenLines;
   target.classList.toggle("is-long", long);
   target.classList.toggle("is-collapsed", long && !expanded);
   if (!long) target.classList.remove("is-expanded");
@@ -158,9 +223,7 @@ function onClick(ev: MouseEvent): void {
     interactive: false,
     selecting: selectionIn(body),
   })) return;
-  const expanded = body.classList.toggle("is-expanded");
-  body.classList.toggle("is-collapsed", !expanded);
-  syncChrome(body, true, expanded);
+  toggleBody(body);
 }
 
 function onPointerDown(ev: PointerEvent): void {
@@ -202,7 +265,7 @@ function observeCollapse(target: HTMLElement): void {
   mutationObserver.observe(target, { childList: true, subtree: true, characterData: true });
 }
 
-/** Watch a user/assistant bubble and fold it to five lines when the text is long. */
+/** Watch a user/assistant bubble and fold it when the text is long. */
 export function bindMessageCollapse(body: HTMLElement): void {
   const target = transcriptBody(body);
   if (!target) return;

@@ -30,6 +30,11 @@ const scripts = [
   ["test-browser-tabs-store.mjs"],
   ["test-workbench-page.mjs"],
   ["test-composer-collapse.mjs"],
+  ["test-composer-kind-tabs.mjs"],
+  ["test-message-collapse.mjs"],
+  ["test-assistant-avatar.mjs"],
+  ["test-run-status.mjs"],
+  ["test-store-tab-tooltips.mjs"],
   ["test-taskbar-attention.mjs"],
   ["test-taskbar-icon-win.mjs", "--experimental-test-module-mocks"],
 ];
